@@ -149,7 +149,6 @@ def main():
     pipe_teacher = StableDiffusion3Pipeline.from_pretrained(
         args.teacher_id,
         torch_dtype=torch.bfloat16,
-        token="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"
     )
     pipe_teacher = pipe_teacher.to(device)
     pipe_teacher.transformer.eval()
@@ -162,7 +161,6 @@ def main():
     pipe_student = StableDiffusion3Pipeline.from_pretrained(
         args.student_id,
         torch_dtype=torch.float32,
-        token="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"
     )
     pipe_student.transformer = pipe_student.transformer.to(device).float()
     pipe_student.transformer.train()
