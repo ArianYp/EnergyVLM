@@ -1,0 +1,11 @@
+Distillation SD3.5:   0%|                                                                                                  | 0/10000 [00:09<?, ?it/s]
+Traceback (most recent call last):
+  File "/data/gpfs/projects/punim2198/Aryan/EnergybasedDit/train_distill_e2e_sd3.py", line 336, in <module>
+    main()
+  File "/data/gpfs/projects/punim2198/Aryan/EnergybasedDit/train_distill_e2e_sd3.py", line 250, in main
+    pil_images = [
+                 ^
+  File "/data/gpfs/projects/punim2198/Aryan/EnergybasedDit/train_distill_e2e_sd3.py", line 251, in <listcomp>
+    Image.fromarray((img.permute(1, 2, 0).cpu().numpy() * 255).astype("uint8"))
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+TypeError: Got unsupported ScalarType BFloat16

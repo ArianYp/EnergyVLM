@@ -1,0 +1,13 @@
+Distillation SD3.5:   0%|                                                                                                  | 0/10000 [00:00<?, ?it/s]
+Traceback (most recent call last):
+  File "/data/gpfs/projects/punim2198/Aryan/EnergybasedDit/train_distill_e2e_sd3.py", line 336, in <module>
+    main()
+  File "/data/gpfs/projects/punim2198/Aryan/EnergybasedDit/train_distill_e2e_sd3.py", line 246, in main
+    h_T, image_tensor, final_latents = run_teacher_denoising_capture_hidden(
+                                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/data/gpfs/projects/punim2198/Aryan/EnergybasedDit/train_distill_e2e_sd3.py", line 57, in run_teacher_denoising_capture_hidden
+    latent_model_input = scheduler.scale_model_input(latents, t)
+                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/data/gpfs/projects/punim2198/Aryan/EnergybasedDit/virtualenv/Python3.11.3/lib/python3.11/site-packages/diffusers/configuration_utils.py", line 176, in __getattr__
+    raise AttributeError(f"'{type(self).__name__}' object has no attribute '{name}'")
+AttributeError: 'FlowMatchEulerDiscreteScheduler' object has no attribute 'scale_model_input'

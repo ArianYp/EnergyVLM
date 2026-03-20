@@ -1,0 +1,48 @@
+{
+  "os": "Linux-5.14.0-570.30.1.el9_6.x86_64-x86_64-with-glibc2.34",
+  "python": "CPython 3.11.3",
+  "startedAt": "2026-03-17T04:26:55.295652Z",
+  "args": [
+    "--num_steps",
+    "5000",
+    "--batch_size",
+    "4",
+    "--output_dir",
+    "checkpoints/projector"
+  ],
+  "program": "/data/gpfs/projects/punim2198/Aryan/EnergybasedDit/train_projector.py",
+  "codePath": "train_projector.py",
+  "codePathLocal": "train_projector.py",
+  "email": "arian.yazdan2001@gmail.com",
+  "root": "/data/gpfs/projects/punim2198/Aryan/EnergybasedDit",
+  "host": "spartan-gpgpu129.hpc.unimelb.edu.au",
+  "executable": "/data/gpfs/projects/punim2198/Aryan/EnergybasedDit/virtualenv/Python3.11.3/bin/python",
+  "cpu_count": 32,
+  "cpu_count_logical": 32,
+  "gpu": "NVIDIA A100 80GB PCIe",
+  "gpu_count": 1,
+  "disk": {
+    "/": {
+      "total": "237749129216",
+      "used": "18076200960"
+    }
+  },
+  "memory": {
+    "total": "539930177536"
+  },
+  "gpu_nvidia": [
+    {
+      "name": "NVIDIA A100 80GB PCIe",
+      "memoryTotal": "85899345920",
+      "cudaCores": 6912,
+      "architecture": "Ampere",
+      "uuid": "GPU-960dd4c7-9485-ebe9-3bff-b59b90b982d0"
+    }
+  ],
+  "cudaVersion": "12.4",
+  "slurm": {
+    "job_id": "22850375",
+    "latest": "/apps/slurm/latest"
+  },
+  "writerId": "7iv5bbg9dzcne6tsz07qjord8ara9gbd"
+}

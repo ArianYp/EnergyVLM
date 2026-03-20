@@ -1,0 +1,554 @@
+Training projector:   5%|█▏                     | 269/5000 [05:31<1:33:32,  1.19s/it, loss=0.6741]
+Saved checkpoint to checkpoints/projector/projector_step10.pt
+Saved checkpoint to checkpoints/projector/projector_step20.pt
+Saved checkpoint to checkpoints/projector/projector_step30.pt
+Saved checkpoint to checkpoints/projector/projector_step40.pt
+Step 50/5000 | Loss: 0.7201
+Saved checkpoint to checkpoints/projector/projector_step50.pt
+Saved checkpoint to checkpoints/projector/projector_step60.pt
+Saved checkpoint to checkpoints/projector/projector_step70.pt
+Saved checkpoint to checkpoints/projector/projector_step80.pt
+Saved checkpoint to checkpoints/projector/projector_step90.pt
+Step 100/5000 | Loss: 0.6840
+Saved checkpoint to checkpoints/projector/projector_step100.pt
+Saved checkpoint to checkpoints/projector/projector_step110.pt
+Saved checkpoint to checkpoints/projector/projector_step120.pt
+Saved checkpoint to checkpoints/projector/projector_step130.pt
+Saved checkpoint to checkpoints/projector/projector_step140.pt
+Step 150/5000 | Loss: 0.7278
+Saved checkpoint to checkpoints/projector/projector_step150.pt
+Saved checkpoint to checkpoints/projector/projector_step160.pt
+Saved checkpoint to checkpoints/projector/projector_step170.pt
+Saved checkpoint to checkpoints/projector/projector_step180.pt
+Saved checkpoint to checkpoints/projector/projector_step190.pt
+Step 200/5000 | Loss: 0.6919
+Saved checkpoint to checkpoints/projector/projector_step200.pt
+Saved checkpoint to checkpoints/projector/projector_step210.pt
+Saved checkpoint to checkpoints/projector/projector_step220.pt
+Saved checkpoint to checkpoints/projector/projector_step230.pt
+Saved checkpoint to checkpoints/projector/projector_step240.pt
+Step 250/5000 | Loss: 0.7093
+Saved checkpoint to checkpoints/projector/projector_step250.pt
+Saved checkpoint to checkpoints/projector/projector_step260.pt
+Saved checkpoint to checkpoints/projector/projector_step270.pt
+Saved checkpoint to checkpoints/projector/projector_step280.pt
+Saved checkpoint to checkpoints/projector/projector_step290.pt
+Step 300/5000 | Loss: 0.7551
+Saved checkpoint to checkpoints/projector/projector_step300.pt
+Saved checkpoint to checkpoints/projector/projector_step310.pt
+Saved checkpoint to checkpoints/projector/projector_step320.pt
+Saved checkpoint to checkpoints/projector/projector_step330.pt
+Saved checkpoint to checkpoints/projector/projector_step340.pt
+Step 350/5000 | Loss: 0.6658
+Saved checkpoint to checkpoints/projector/projector_step350.pt
+Saved checkpoint to checkpoints/projector/projector_step360.pt
+Saved checkpoint to checkpoints/projector/projector_step370.pt
+Saved checkpoint to checkpoints/projector/projector_step380.pt
+Saved checkpoint to checkpoints/projector/projector_step390.pt
+Step 400/5000 | Loss: 0.6006
+Saved checkpoint to checkpoints/projector/projector_step400.pt
+Saved checkpoint to checkpoints/projector/projector_step410.pt
+Saved checkpoint to checkpoints/projector/projector_step420.pt
+Saved checkpoint to checkpoints/projector/projector_step430.pt
+Saved checkpoint to checkpoints/projector/projector_step440.pt
+Step 450/5000 | Loss: 0.5872
+Saved checkpoint to checkpoints/projector/projector_step450.pt
+Saved checkpoint to checkpoints/projector/projector_step460.pt
+Saved checkpoint to checkpoints/projector/projector_step470.pt
+Saved checkpoint to checkpoints/projector/projector_step480.pt
+Saved checkpoint to checkpoints/projector/projector_step490.pt
+Step 500/5000 | Loss: 0.5859
+Saved checkpoint to checkpoints/projector/projector_step500.pt
+Saved checkpoint to checkpoints/projector/projector_step510.pt
+Saved checkpoint to checkpoints/projector/projector_step520.pt
+Saved checkpoint to checkpoints/projector/projector_step530.pt
+Saved checkpoint to checkpoints/projector/projector_step540.pt
+Step 550/5000 | Loss: 0.5767
+Saved checkpoint to checkpoints/projector/projector_step550.pt
+Saved checkpoint to checkpoints/projector/projector_step560.pt
+Saved checkpoint to checkpoints/projector/projector_step570.pt
+Saved checkpoint to checkpoints/projector/projector_step580.pt
+Saved checkpoint to checkpoints/projector/projector_step590.pt
+Step 600/5000 | Loss: 0.6796
+Saved checkpoint to checkpoints/projector/projector_step600.pt
+Saved checkpoint to checkpoints/projector/projector_step610.pt
+Saved checkpoint to checkpoints/projector/projector_step620.pt
+Saved checkpoint to checkpoints/projector/projector_step630.pt
+Saved checkpoint to checkpoints/projector/projector_step640.pt
+Step 650/5000 | Loss: 0.6689
+Saved checkpoint to checkpoints/projector/projector_step650.pt
+Saved checkpoint to checkpoints/projector/projector_step660.pt
+Saved checkpoint to checkpoints/projector/projector_step670.pt
+Saved checkpoint to checkpoints/projector/projector_step680.pt
+Saved checkpoint to checkpoints/projector/projector_step690.pt
+Step 700/5000 | Loss: 0.7198
+Saved checkpoint to checkpoints/projector/projector_step700.pt
+Saved checkpoint to checkpoints/projector/projector_step710.pt
+Saved checkpoint to checkpoints/projector/projector_step720.pt
+Saved checkpoint to checkpoints/projector/projector_step730.pt
+Saved checkpoint to checkpoints/projector/projector_step740.pt
+Step 750/5000 | Loss: 0.5486
+Saved checkpoint to checkpoints/projector/projector_step750.pt
+Saved checkpoint to checkpoints/projector/projector_step760.pt
+Saved checkpoint to checkpoints/projector/projector_step770.pt
+Saved checkpoint to checkpoints/projector/projector_step780.pt
+Saved checkpoint to checkpoints/projector/projector_step790.pt
+Step 800/5000 | Loss: 0.6598
+Saved checkpoint to checkpoints/projector/projector_step800.pt
+Saved checkpoint to checkpoints/projector/projector_step810.pt
+Saved checkpoint to checkpoints/projector/projector_step820.pt
+Saved checkpoint to checkpoints/projector/projector_step830.pt
+Saved checkpoint to checkpoints/projector/projector_step840.pt
+Step 850/5000 | Loss: 0.5855
+Saved checkpoint to checkpoints/projector/projector_step850.pt
+Saved checkpoint to checkpoints/projector/projector_step860.pt
+Saved checkpoint to checkpoints/projector/projector_step870.pt
+Saved checkpoint to checkpoints/projector/projector_step880.pt
+Saved checkpoint to checkpoints/projector/projector_step890.pt
+Step 900/5000 | Loss: 0.6409
+Saved checkpoint to checkpoints/projector/projector_step900.pt
+Saved checkpoint to checkpoints/projector/projector_step910.pt
+Saved checkpoint to checkpoints/projector/projector_step920.pt
+Saved checkpoint to checkpoints/projector/projector_step930.pt
+Saved checkpoint to checkpoints/projector/projector_step940.pt
+Step 950/5000 | Loss: 0.5624
+Saved checkpoint to checkpoints/projector/projector_step950.pt
+Saved checkpoint to checkpoints/projector/projector_step960.pt
+Saved checkpoint to checkpoints/projector/projector_step970.pt
+Saved checkpoint to checkpoints/projector/projector_step980.pt
+Saved checkpoint to checkpoints/projector/projector_step990.pt
+Step 1000/5000 | Loss: 0.6181
+Saved checkpoint to checkpoints/projector/projector_step1000.pt
+Saved checkpoint to checkpoints/projector/projector_step1010.pt
+Saved checkpoint to checkpoints/projector/projector_step1020.pt
+Saved checkpoint to checkpoints/projector/projector_step1030.pt
+Saved checkpoint to checkpoints/projector/projector_step1040.pt
+Step 1050/5000 | Loss: 0.6451
+Saved checkpoint to checkpoints/projector/projector_step1050.pt
+Saved checkpoint to checkpoints/projector/projector_step1060.pt
+Saved checkpoint to checkpoints/projector/projector_step1070.pt
+Saved checkpoint to checkpoints/projector/projector_step1080.pt
+Saved checkpoint to checkpoints/projector/projector_step1090.pt
+Step 1100/5000 | Loss: 0.4692
+Saved checkpoint to checkpoints/projector/projector_step1100.pt
+Saved checkpoint to checkpoints/projector/projector_step1110.pt
+Saved checkpoint to checkpoints/projector/projector_step1120.pt
+Saved checkpoint to checkpoints/projector/projector_step1130.pt
+Saved checkpoint to checkpoints/projector/projector_step1140.pt
+Step 1150/5000 | Loss: 0.6283
+Saved checkpoint to checkpoints/projector/projector_step1150.pt
+Saved checkpoint to checkpoints/projector/projector_step1160.pt
+Saved checkpoint to checkpoints/projector/projector_step1170.pt
+Saved checkpoint to checkpoints/projector/projector_step1180.pt
+Saved checkpoint to checkpoints/projector/projector_step1190.pt
+Step 1200/5000 | Loss: 0.5653
+Saved checkpoint to checkpoints/projector/projector_step1200.pt
+Saved checkpoint to checkpoints/projector/projector_step1210.pt
+Saved checkpoint to checkpoints/projector/projector_step1220.pt
+Saved checkpoint to checkpoints/projector/projector_step1230.pt
+Saved checkpoint to checkpoints/projector/projector_step1240.pt
+Step 1250/5000 | Loss: 0.5852
+Saved checkpoint to checkpoints/projector/projector_step1250.pt
+Saved checkpoint to checkpoints/projector/projector_step1260.pt
+Saved checkpoint to checkpoints/projector/projector_step1270.pt
+Saved checkpoint to checkpoints/projector/projector_step1280.pt
+Saved checkpoint to checkpoints/projector/projector_step1290.pt
+Step 1300/5000 | Loss: 0.6160
+Saved checkpoint to checkpoints/projector/projector_step1300.pt
+Saved checkpoint to checkpoints/projector/projector_step1310.pt
+Saved checkpoint to checkpoints/projector/projector_step1320.pt
+Saved checkpoint to checkpoints/projector/projector_step1330.pt
+Saved checkpoint to checkpoints/projector/projector_step1340.pt
+Step 1350/5000 | Loss: 0.6650
+Saved checkpoint to checkpoints/projector/projector_step1350.pt
+Saved checkpoint to checkpoints/projector/projector_step1360.pt
+Saved checkpoint to checkpoints/projector/projector_step1370.pt
+Saved checkpoint to checkpoints/projector/projector_step1380.pt
+Saved checkpoint to checkpoints/projector/projector_step1390.pt
+Step 1400/5000 | Loss: 0.5323
+Saved checkpoint to checkpoints/projector/projector_step1400.pt
+Saved checkpoint to checkpoints/projector/projector_step1410.pt
+Saved checkpoint to checkpoints/projector/projector_step1420.pt
+Saved checkpoint to checkpoints/projector/projector_step1430.pt
+Saved checkpoint to checkpoints/projector/projector_step1440.pt
+Step 1450/5000 | Loss: 0.6967
+Saved checkpoint to checkpoints/projector/projector_step1450.pt
+Saved checkpoint to checkpoints/projector/projector_step1460.pt
+Saved checkpoint to checkpoints/projector/projector_step1470.pt
+Saved checkpoint to checkpoints/projector/projector_step1480.pt
+Saved checkpoint to checkpoints/projector/projector_step1490.pt
+Step 1500/5000 | Loss: 0.5544
+Saved checkpoint to checkpoints/projector/projector_step1500.pt
+Saved checkpoint to checkpoints/projector/projector_step1510.pt
+Saved checkpoint to checkpoints/projector/projector_step1520.pt
+Saved checkpoint to checkpoints/projector/projector_step1530.pt
+Saved checkpoint to checkpoints/projector/projector_step1540.pt
+Step 1550/5000 | Loss: 0.6049
+Saved checkpoint to checkpoints/projector/projector_step1550.pt
+Saved checkpoint to checkpoints/projector/projector_step1560.pt
+Saved checkpoint to checkpoints/projector/projector_step1570.pt
+Saved checkpoint to checkpoints/projector/projector_step1580.pt
+Saved checkpoint to checkpoints/projector/projector_step1590.pt
+Step 1600/5000 | Loss: 0.4731
+Saved checkpoint to checkpoints/projector/projector_step1600.pt
+Saved checkpoint to checkpoints/projector/projector_step1610.pt
+Saved checkpoint to checkpoints/projector/projector_step1620.pt
+Saved checkpoint to checkpoints/projector/projector_step1630.pt
+Saved checkpoint to checkpoints/projector/projector_step1640.pt
+Step 1650/5000 | Loss: 0.6340
+Saved checkpoint to checkpoints/projector/projector_step1650.pt
+Saved checkpoint to checkpoints/projector/projector_step1660.pt
+Saved checkpoint to checkpoints/projector/projector_step1670.pt
+Saved checkpoint to checkpoints/projector/projector_step1680.pt
+Saved checkpoint to checkpoints/projector/projector_step1690.pt
+Step 1700/5000 | Loss: 0.6420
+Saved checkpoint to checkpoints/projector/projector_step1700.pt
+Saved checkpoint to checkpoints/projector/projector_step1710.pt
+Saved checkpoint to checkpoints/projector/projector_step1720.pt
+Saved checkpoint to checkpoints/projector/projector_step1730.pt
+Saved checkpoint to checkpoints/projector/projector_step1740.pt
+Step 1750/5000 | Loss: 0.5426
+Saved checkpoint to checkpoints/projector/projector_step1750.pt
+Saved checkpoint to checkpoints/projector/projector_step1760.pt
+Saved checkpoint to checkpoints/projector/projector_step1770.pt
+Saved checkpoint to checkpoints/projector/projector_step1780.pt
+Saved checkpoint to checkpoints/projector/projector_step1790.pt
+Step 1800/5000 | Loss: 0.6219
+Saved checkpoint to checkpoints/projector/projector_step1800.pt
+Saved checkpoint to checkpoints/projector/projector_step1810.pt
+Saved checkpoint to checkpoints/projector/projector_step1820.pt
+Saved checkpoint to checkpoints/projector/projector_step1830.pt
+Saved checkpoint to checkpoints/projector/projector_step1840.pt
+Step 1850/5000 | Loss: 0.4723
+Saved checkpoint to checkpoints/projector/projector_step1850.pt
+Saved checkpoint to checkpoints/projector/projector_step1860.pt
+Saved checkpoint to checkpoints/projector/projector_step1870.pt
+Saved checkpoint to checkpoints/projector/projector_step1880.pt
+Saved checkpoint to checkpoints/projector/projector_step1890.pt
+Step 1900/5000 | Loss: 0.6457
+Saved checkpoint to checkpoints/projector/projector_step1900.pt
+Saved checkpoint to checkpoints/projector/projector_step1910.pt
+Saved checkpoint to checkpoints/projector/projector_step1920.pt
+Saved checkpoint to checkpoints/projector/projector_step1930.pt
+Saved checkpoint to checkpoints/projector/projector_step1940.pt
+Step 1950/5000 | Loss: 0.6364
+Saved checkpoint to checkpoints/projector/projector_step1950.pt
+Saved checkpoint to checkpoints/projector/projector_step1960.pt
+Saved checkpoint to checkpoints/projector/projector_step1970.pt
+Saved checkpoint to checkpoints/projector/projector_step1980.pt
+Saved checkpoint to checkpoints/projector/projector_step1990.pt
+Step 2000/5000 | Loss: 0.5560
+Saved checkpoint to checkpoints/projector/projector_step2000.pt
+Saved checkpoint to checkpoints/projector/projector_step2010.pt
+Saved checkpoint to checkpoints/projector/projector_step2020.pt
+Saved checkpoint to checkpoints/projector/projector_step2030.pt
+Saved checkpoint to checkpoints/projector/projector_step2040.pt
+Step 2050/5000 | Loss: 0.6837
+Saved checkpoint to checkpoints/projector/projector_step2050.pt
+Saved checkpoint to checkpoints/projector/projector_step2060.pt
+Saved checkpoint to checkpoints/projector/projector_step2070.pt
+Saved checkpoint to checkpoints/projector/projector_step2080.pt
+Saved checkpoint to checkpoints/projector/projector_step2090.pt
+Step 2100/5000 | Loss: 0.4810
+Saved checkpoint to checkpoints/projector/projector_step2100.pt
+Saved checkpoint to checkpoints/projector/projector_step2110.pt
+Saved checkpoint to checkpoints/projector/projector_step2120.pt
+Saved checkpoint to checkpoints/projector/projector_step2130.pt
+Saved checkpoint to checkpoints/projector/projector_step2140.pt
+Step 2150/5000 | Loss: 0.4674
+Saved checkpoint to checkpoints/projector/projector_step2150.pt
+Saved checkpoint to checkpoints/projector/projector_step2160.pt
+Saved checkpoint to checkpoints/projector/projector_step2170.pt
+Saved checkpoint to checkpoints/projector/projector_step2180.pt
+Saved checkpoint to checkpoints/projector/projector_step2190.pt
+Step 2200/5000 | Loss: 0.6053
+Saved checkpoint to checkpoints/projector/projector_step2200.pt
+Saved checkpoint to checkpoints/projector/projector_step2210.pt
+Saved checkpoint to checkpoints/projector/projector_step2220.pt
+Saved checkpoint to checkpoints/projector/projector_step2230.pt
+Saved checkpoint to checkpoints/projector/projector_step2240.pt
+Step 2250/5000 | Loss: 0.5540
+Saved checkpoint to checkpoints/projector/projector_step2250.pt
+Saved checkpoint to checkpoints/projector/projector_step2260.pt
+Saved checkpoint to checkpoints/projector/projector_step2270.pt
+Saved checkpoint to checkpoints/projector/projector_step2280.pt
+Saved checkpoint to checkpoints/projector/projector_step2290.pt
+Step 2300/5000 | Loss: 0.5743
+Saved checkpoint to checkpoints/projector/projector_step2300.pt
+Saved checkpoint to checkpoints/projector/projector_step2310.pt
+Saved checkpoint to checkpoints/projector/projector_step2320.pt
+Saved checkpoint to checkpoints/projector/projector_step2330.pt
+Saved checkpoint to checkpoints/projector/projector_step2340.pt
+Step 2350/5000 | Loss: 0.6645
+Saved checkpoint to checkpoints/projector/projector_step2350.pt
+Saved checkpoint to checkpoints/projector/projector_step2360.pt
+Saved checkpoint to checkpoints/projector/projector_step2370.pt
+Saved checkpoint to checkpoints/projector/projector_step2380.pt
+Saved checkpoint to checkpoints/projector/projector_step2390.pt
+Step 2400/5000 | Loss: 0.5271
+Saved checkpoint to checkpoints/projector/projector_step2400.pt
+Saved checkpoint to checkpoints/projector/projector_step2410.pt
+Saved checkpoint to checkpoints/projector/projector_step2420.pt
+Saved checkpoint to checkpoints/projector/projector_step2430.pt
+Saved checkpoint to checkpoints/projector/projector_step2440.pt
+Step 2450/5000 | Loss: 0.4898
+Saved checkpoint to checkpoints/projector/projector_step2450.pt
+Saved checkpoint to checkpoints/projector/projector_step2460.pt
+Saved checkpoint to checkpoints/projector/projector_step2470.pt
+Saved checkpoint to checkpoints/projector/projector_step2480.pt
+Saved checkpoint to checkpoints/projector/projector_step2490.pt
+Step 2500/5000 | Loss: 0.5039
+Saved checkpoint to checkpoints/projector/projector_step2500.pt
+Saved checkpoint to checkpoints/projector/projector_step2510.pt
+Saved checkpoint to checkpoints/projector/projector_step2520.pt
+Saved checkpoint to checkpoints/projector/projector_step2530.pt
+Saved checkpoint to checkpoints/projector/projector_step2540.pt
+Step 2550/5000 | Loss: 0.4701
+Saved checkpoint to checkpoints/projector/projector_step2550.pt
+Saved checkpoint to checkpoints/projector/projector_step2560.pt
+Saved checkpoint to checkpoints/projector/projector_step2570.pt
+Saved checkpoint to checkpoints/projector/projector_step2580.pt
+Saved checkpoint to checkpoints/projector/projector_step2590.pt
+Step 2600/5000 | Loss: 0.6034
+Saved checkpoint to checkpoints/projector/projector_step2600.pt
+Saved checkpoint to checkpoints/projector/projector_step2610.pt
+Saved checkpoint to checkpoints/projector/projector_step2620.pt
+Saved checkpoint to checkpoints/projector/projector_step2630.pt
+Saved checkpoint to checkpoints/projector/projector_step2640.pt
+Step 2650/5000 | Loss: 0.5142
+Saved checkpoint to checkpoints/projector/projector_step2650.pt
+Saved checkpoint to checkpoints/projector/projector_step2660.pt
+Saved checkpoint to checkpoints/projector/projector_step2670.pt
+Saved checkpoint to checkpoints/projector/projector_step2680.pt
+Saved checkpoint to checkpoints/projector/projector_step2690.pt
+Step 2700/5000 | Loss: 0.6595
+Saved checkpoint to checkpoints/projector/projector_step2700.pt
+Saved checkpoint to checkpoints/projector/projector_step2710.pt
+Saved checkpoint to checkpoints/projector/projector_step2720.pt
+Saved checkpoint to checkpoints/projector/projector_step2730.pt
+Saved checkpoint to checkpoints/projector/projector_step2740.pt
+Step 2750/5000 | Loss: 0.5516
+Saved checkpoint to checkpoints/projector/projector_step2750.pt
+Saved checkpoint to checkpoints/projector/projector_step2760.pt
+Saved checkpoint to checkpoints/projector/projector_step2770.pt
+Saved checkpoint to checkpoints/projector/projector_step2780.pt
+Saved checkpoint to checkpoints/projector/projector_step2790.pt
+Step 2800/5000 | Loss: 0.5950
+Saved checkpoint to checkpoints/projector/projector_step2800.pt
+Saved checkpoint to checkpoints/projector/projector_step2810.pt
+Saved checkpoint to checkpoints/projector/projector_step2820.pt
+Saved checkpoint to checkpoints/projector/projector_step2830.pt
+Saved checkpoint to checkpoints/projector/projector_step2840.pt
+Step 2850/5000 | Loss: 0.4716
+Saved checkpoint to checkpoints/projector/projector_step2850.pt
+Saved checkpoint to checkpoints/projector/projector_step2860.pt
+Saved checkpoint to checkpoints/projector/projector_step2870.pt
+Saved checkpoint to checkpoints/projector/projector_step2880.pt
+Saved checkpoint to checkpoints/projector/projector_step2890.pt
+Step 2900/5000 | Loss: 0.5272
+Saved checkpoint to checkpoints/projector/projector_step2900.pt
+Saved checkpoint to checkpoints/projector/projector_step2910.pt
+Saved checkpoint to checkpoints/projector/projector_step2920.pt
+Saved checkpoint to checkpoints/projector/projector_step2930.pt
+Saved checkpoint to checkpoints/projector/projector_step2940.pt
+Step 2950/5000 | Loss: 0.4926
+Saved checkpoint to checkpoints/projector/projector_step2950.pt
+Saved checkpoint to checkpoints/projector/projector_step2960.pt
+Saved checkpoint to checkpoints/projector/projector_step2970.pt
+Saved checkpoint to checkpoints/projector/projector_step2980.pt
+Saved checkpoint to checkpoints/projector/projector_step2990.pt
+Step 3000/5000 | Loss: 0.5773
+Saved checkpoint to checkpoints/projector/projector_step3000.pt
+Saved checkpoint to checkpoints/projector/projector_step3010.pt
+Saved checkpoint to checkpoints/projector/projector_step3020.pt
+Saved checkpoint to checkpoints/projector/projector_step3030.pt
+Saved checkpoint to checkpoints/projector/projector_step3040.pt
+Step 3050/5000 | Loss: 0.4562
+Saved checkpoint to checkpoints/projector/projector_step3050.pt
+Saved checkpoint to checkpoints/projector/projector_step3060.pt
+Saved checkpoint to checkpoints/projector/projector_step3070.pt
+Saved checkpoint to checkpoints/projector/projector_step3080.pt
+Saved checkpoint to checkpoints/projector/projector_step3090.pt
+Step 3100/5000 | Loss: 0.4477
+Saved checkpoint to checkpoints/projector/projector_step3100.pt
+Saved checkpoint to checkpoints/projector/projector_step3110.pt
+Saved checkpoint to checkpoints/projector/projector_step3120.pt
+Saved checkpoint to checkpoints/projector/projector_step3130.pt
+Saved checkpoint to checkpoints/projector/projector_step3140.pt
+Step 3150/5000 | Loss: 0.5856
+Saved checkpoint to checkpoints/projector/projector_step3150.pt
+Saved checkpoint to checkpoints/projector/projector_step3160.pt
+Saved checkpoint to checkpoints/projector/projector_step3170.pt
+Saved checkpoint to checkpoints/projector/projector_step3180.pt
+Saved checkpoint to checkpoints/projector/projector_step3190.pt
+Step 3200/5000 | Loss: 0.5609
+Saved checkpoint to checkpoints/projector/projector_step3200.pt
+Saved checkpoint to checkpoints/projector/projector_step3210.pt
+Saved checkpoint to checkpoints/projector/projector_step3220.pt
+Saved checkpoint to checkpoints/projector/projector_step3230.pt
+Saved checkpoint to checkpoints/projector/projector_step3240.pt
+Step 3250/5000 | Loss: 0.4521
+Saved checkpoint to checkpoints/projector/projector_step3250.pt
+Saved checkpoint to checkpoints/projector/projector_step3260.pt
+Saved checkpoint to checkpoints/projector/projector_step3270.pt
+Saved checkpoint to checkpoints/projector/projector_step3280.pt
+Saved checkpoint to checkpoints/projector/projector_step3290.pt
+Step 3300/5000 | Loss: 0.5374
+Saved checkpoint to checkpoints/projector/projector_step3300.pt
+Saved checkpoint to checkpoints/projector/projector_step3310.pt
+Saved checkpoint to checkpoints/projector/projector_step3320.pt
+Saved checkpoint to checkpoints/projector/projector_step3330.pt
+Saved checkpoint to checkpoints/projector/projector_step3340.pt
+Step 3350/5000 | Loss: 0.5795
+Saved checkpoint to checkpoints/projector/projector_step3350.pt
+Saved checkpoint to checkpoints/projector/projector_step3360.pt
+Saved checkpoint to checkpoints/projector/projector_step3370.pt
+Saved checkpoint to checkpoints/projector/projector_step3380.pt
+Saved checkpoint to checkpoints/projector/projector_step3390.pt
+Step 3400/5000 | Loss: 0.5499
+Saved checkpoint to checkpoints/projector/projector_step3400.pt
+Saved checkpoint to checkpoints/projector/projector_step3410.pt
+Saved checkpoint to checkpoints/projector/projector_step3420.pt
+Saved checkpoint to checkpoints/projector/projector_step3430.pt
+Saved checkpoint to checkpoints/projector/projector_step3440.pt
+Step 3450/5000 | Loss: 0.4168
+Saved checkpoint to checkpoints/projector/projector_step3450.pt
+Saved checkpoint to checkpoints/projector/projector_step3460.pt
+Saved checkpoint to checkpoints/projector/projector_step3470.pt
+Saved checkpoint to checkpoints/projector/projector_step3480.pt
+Saved checkpoint to checkpoints/projector/projector_step3490.pt
+Step 3500/5000 | Loss: 0.4289
+Saved checkpoint to checkpoints/projector/projector_step3500.pt
+Saved checkpoint to checkpoints/projector/projector_step3510.pt
+Saved checkpoint to checkpoints/projector/projector_step3520.pt
+Saved checkpoint to checkpoints/projector/projector_step3530.pt
+Saved checkpoint to checkpoints/projector/projector_step3540.pt
+Step 3550/5000 | Loss: 0.4374
+Saved checkpoint to checkpoints/projector/projector_step3550.pt
+Saved checkpoint to checkpoints/projector/projector_step3560.pt
+Saved checkpoint to checkpoints/projector/projector_step3570.pt
+Saved checkpoint to checkpoints/projector/projector_step3580.pt
+Saved checkpoint to checkpoints/projector/projector_step3590.pt
+Step 3600/5000 | Loss: 0.6648
+Saved checkpoint to checkpoints/projector/projector_step3600.pt
+Saved checkpoint to checkpoints/projector/projector_step3610.pt
+Saved checkpoint to checkpoints/projector/projector_step3620.pt
+Saved checkpoint to checkpoints/projector/projector_step3630.pt
+Saved checkpoint to checkpoints/projector/projector_step3640.pt
+Step 3650/5000 | Loss: 0.6108
+Saved checkpoint to checkpoints/projector/projector_step3650.pt
+Saved checkpoint to checkpoints/projector/projector_step3660.pt
+Saved checkpoint to checkpoints/projector/projector_step3670.pt
+Saved checkpoint to checkpoints/projector/projector_step3680.pt
+Saved checkpoint to checkpoints/projector/projector_step3690.pt
+Step 3700/5000 | Loss: 0.5275
+Saved checkpoint to checkpoints/projector/projector_step3700.pt
+Saved checkpoint to checkpoints/projector/projector_step3710.pt
+Saved checkpoint to checkpoints/projector/projector_step3720.pt
+Saved checkpoint to checkpoints/projector/projector_step3730.pt
+Saved checkpoint to checkpoints/projector/projector_step3740.pt
+Step 3750/5000 | Loss: 0.5440
+Saved checkpoint to checkpoints/projector/projector_step3750.pt
+Saved checkpoint to checkpoints/projector/projector_step3760.pt
+Saved checkpoint to checkpoints/projector/projector_step3770.pt
+Saved checkpoint to checkpoints/projector/projector_step3780.pt
+Saved checkpoint to checkpoints/projector/projector_step3790.pt
+Step 3800/5000 | Loss: 0.6025
+Saved checkpoint to checkpoints/projector/projector_step3800.pt
+Saved checkpoint to checkpoints/projector/projector_step3810.pt
+Saved checkpoint to checkpoints/projector/projector_step3820.pt
+Saved checkpoint to checkpoints/projector/projector_step3830.pt
+Saved checkpoint to checkpoints/projector/projector_step3840.pt
+Step 3850/5000 | Loss: 0.5338
+Saved checkpoint to checkpoints/projector/projector_step3850.pt
+Saved checkpoint to checkpoints/projector/projector_step3860.pt
+Saved checkpoint to checkpoints/projector/projector_step3870.pt
+Saved checkpoint to checkpoints/projector/projector_step3880.pt
+Saved checkpoint to checkpoints/projector/projector_step3890.pt
+Step 3900/5000 | Loss: 0.6243
+Saved checkpoint to checkpoints/projector/projector_step3900.pt
+Saved checkpoint to checkpoints/projector/projector_step3910.pt
+Saved checkpoint to checkpoints/projector/projector_step3920.pt
+Saved checkpoint to checkpoints/projector/projector_step3930.pt
+Saved checkpoint to checkpoints/projector/projector_step3940.pt
+Step 3950/5000 | Loss: 0.4502
+Saved checkpoint to checkpoints/projector/projector_step3950.pt
+Saved checkpoint to checkpoints/projector/projector_step3960.pt
+Saved checkpoint to checkpoints/projector/projector_step3970.pt
+Saved checkpoint to checkpoints/projector/projector_step3980.pt
+Saved checkpoint to checkpoints/projector/projector_step3990.pt
+Step 4000/5000 | Loss: 0.4299
+Saved checkpoint to checkpoints/projector/projector_step4000.pt
+Saved checkpoint to checkpoints/projector/projector_step4010.pt
+Saved checkpoint to checkpoints/projector/projector_step4020.pt
+Saved checkpoint to checkpoints/projector/projector_step4030.pt
+Saved checkpoint to checkpoints/projector/projector_step4040.pt
+Step 4050/5000 | Loss: 0.3509
+Saved checkpoint to checkpoints/projector/projector_step4050.pt
+Saved checkpoint to checkpoints/projector/projector_step4060.pt
+Saved checkpoint to checkpoints/projector/projector_step4070.pt
+Saved checkpoint to checkpoints/projector/projector_step4080.pt
+Saved checkpoint to checkpoints/projector/projector_step4090.pt
+Step 4100/5000 | Loss: 0.4275
+Saved checkpoint to checkpoints/projector/projector_step4100.pt
+Saved checkpoint to checkpoints/projector/projector_step4110.pt
+Saved checkpoint to checkpoints/projector/projector_step4120.pt
+Saved checkpoint to checkpoints/projector/projector_step4130.pt
+Saved checkpoint to checkpoints/projector/projector_step4140.pt
+Step 4150/5000 | Loss: 0.5398
+Saved checkpoint to checkpoints/projector/projector_step4150.pt
+Saved checkpoint to checkpoints/projector/projector_step4160.pt
+Saved checkpoint to checkpoints/projector/projector_step4170.pt
+Saved checkpoint to checkpoints/projector/projector_step4180.pt
+Saved checkpoint to checkpoints/projector/projector_step4190.pt
+Step 4200/5000 | Loss: 0.6211
+Saved checkpoint to checkpoints/projector/projector_step4200.pt
+Saved checkpoint to checkpoints/projector/projector_step4210.pt
+Saved checkpoint to checkpoints/projector/projector_step4220.pt
+Saved checkpoint to checkpoints/projector/projector_step4230.pt
+Saved checkpoint to checkpoints/projector/projector_step4240.pt
+Step 4250/5000 | Loss: 0.6360
+Saved checkpoint to checkpoints/projector/projector_step4250.pt
+Saved checkpoint to checkpoints/projector/projector_step4260.pt
+Saved checkpoint to checkpoints/projector/projector_step4270.pt
+Saved checkpoint to checkpoints/projector/projector_step4280.pt
+Saved checkpoint to checkpoints/projector/projector_step4290.pt
+Step 4300/5000 | Loss: 0.5091
+Saved checkpoint to checkpoints/projector/projector_step4300.pt
+Saved checkpoint to checkpoints/projector/projector_step4310.pt
+Saved checkpoint to checkpoints/projector/projector_step4320.pt
+Saved checkpoint to checkpoints/projector/projector_step4330.pt
+Saved checkpoint to checkpoints/projector/projector_step4340.pt
+Step 4350/5000 | Loss: 0.5785
+Saved checkpoint to checkpoints/projector/projector_step4350.pt
+Saved checkpoint to checkpoints/projector/projector_step4360.pt
+Saved checkpoint to checkpoints/projector/projector_step4370.pt
+Saved checkpoint to checkpoints/projector/projector_step4380.pt
+Saved checkpoint to checkpoints/projector/projector_step4390.pt
+Step 4400/5000 | Loss: 0.6039
+Saved checkpoint to checkpoints/projector/projector_step4400.pt
+Saved checkpoint to checkpoints/projector/projector_step4410.pt
+Saved checkpoint to checkpoints/projector/projector_step4420.pt
+Saved checkpoint to checkpoints/projector/projector_step4430.pt
+Saved checkpoint to checkpoints/projector/projector_step4440.pt
+Step 4450/5000 | Loss: 0.5882
+Saved checkpoint to checkpoints/projector/projector_step4450.pt
+Saved checkpoint to checkpoints/projector/projector_step4460.pt
+Saved checkpoint to checkpoints/projector/projector_step4470.pt
+Saved checkpoint to checkpoints/projector/projector_step4480.pt
+Saved checkpoint to checkpoints/projector/projector_step4490.pt
+Step 4500/5000 | Loss: 0.5223
+Saved checkpoint to checkpoints/projector/projector_step4500.pt
+Saved checkpoint to checkpoints/projector/projector_step4510.pt
+Saved checkpoint to checkpoints/projector/projector_step4520.pt
+Saved checkpoint to checkpoints/projector/projector_step4530.pt
+Saved checkpoint to checkpoints/projector/projector_step4540.pt
+Step 4550/5000 | Loss: 0.5437
+Saved checkpoint to checkpoints/projector/projector_step4550.pt
+Saved checkpoint to checkpoints/projector/projector_step4560.pt
+Saved checkpoint to checkpoints/projector/projector_step4570.pt
+Saved checkpoint to checkpoints/projector/projector_step4580.pt
+Saved checkpoint to checkpoints/projector/projector_step4590.pt
+Step 4600/5000 | Loss: 0.5100
+Saved checkpoint to checkpoints/projector/projector_step4600.pt
+Saved checkpoint to checkpoints/projector/projector_step4610.pt

@@ -1,0 +1,222 @@
+Distillation:  15%|███████                                        | 1499/10000 [18:24<1:44:07,  1.36it/s, align=0.7373, distill=5.9808, loss=15.7307]
+Step 50 | Loss: 2936.3042 | L_distill: 2084.2129 | L_align: 1.0955 | L_KL: 8411.3633
+Step 100 | Loss: 254.2316 | L_distill: 174.7242 | L_align: 0.9594 | L_KL: 699.1361
+Step 150 | Loss: 38.7930 | L_distill: 21.9163 | L_align: 0.8151 | L_KL: 87.2565
+Step 200 | Loss: 32.1332 | L_distill: 16.2609 | L_align: 0.9533 | L_KL: 63.3930
+Step 250 | Loss: 51.4281 | L_distill: 29.1014 | L_align: 0.9528 | L_KL: 127.9889
+Step 300 | Loss: 19.1443 | L_distill: 7.0491 | L_align: 0.9271 | L_KL: 28.2460
+Step 350 | Loss: 17.8549 | L_distill: 5.7534 | L_align: 0.9659 | L_KL: 24.4286
+Step 400 | Loss: 20.1813 | L_distill: 6.3009 | L_align: 1.1348 | L_KL: 25.3216
+Step 450 | Loss: 879.4749 | L_distill: 620.2410 | L_align: 0.7849 | L_KL: 2513.8511
+Step 500 | Loss: 23.7297 | L_distill: 10.1325 | L_align: 0.9701 | L_KL: 38.9627
+Saved checkpoints to checkpoints/distill_e2e
+Step 550 | Loss: 352.8464 | L_distill: 244.2448 | L_align: 0.7477 | L_KL: 1011.2468
+Step 600 | Loss: 4214.8477 | L_distill: 2977.8188 | L_align: 1.0008 | L_KL: 12270.2148
+Step 650 | Loss: 2053.0430 | L_distill: 1460.6526 | L_align: 0.8735 | L_KL: 5836.5566
+Step 700 | Loss: 13.8422 | L_distill: 1.9072 | L_align: 1.1165 | L_KL: 7.7015
+Step 750 | Loss: 15.2202 | L_distill: 5.0624 | L_align: 0.8117 | L_KL: 20.4102
+Step 800 | Loss: 1278.4265 | L_distill: 909.3441 | L_align: 0.9270 | L_KL: 3598.1245
+Step 850 | Loss: 16.4102 | L_distill: 5.8927 | L_align: 0.8260 | L_KL: 22.5770
+Step 900 | Loss: 222.9728 | L_distill: 152.0031 | L_align: 1.0980 | L_KL: 599.9028
+Step 950 | Loss: 98.8775 | L_distill: 57.3692 | L_align: 0.9493 | L_KL: 320.1573
+Step 1000 | Loss: 1271.6808 | L_distill: 892.2303 | L_align: 0.7920 | L_KL: 3715.3010
+Saved checkpoints to checkpoints/distill_e2e
+Step 1050 | Loss: 198.4660 | L_distill: 131.4992 | L_align: 0.6878 | L_KL: 600.8928
+Step 1100 | Loss: 54.6560 | L_distill: 29.5229 | L_align: 0.9964 | L_KL: 151.6876
+Step 1150 | Loss: 131.4917 | L_distill: 88.0212 | L_align: 0.6891 | L_KL: 365.7908
+Step 1200 | Loss: 10.2983 | L_distill: 2.8887 | L_align: 0.6280 | L_KL: 11.2909
+Step 1250 | Loss: 114.8687 | L_distill: 76.9413 | L_align: 0.7914 | L_KL: 300.1294
+Step 1300 | Loss: 20.3384 | L_distill: 8.1653 | L_align: 0.8523 | L_KL: 36.5028
+Step 1350 | Loss: 58.0601 | L_distill: 33.1493 | L_align: 1.0454 | L_KL: 144.5644
+Step 1400 | Loss: 24.9522 | L_distill: 12.0019 | L_align: 0.7654 | L_KL: 52.9601
+Step 1450 | Loss: 19.0302 | L_distill: 7.0681 | L_align: 0.9055 | L_KL: 29.0668
+Step 1500 | Loss: 15.7307 | L_distill: 5.9808 | L_align: 0.7373 | L_KL: 23.7673
+Saved checkpoints to checkpoints/distill_e2e
+Step 1550 | Loss: 22.1003 | L_distill: 8.7760 | L_align: 0.9258 | L_KL: 40.6672
+Step 1600 | Loss: 18.1258 | L_distill: 7.5099 | L_align: 0.7162 | L_KL: 34.5431
+Step 1650 | Loss: 840.2779 | L_distill: 578.1602 | L_align: 0.8480 | L_KL: 2536.3726
+Step 1700 | Loss: 15.2189 | L_distill: 3.0734 | L_align: 1.0919 | L_KL: 12.2674
+Step 1750 | Loss: 33.8441 | L_distill: 19.6964 | L_align: 0.6204 | L_KL: 79.4412
+Step 1800 | Loss: 9.6892 | L_distill: 1.0167 | L_align: 0.8248 | L_KL: 4.2451
+Step 1850 | Loss: 143.2767 | L_distill: 89.5835 | L_align: 0.8000 | L_KL: 456.9290
+Step 1900 | Loss: 50.3287 | L_distill: 30.5480 | L_align: 0.7656 | L_KL: 121.2487
+Step 1950 | Loss: 39.2693 | L_distill: 21.5123 | L_align: 0.8809 | L_KL: 89.4820
+Step 2000 | Loss: 2367.3098 | L_distill: 1670.5649 | L_align: 0.7917 | L_KL: 6888.2754
+Saved checkpoints to checkpoints/distill_e2e
+Step 2050 | Loss: 2652.9131 | L_distill: 1885.6788 | L_align: 0.9229 | L_KL: 7580.0527
+Step 2100 | Loss: 17.7288 | L_distill: 5.2389 | L_align: 1.0502 | L_KL: 19.8834
+Step 2150 | Loss: 14.2617 | L_distill: 3.0758 | L_align: 0.9970 | L_KL: 12.1553
+Step 2200 | Loss: 29.0653 | L_distill: 14.8191 | L_align: 0.7307 | L_KL: 69.3941
+Step 2250 | Loss: 17.6436 | L_distill: 6.1235 | L_align: 0.9166 | L_KL: 23.5431
+Step 2300 | Loss: 1753.5391 | L_distill: 1252.2026 | L_align: 0.8964 | L_KL: 4923.7266
+Step 2350 | Loss: 2024.0088 | L_distill: 1436.4944 | L_align: 0.9573 | L_KL: 5779.4106
+Step 2400 | Loss: 43.0086 | L_distill: 22.0571 | L_align: 0.8799 | L_KL: 121.5267
+Step 2450 | Loss: 23.0932 | L_distill: 11.3116 | L_align: 0.7098 | L_KL: 46.8390
+Step 2500 | Loss: 16.1215 | L_distill: 5.4947 | L_align: 0.8798 | L_KL: 18.2875
+Saved checkpoints to checkpoints/distill_e2e
+Step 2550 | Loss: 8.2960 | L_distill: 0.9743 | L_align: 0.6941 | L_KL: 3.8060
+Step 2600 | Loss: 12.4945 | L_distill: 3.5896 | L_align: 0.7493 | L_KL: 14.1153
+Step 2650 | Loss: 1351.8113 | L_distill: 942.9280 | L_align: 0.5624 | L_KL: 4032.5884
+Step 2700 | Loss: 39.4245 | L_distill: 21.3876 | L_align: 0.9003 | L_KL: 90.3367
+Step 2750 | Loss: 11.9230 | L_distill: 1.9982 | L_align: 0.9015 | L_KL: 9.0983
+Step 2800 | Loss: 133.2273 | L_distill: 87.7262 | L_align: 0.7360 | L_KL: 381.4114
+Step 2850 | Loss: 622.8542 | L_distill: 407.2084 | L_align: 0.9018 | L_KL: 2066.2725
+Step 2900 | Loss: 12.6651 | L_distill: 4.2215 | L_align: 0.6806 | L_KL: 16.3733
+Step 2950 | Loss: 148.7228 | L_distill: 89.4392 | L_align: 0.8864 | L_KL: 504.1992
+Step 3000 | Loss: 262.7841 | L_distill: 161.5614 | L_align: 0.7545 | L_KL: 936.7783
+Saved checkpoints to checkpoints/distill_e2e
+Step 3050 | Loss: 22.7656 | L_distill: 10.3251 | L_align: 0.8304 | L_KL: 41.3683
+Step 3100 | Loss: 319.1207 | L_distill: 218.8585 | L_align: 0.5608 | L_KL: 946.5430
+Step 3150 | Loss: 917.0018 | L_distill: 636.9085 | L_align: 0.9858 | L_KL: 2702.3523
+Step 3200 | Loss: 11.1230 | L_distill: 1.5811 | L_align: 0.8857 | L_KL: 6.8528
+Step 3250 | Loss: 11.2298 | L_distill: 2.8724 | L_align: 0.7202 | L_KL: 11.5516
+Step 3300 | Loss: 11.6838 | L_distill: 2.8521 | L_align: 0.7648 | L_KL: 11.8360
+Step 3350 | Loss: 11.0195 | L_distill: 2.9159 | L_align: 0.6971 | L_KL: 11.3294
+Step 3400 | Loss: 103.6479 | L_distill: 64.4562 | L_align: 1.1237 | L_KL: 279.5452
+Step 3450 | Loss: 9.1252 | L_distill: 0.9817 | L_align: 0.7736 | L_KL: 4.0759
+Step 3500 | Loss: 68.4732 | L_distill: 39.6301 | L_align: 0.8145 | L_KL: 206.9836
+Saved checkpoints to checkpoints/distill_e2e
+Step 3550 | Loss: 33.9533 | L_distill: 16.5133 | L_align: 1.0578 | L_KL: 68.6193
+Step 3600 | Loss: 1060.9252 | L_distill: 750.1942 | L_align: 0.7826 | L_KL: 3029.0522
+Step 3650 | Loss: 1682.4520 | L_distill: 1169.1389 | L_align: 1.0448 | L_KL: 5028.6475
+Step 3700 | Loss: 66.1748 | L_distill: 37.6422 | L_align: 0.7549 | L_KL: 209.8392
+Step 3750 | Loss: 265.9471 | L_distill: 180.2242 | L_align: 0.8178 | L_KL: 775.4510
+Step 3800 | Loss: 11.0258 | L_distill: 1.9198 | L_align: 0.8455 | L_KL: 6.5123
+Step 3850 | Loss: 8.5664 | L_distill: 1.2153 | L_align: 0.6865 | L_KL: 4.8600
+Step 3900 | Loss: 26.5767 | L_distill: 11.3360 | L_align: 0.9855 | L_KL: 53.8548
+Step 3950 | Loss: 77.8794 | L_distill: 46.7798 | L_align: 0.9616 | L_KL: 214.8348
+Step 4000 | Loss: 90.9788 | L_distill: 60.5132 | L_align: 0.5898 | L_KL: 245.6793
+Saved checkpoints to checkpoints/distill_e2e
+Step 4050 | Loss: 80.0334 | L_distill: 54.1280 | L_align: 0.6329 | L_KL: 195.7590
+Step 4100 | Loss: 63.9005 | L_distill: 43.3570 | L_align: 0.8444 | L_KL: 120.9934
+Step 4150 | Loss: 9.4868 | L_distill: 0.6390 | L_align: 0.8596 | L_KL: 2.5199
+Step 4200 | Loss: 405.7186 | L_distill: 248.1229 | L_align: 0.9340 | L_KL: 1482.5521
+Step 4250 | Loss: 56.5660 | L_distill: 30.1295 | L_align: 1.1291 | L_KL: 151.4526
+Step 4300 | Loss: 317.6930 | L_distill: 215.7957 | L_align: 1.0907 | L_KL: 909.9060
+Step 4350 | Loss: 1715.4109 | L_distill: 1193.0356 | L_align: 0.8966 | L_KL: 5134.0908
+Step 4400 | Loss: 1105.0111 | L_distill: 768.7970 | L_align: 0.8438 | L_KL: 3277.7600
+Step 4450 | Loss: 34.7843 | L_distill: 17.8839 | L_align: 0.7621 | L_KL: 92.7975
+Step 4500 | Loss: 146.7072 | L_distill: 96.2953 | L_align: 0.6814 | L_KL: 435.9797
+Saved checkpoints to checkpoints/distill_e2e
+Step 4550 | Loss: 35.6398 | L_distill: 18.2805 | L_align: 1.0928 | L_KL: 64.3154
+Step 4600 | Loss: 13.5418 | L_distill: 3.7339 | L_align: 0.8165 | L_KL: 16.4282
+Step 4650 | Loss: 96.1907 | L_distill: 58.9072 | L_align: 0.8222 | L_KL: 290.6193
+Step 4700 | Loss: 10.7198 | L_distill: 1.0341 | L_align: 0.9260 | L_KL: 4.2552
+Step 4750 | Loss: 10.8070 | L_distill: 1.3314 | L_align: 0.8996 | L_KL: 4.7953
+Step 4800 | Loss: 23.2164 | L_distill: 10.2953 | L_align: 0.8650 | L_KL: 42.7059
+Step 4850 | Loss: 132.4069 | L_distill: 87.3736 | L_align: 1.0675 | L_KL: 343.5807
+Step 4900 | Loss: 1339.7605 | L_distill: 944.7621 | L_align: 0.8414 | L_KL: 3865.8489
+Step 4950 | Loss: 11.3096 | L_distill: 1.7676 | L_align: 0.8845 | L_KL: 6.9651
+Step 5000 | Loss: 536.6002 | L_distill: 374.0001 | L_align: 0.8345 | L_KL: 1542.5540
+Saved checkpoints to checkpoints/distill_e2e
+Step 5050 | Loss: 1454.8792 | L_distill: 1013.2948 | L_align: 0.8730 | L_KL: 4328.5405
+Step 5100 | Loss: 12.2208 | L_distill: 2.5501 | L_align: 0.8625 | L_KL: 10.4581
+Step 5150 | Loss: 1014.6655 | L_distill: 693.8431 | L_align: 1.1274 | L_KL: 3095.4858
+Step 5200 | Loss: 2273.5122 | L_distill: 1595.5898 | L_align: 0.8105 | L_KL: 6698.1694
+Step 5250 | Loss: 1505.5836 | L_distill: 1066.3888 | L_align: 0.8864 | L_KL: 4303.3076
+Step 5300 | Loss: 1014.9388 | L_distill: 692.1926 | L_align: 0.7036 | L_KL: 3157.1016
+Step 5350 | Loss: 17.6297 | L_distill: 5.0325 | L_align: 1.0304 | L_KL: 22.9330
+Step 5400 | Loss: 9.4390 | L_distill: 1.6092 | L_align: 0.7194 | L_KL: 6.3608
+Step 5450 | Loss: 937.5671 | L_distill: 651.2043 | L_align: 0.8795 | L_KL: 2775.6816
+Step 5500 | Loss: 12.4043 | L_distill: 1.9594 | L_align: 0.9671 | L_KL: 7.7408
+Saved checkpoints to checkpoints/distill_e2e
+Step 5550 | Loss: 10.2481 | L_distill: 1.5997 | L_align: 0.7987 | L_KL: 6.6131
+Step 5600 | Loss: 435.7482 | L_distill: 300.6105 | L_align: 0.8758 | L_KL: 1263.7961
+Step 5650 | Loss: 1482.2654 | L_distill: 1036.4276 | L_align: 0.8877 | L_KL: 4369.6074
+Step 5700 | Loss: 170.7139 | L_distill: 115.7039 | L_align: 0.8431 | L_KL: 465.7895
+Step 5750 | Loss: 260.1785 | L_distill: 174.3125 | L_align: 1.0135 | L_KL: 757.3145
+Step 5800 | Loss: 10.0348 | L_distill: 2.0323 | L_align: 0.7188 | L_KL: 8.1504
+Step 5850 | Loss: 39.9489 | L_distill: 18.7354 | L_align: 0.8432 | L_KL: 127.8131
+Step 5900 | Loss: 10.9710 | L_distill: 2.8891 | L_align: 0.6872 | L_KL: 12.1018
+Step 5950 | Loss: 62.5652 | L_distill: 36.9484 | L_align: 0.8185 | L_KL: 174.3154
+Step 6000 | Loss: 573.7823 | L_distill: 385.8602 | L_align: 0.8964 | L_KL: 1789.5780
+Saved checkpoints to checkpoints/distill_e2e
+Step 6050 | Loss: 65.4110 | L_distill: 40.2420 | L_align: 0.9081 | L_KL: 160.8851
+Step 6100 | Loss: 86.8029 | L_distill: 56.3612 | L_align: 0.6910 | L_KL: 235.3184
+Step 6150 | Loss: 87.0680 | L_distill: 55.3468 | L_align: 0.9224 | L_KL: 224.9683
+Step 6200 | Loss: 12.7974 | L_distill: 1.8481 | L_align: 1.0275 | L_KL: 6.7470
+Step 6250 | Loss: 183.3018 | L_distill: 116.3105 | L_align: 0.7926 | L_KL: 590.6517
+Step 6300 | Loss: 9.3048 | L_distill: 1.0170 | L_align: 0.7924 | L_KL: 3.6366
+Step 6350 | Loss: 24.2479 | L_distill: 11.4851 | L_align: 0.8124 | L_KL: 46.3918
+Step 6400 | Loss: 10.4497 | L_distill: 0.7795 | L_align: 0.9316 | L_KL: 3.5454
+Step 6450 | Loss: 27.0133 | L_distill: 11.3131 | L_align: 0.9481 | L_KL: 62.1946
+Step 6500 | Loss: 159.5511 | L_distill: 106.2231 | L_align: 0.8580 | L_KL: 447.4769
+Saved checkpoints to checkpoints/distill_e2e
+Step 6550 | Loss: 751.1989 | L_distill: 504.5094 | L_align: 0.8749 | L_KL: 2379.4048
+Step 6600 | Loss: 14.3299 | L_distill: 2.9338 | L_align: 1.0271 | L_KL: 11.2535
+Step 6650 | Loss: 18.2870 | L_distill: 6.5985 | L_align: 0.8976 | L_KL: 27.1229
+Step 6700 | Loss: 56.3954 | L_distill: 33.5571 | L_align: 0.8818 | L_KL: 140.2071
+Step 6750 | Loss: 370.7159 | L_distill: 256.3500 | L_align: 0.7428 | L_KL: 1069.3748
+Step 6800 | Loss: 1139.5291 | L_distill: 795.0027 | L_align: 0.8232 | L_KL: 3362.9395
+Step 6850 | Loss: 160.9832 | L_distill: 106.3974 | L_align: 0.6954 | L_KL: 476.3175
+Step 6900 | Loss: 17.4396 | L_distill: 4.0440 | L_align: 1.1281 | L_KL: 21.1425
+Step 6950 | Loss: 518.6387 | L_distill: 341.7716 | L_align: 0.6156 | L_KL: 1707.1128
+Step 7000 | Loss: 678.1522 | L_distill: 473.7327 | L_align: 0.8936 | L_KL: 1954.8309
+Saved checkpoints to checkpoints/distill_e2e
+Step 7050 | Loss: 152.3748 | L_distill: 98.8645 | L_align: 0.9338 | L_KL: 441.7200
+Step 7100 | Loss: 17.5826 | L_distill: 6.5234 | L_align: 0.8522 | L_KL: 25.3708
+Step 7150 | Loss: 9.9310 | L_distill: 1.1148 | L_align: 0.8314 | L_KL: 5.0178
+Step 7200 | Loss: 10.7548 | L_distill: 0.7086 | L_align: 0.9758 | L_KL: 2.8801
+Step 7250 | Loss: 10.2574 | L_distill: 1.3741 | L_align: 0.8322 | L_KL: 5.6111
+Step 7300 | Loss: 9.2694 | L_distill: 1.4783 | L_align: 0.7145 | L_KL: 6.4587
+Step 7350 | Loss: 446.6705 | L_distill: 311.9119 | L_align: 0.8975 | L_KL: 1257.8381
+Step 7400 | Loss: 12.7666 | L_distill: 2.1319 | L_align: 0.9750 | L_KL: 8.8510
+Step 7450 | Loss: 10.8052 | L_distill: 0.9687 | L_align: 0.9439 | L_KL: 3.9721
+Step 7500 | Loss: 12.6885 | L_distill: 2.4976 | L_align: 0.9682 | L_KL: 5.0863
+Saved checkpoints to checkpoints/distill_e2e
+Step 7550 | Loss: 112.7574 | L_distill: 74.3978 | L_align: 0.6687 | L_KL: 316.7230
+Step 7600 | Loss: 339.9651 | L_distill: 232.2605 | L_align: 0.8790 | L_KL: 989.1416
+Step 7650 | Loss: 1416.5194 | L_distill: 995.1486 | L_align: 0.7305 | L_KL: 4140.6562
+Step 7700 | Loss: 11.7323 | L_distill: 3.9716 | L_align: 0.6199 | L_KL: 15.6195
+Step 7750 | Loss: 9.3629 | L_distill: 1.5319 | L_align: 0.7240 | L_KL: 5.9102
+Step 7800 | Loss: 254.7994 | L_distill: 176.1656 | L_align: 0.9084 | L_KL: 695.4978
+Step 7850 | Loss: 11.1407 | L_distill: 3.4749 | L_align: 0.6359 | L_KL: 13.0719
+Step 7900 | Loss: 195.5834 | L_distill: 135.8989 | L_align: 0.7897 | L_KL: 517.8708
+Step 7950 | Loss: 6.8706 | L_distill: 0.5274 | L_align: 0.6126 | L_KL: 2.1757
+Step 8000 | Loss: 45.8974 | L_distill: 28.3739 | L_align: 0.6041 | L_KL: 114.8234
+Saved checkpoints to checkpoints/distill_e2e
+Step 8050 | Loss: 965.7736 | L_distill: 657.2837 | L_align: 0.7678 | L_KL: 3008.1157
+Step 8100 | Loss: 14.1325 | L_distill: 3.4721 | L_align: 0.9077 | L_KL: 15.8318
+Step 8150 | Loss: 10.7638 | L_distill: 1.8357 | L_align: 0.8184 | L_KL: 7.4436
+Step 8200 | Loss: 9.3118 | L_distill: 1.0475 | L_align: 0.7850 | L_KL: 4.1386
+Step 8250 | Loss: 47.4266 | L_distill: 27.5478 | L_align: 0.8689 | L_KL: 111.8951
+Step 8300 | Loss: 10.0466 | L_distill: 2.4053 | L_align: 0.6731 | L_KL: 9.1058
+Step 8350 | Loss: 12.4517 | L_distill: 3.2158 | L_align: 0.7390 | L_KL: 18.4560
+Step 8400 | Loss: 750.8921 | L_distill: 478.3591 | L_align: 0.8905 | L_KL: 2636.2795
+Step 8450 | Loss: 313.2763 | L_distill: 216.3376 | L_align: 0.9547 | L_KL: 873.9119
+Step 8500 | Loss: 57.5630 | L_distill: 35.5286 | L_align: 0.6978 | L_KL: 150.5610
+Saved checkpoints to checkpoints/distill_e2e
+Step 8550 | Loss: 8.7390 | L_distill: 0.9517 | L_align: 0.7430 | L_KL: 3.5746
+Step 8600 | Loss: 12.2640 | L_distill: 3.1417 | L_align: 0.7875 | L_KL: 12.4769
+Step 8650 | Loss: 15.3980 | L_distill: 4.4959 | L_align: 0.9075 | L_KL: 18.2658
+Step 8700 | Loss: 481.3921 | L_distill: 333.6384 | L_align: 0.7333 | L_KL: 1404.2021
+Step 8750 | Loss: 10.2090 | L_distill: 2.0744 | L_align: 0.7356 | L_KL: 7.7817
+Step 8800 | Loss: 1730.3689 | L_distill: 1217.0627 | L_align: 0.7537 | L_KL: 5057.6953
+Step 8850 | Loss: 9.0097 | L_distill: 1.6727 | L_align: 0.6640 | L_KL: 6.9648
+Step 8900 | Loss: 11.3916 | L_distill: 0.6315 | L_align: 1.0484 | L_KL: 2.7660
+Step 8950 | Loss: 51.1785 | L_distill: 30.1359 | L_align: 0.8571 | L_KL: 124.7133
+Step 9000 | Loss: 988.2654 | L_distill: 695.0996 | L_align: 0.7938 | L_KL: 2852.2766
+Saved checkpoints to checkpoints/distill_e2e
+Step 9050 | Loss: 10.4205 | L_distill: 1.0543 | L_align: 0.8939 | L_KL: 4.2751
+Step 9100 | Loss: 223.8956 | L_distill: 155.1060 | L_align: 0.7476 | L_KL: 613.1378
+Step 9150 | Loss: 11.3883 | L_distill: 2.2160 | L_align: 0.8317 | L_KL: 8.5540
+Step 9200 | Loss: 829.2167 | L_distill: 556.5122 | L_align: 0.7886 | L_KL: 2648.1880
+Step 9250 | Loss: 88.1653 | L_distill: 50.4036 | L_align: 0.9192 | L_KL: 285.6976
+Step 9300 | Loss: 9.2042 | L_distill: 0.8514 | L_align: 0.8026 | L_KL: 3.2671
+Step 9350 | Loss: 10.3311 | L_distill: 0.4223 | L_align: 0.9733 | L_KL: 1.7616
+Step 9400 | Loss: 177.9619 | L_distill: 119.5833 | L_align: 0.8411 | L_KL: 499.6743
+Step 9450 | Loss: 17.4265 | L_distill: 5.8999 | L_align: 0.9291 | L_KL: 22.3604
+Step 9500 | Loss: 10.1320 | L_distill: 1.3670 | L_align: 0.8255 | L_KL: 5.1014
+Saved checkpoints to checkpoints/distill_e2e
+Step 9550 | Loss: 12.7808 | L_distill: 1.1488 | L_align: 1.1170 | L_KL: 4.6161
+Step 9600 | Loss: 477.8627 | L_distill: 322.9380 | L_align: 0.5383 | L_KL: 1495.4210
+Step 9650 | Loss: 14.0970 | L_distill: 3.0244 | L_align: 0.9895 | L_KL: 11.7715
+Step 9700 | Loss: 9.6932 | L_distill: 0.4522 | L_align: 0.9050 | L_KL: 1.9062
+Step 9750 | Loss: 228.5868 | L_distill: 155.2288 | L_align: 0.7323 | L_KL: 660.3475
+Step 9800 | Loss: 10.7692 | L_distill: 2.1753 | L_align: 0.7746 | L_KL: 8.4779
+Step 9850 | Loss: 27.1710 | L_distill: 12.5003 | L_align: 0.8124 | L_KL: 65.4663
+Step 9900 | Loss: 26.9367 | L_distill: 13.9379 | L_align: 0.6875 | L_KL: 61.2406
+Step 9950 | Loss: 777.3791 | L_distill: 542.6172 | L_align: 0.8991 | L_KL: 2257.7070
+Step 10000 | Loss: 34.5157 | L_distill: 18.2070 | L_align: 0.8844 | L_KL: 74.6462
+Saved checkpoints to checkpoints/distill_e2e
+Training complete.

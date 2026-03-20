@@ -1,0 +1,67 @@
+Distillation:  14%|██████▋                                         | 1398/10000 [17:05<1:45:07,  1.36it/s, align=1.0205, distill=6.1051, loss=9.5070]
+Step 50 | Loss: 3564.4314 | L_distill: 2575.6289 | L_align: 1.0778 | L_KL: 9877.2461
+Step 100 | Loss: 225.5084 | L_distill: 160.1448 | L_align: 0.9784 | L_KL: 643.8521
+Step 150 | Loss: 1121.1770 | L_distill: 777.3492 | L_align: 0.8207 | L_KL: 3430.0703
+Step 200 | Loss: 8261.5137 | L_distill: 5892.6616 | L_align: 1.0343 | L_KL: 23678.1816
+Step 250 | Loss: 59.4488 | L_distill: 41.5915 | L_align: 0.9789 | L_KL: 168.7830
+Step 300 | Loss: 13.4152 | L_distill: 8.6551 | L_align: 0.9966 | L_KL: 37.6344
+Step 350 | Loss: 28.7074 | L_distill: 19.3654 | L_align: 0.9347 | L_KL: 84.0738
+Step 400 | Loss: 21.6417 | L_distill: 14.7857 | L_align: 1.0543 | L_KL: 58.0168
+Step 450 | Loss: 6.3361 | L_distill: 3.9221 | L_align: 0.8431 | L_KL: 15.7085
+Step 500 | Loss: 10.5097 | L_distill: 6.8257 | L_align: 0.8700 | L_KL: 28.1402
+Saved checkpoints to checkpoints/distill_e2e
+Step 550 | Loss: 5.6782 | L_distill: 3.5888 | L_align: 0.8439 | L_KL: 12.4553
+Step 600 | Loss: 9.9359 | L_distill: 6.2979 | L_align: 0.9207 | L_KL: 27.1731
+Step 650 | Loss: 2048.7766 | L_distill: 1463.5146 | L_align: 0.9443 | L_KL: 5843.1763
+Step 700 | Loss: 20.1972 | L_distill: 13.5758 | L_align: 1.1220 | L_KL: 54.9940
+Step 750 | Loss: 36.9987 | L_distill: 23.9539 | L_align: 0.9096 | L_KL: 121.3516
+Step 800 | Loss: 4.8857 | L_distill: 2.7536 | L_align: 1.0127 | L_KL: 11.1932
+Step 850 | Loss: 8.4884 | L_distill: 5.6149 | L_align: 0.8773 | L_KL: 19.9616
+Step 900 | Loss: 3915.7979 | L_distill: 2802.3916 | L_align: 1.1413 | L_KL: 11122.6484
+Step 950 | Loss: 4560.5625 | L_distill: 3234.1929 | L_align: 1.1708 | L_KL: 13251.9863
+Step 1000 | Loss: 3.4272 | L_distill: 1.8636 | L_align: 0.7966 | L_KL: 7.6701
+Saved checkpoints to checkpoints/distill_e2e
+Step 1050 | Loss: 11.6650 | L_distill: 7.6721 | L_align: 0.6681 | L_KL: 33.2489
+Step 1100 | Loss: 261.2295 | L_distill: 181.6375 | L_align: 0.8446 | L_KL: 787.4739
+Step 1150 | Loss: 40.4771 | L_distill: 28.3383 | L_align: 0.7768 | L_KL: 113.6200
+Step 1200 | Loss: 1167.8063 | L_distill: 800.8957 | L_align: 0.7826 | L_KL: 3661.2798
+Step 1250 | Loss: 6.0370 | L_distill: 3.7052 | L_align: 0.7923 | L_KL: 15.3956
+Step 1300 | Loss: 5.9825 | L_distill: 3.4836 | L_align: 1.0313 | L_KL: 14.6756
+Step 1350 | Loss: 147.3036 | L_distill: 103.7074 | L_align: 1.1002 | L_KL: 424.9593
+Traceback (most recent call last):
+  File "/data/gpfs/projects/punim2198/Aryan/EnergybasedDit/train_distill_e2e.py", line 509, in <module>
+    main()
+  File "/data/gpfs/projects/punim2198/Aryan/EnergybasedDit/train_distill_e2e.py", line 373, in main
+    h_T, image_tensor, final_latents = run_teacher_denoising_capture_hidden(
+                                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/data/gpfs/projects/punim2198/Aryan/EnergybasedDit/train_distill_e2e.py", line 85, in run_teacher_denoising_capture_hidden
+    noise_pred = transformer(
+                 ^^^^^^^^^^^^
+  File "/data/gpfs/projects/punim2198/Aryan/EnergybasedDit/virtualenv/Python3.11.3/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1776, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/data/gpfs/projects/punim2198/Aryan/EnergybasedDit/virtualenv/Python3.11.3/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1787, in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/data/gpfs/projects/punim2198/Aryan/EnergybasedDit/virtualenv/Python3.11.3/lib/python3.11/site-packages/diffusers/models/transformers/pixart_transformer_2d.py", line 330, in forward
+    hidden_states = block(
+                    ^^^^^^
+  File "/data/gpfs/projects/punim2198/Aryan/EnergybasedDit/virtualenv/Python3.11.3/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1776, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/data/gpfs/projects/punim2198/Aryan/EnergybasedDit/virtualenv/Python3.11.3/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1787, in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/data/gpfs/projects/punim2198/Aryan/EnergybasedDit/virtualenv/Python3.11.3/lib/python3.11/site-packages/diffusers/models/attention.py", line 1005, in forward
+    attn_output = self.attn1(
+                  ^^^^^^^^^^^
+  File "/data/gpfs/projects/punim2198/Aryan/EnergybasedDit/virtualenv/Python3.11.3/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1776, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/data/gpfs/projects/punim2198/Aryan/EnergybasedDit/virtualenv/Python3.11.3/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1787, in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/data/gpfs/projects/punim2198/Aryan/EnergybasedDit/virtualenv/Python3.11.3/lib/python3.11/site-packages/diffusers/models/attention_processor.py", line 607, in forward
+    return self.processor(
+           ^^^^^^^^^^^^^^^
+KeyboardInterrupt

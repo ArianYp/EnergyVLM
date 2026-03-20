@@ -1,0 +1,38 @@
+Distillation:   0%|                                                                                                        | 0/10000 [00:01<?, ?it/s]
+Traceback (most recent call last):
+  File "/data/gpfs/projects/punim2198/Aryan/EnergybasedDit/train_distill_e2e.py", line 505, in <module>
+    main()
+  File "/data/gpfs/projects/punim2198/Aryan/EnergybasedDit/train_distill_e2e.py", line 425, in main
+    eps_tea = pipe_teacher.transformer(
+              ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/data/gpfs/projects/punim2198/Aryan/EnergybasedDit/virtualenv/Python3.11.3/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1776, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/data/gpfs/projects/punim2198/Aryan/EnergybasedDit/virtualenv/Python3.11.3/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1787, in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/data/gpfs/projects/punim2198/Aryan/EnergybasedDit/virtualenv/Python3.11.3/lib/python3.11/site-packages/diffusers/models/transformers/pixart_transformer_2d.py", line 306, in forward
+    hidden_states = self.pos_embed(hidden_states)
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/data/gpfs/projects/punim2198/Aryan/EnergybasedDit/virtualenv/Python3.11.3/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1776, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/data/gpfs/projects/punim2198/Aryan/EnergybasedDit/virtualenv/Python3.11.3/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1787, in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/data/gpfs/projects/punim2198/Aryan/EnergybasedDit/virtualenv/Python3.11.3/lib/python3.11/site-packages/diffusers/models/embeddings.py", line 559, in forward
+    latent = self.proj(latent)
+             ^^^^^^^^^^^^^^^^^
+  File "/data/gpfs/projects/punim2198/Aryan/EnergybasedDit/virtualenv/Python3.11.3/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1776, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/data/gpfs/projects/punim2198/Aryan/EnergybasedDit/virtualenv/Python3.11.3/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1787, in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/data/gpfs/projects/punim2198/Aryan/EnergybasedDit/virtualenv/Python3.11.3/lib/python3.11/site-packages/torch/nn/modules/conv.py", line 553, in forward
+    return self._conv_forward(input, self.weight, self.bias)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/data/gpfs/projects/punim2198/Aryan/EnergybasedDit/virtualenv/Python3.11.3/lib/python3.11/site-packages/torch/nn/modules/conv.py", line 548, in _conv_forward
+    return F.conv2d(
+           ^^^^^^^^^
+RuntimeError: Input type (float) and bias type (c10::Half) should be the same

@@ -1,0 +1,78 @@
+Training projector:   5%|██▉                                                   | 269/5000 [05:29<1:33:29,  1.19s/it, loss=0.3863]
+Saved checkpoint to checkpoints/projector/projector_step10.pt
+Saved checkpoint to checkpoints/projector/projector_step20.pt
+Saved checkpoint to checkpoints/projector/projector_step30.pt
+Saved checkpoint to checkpoints/projector/projector_step40.pt
+Step 50/5000 | Loss: 0.7755
+Saved checkpoint to checkpoints/projector/projector_step50.pt
+Saved checkpoint to checkpoints/projector/projector_step60.pt
+Saved checkpoint to checkpoints/projector/projector_step70.pt
+Saved checkpoint to checkpoints/projector/projector_step80.pt
+Saved checkpoint to checkpoints/projector/projector_step90.pt
+Step 100/5000 | Loss: 0.4782
+Saved checkpoint to checkpoints/projector/projector_step100.pt
+Saved checkpoint to checkpoints/projector/projector_step110.pt
+Saved checkpoint to checkpoints/projector/projector_step120.pt
+Saved checkpoint to checkpoints/projector/projector_step130.pt
+Saved checkpoint to checkpoints/projector/projector_step140.pt
+Step 150/5000 | Loss: 0.3786
+Saved checkpoint to checkpoints/projector/projector_step150.pt
+Saved checkpoint to checkpoints/projector/projector_step160.pt
+Saved checkpoint to checkpoints/projector/projector_step170.pt
+Saved checkpoint to checkpoints/projector/projector_step180.pt
+Saved checkpoint to checkpoints/projector/projector_step190.pt
+Step 200/5000 | Loss: 0.4765
+Saved checkpoint to checkpoints/projector/projector_step200.pt
+Saved checkpoint to checkpoints/projector/projector_step210.pt
+Saved checkpoint to checkpoints/projector/projector_step220.pt
+Saved checkpoint to checkpoints/projector/projector_step230.pt
+Saved checkpoint to checkpoints/projector/projector_step240.pt
+Step 250/5000 | Loss: 0.3453
+Saved checkpoint to checkpoints/projector/projector_step250.pt
+Saved checkpoint to checkpoints/projector/projector_step260.pt
+Saved checkpoint to checkpoints/projector/projector_step270.pt
+Traceback (most recent call last):
+  File "/data/gpfs/projects/punim2198/Aryan/EnergybasedDit/train_projector.py", line 312, in <module>
+    dinov2_outputs = dinov2_model(pixel_values=pixel_values)
+    ^^^^^^
+  File "/data/gpfs/projects/punim2198/Aryan/EnergybasedDit/train_projector.py", line 255, in main
+    prompt_attention_mask,
+                ^^^^^^^^^^
+  File "/data/gpfs/projects/punim2198/Aryan/EnergybasedDit/train_projector.py", line 87, in extract_dit_hidden_at_final_step
+  File "/data/gpfs/projects/punim2198/Aryan/EnergybasedDit/virtualenv/Python3.11.3/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1776, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/data/gpfs/projects/punim2198/Aryan/EnergybasedDit/virtualenv/Python3.11.3/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1787, in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/data/gpfs/projects/punim2198/Aryan/EnergybasedDit/virtualenv/Python3.11.3/lib/python3.11/site-packages/diffusers/models/transformers/pixart_transformer_2d.py", line 330, in forward
+    hidden_states = block(
+                    ^^^^^^
+  File "/data/gpfs/projects/punim2198/Aryan/EnergybasedDit/virtualenv/Python3.11.3/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1776, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/data/gpfs/projects/punim2198/Aryan/EnergybasedDit/virtualenv/Python3.11.3/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1787, in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/data/gpfs/projects/punim2198/Aryan/EnergybasedDit/virtualenv/Python3.11.3/lib/python3.11/site-packages/diffusers/models/attention.py", line 1069, in forward
+    ff_output = self.ff(norm_hidden_states)
+                ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/data/gpfs/projects/punim2198/Aryan/EnergybasedDit/virtualenv/Python3.11.3/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1776, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/data/gpfs/projects/punim2198/Aryan/EnergybasedDit/virtualenv/Python3.11.3/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1787, in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/data/gpfs/projects/punim2198/Aryan/EnergybasedDit/virtualenv/Python3.11.3/lib/python3.11/site-packages/diffusers/models/attention.py", line 1741, in forward
+    hidden_states = module(hidden_states)
+                    ^^^^^^^^^^^^^^^^^^^^^
+  File "/data/gpfs/projects/punim2198/Aryan/EnergybasedDit/virtualenv/Python3.11.3/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1776, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/data/gpfs/projects/punim2198/Aryan/EnergybasedDit/virtualenv/Python3.11.3/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1787, in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/data/gpfs/projects/punim2198/Aryan/EnergybasedDit/virtualenv/Python3.11.3/lib/python3.11/site-packages/torch/nn/modules/linear.py", line 134, in forward
+    return F.linear(input, self.weight, self.bias)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+KeyboardInterrupt

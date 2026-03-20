@@ -1,0 +1,99 @@
+_wandb:
+    value:
+        cli_version: 0.25.1
+        e:
+            taao20pacmzb3rfizlmclqo5tciszt4e:
+                args:
+                    - --num_steps
+                    - "5000"
+                    - --batch_size
+                    - "4"
+                    - --output_dir
+                    - checkpoints/projector
+                codePath: train_projector.py
+                codePathLocal: train_projector.py
+                cpu_count: 32
+                cpu_count_logical: 32
+                cudaVersion: "12.4"
+                disk:
+                    /:
+                        total: "237749129216"
+                        used: "18083364864"
+                email: arian.yazdan2001@gmail.com
+                executable: /data/gpfs/projects/punim2198/Aryan/EnergybasedDit/virtualenv/Python3.11.3/bin/python
+                gpu: NVIDIA A100 80GB PCIe
+                gpu_count: 1
+                gpu_nvidia:
+                    - architecture: Ampere
+                      cudaCores: 6912
+                      memoryTotal: "85899345920"
+                      name: NVIDIA A100 80GB PCIe
+                      uuid: GPU-960dd4c7-9485-ebe9-3bff-b59b90b982d0
+                host: spartan-gpgpu129.hpc.unimelb.edu.au
+                memory:
+                    total: "539930177536"
+                os: Linux-5.14.0-570.30.1.el9_6.x86_64-x86_64-with-glibc2.34
+                program: /data/gpfs/projects/punim2198/Aryan/EnergybasedDit/train_projector.py
+                python: CPython 3.11.3
+                root: /data/gpfs/projects/punim2198/Aryan/EnergybasedDit
+                slurm:
+                    job_id: "22850375"
+                    latest: /apps/slurm/latest
+                startedAt: "2026-03-17T04:20:56.259905Z"
+                writerId: taao20pacmzb3rfizlmclqo5tciszt4e
+        m: []
+        python_version: 3.11.3
+        t:
+            "1":
+                - 1
+                - 11
+                - 41
+                - 49
+                - 71
+                - 83
+            "2":
+                - 1
+                - 11
+                - 41
+                - 49
+                - 71
+                - 83
+            "3":
+                - 16
+            "4": 3.11.3
+            "5": 0.25.1
+            "6": 5.3.0
+            "12": 0.25.1
+            "13": linux-x86_64
+batch_size:
+    value: 4
+dinov2_id:
+    value: facebook/dinov2-base
+height:
+    value: 512
+images_dir:
+    value: generated_images
+log_every:
+    value: 50
+lr:
+    value: 0.0001
+model_id:
+    value: PixArt-alpha/PixArt-XL-2-512x512
+no_wandb:
+    value: false
+num_inference_steps:
+    value: 20
+num_steps:
+    value: 5000
+output_dir:
+    value: checkpoints/projector
+save_every:
+    value: 10
+seed:
+    value: 42
+wandb_project:
+    value: energy-based-dit
+wandb_run_name:
+    value: null
+width:
+    value: 512

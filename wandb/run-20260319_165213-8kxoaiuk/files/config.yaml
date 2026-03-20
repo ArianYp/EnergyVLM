@@ -1,0 +1,129 @@
+_wandb:
+    value:
+        cli_version: 0.25.1
+        e:
+            7gk4w8t2puzc1lsc9odj3rumphd93ftz:
+                args:
+                    - --height
+                    - "512"
+                    - --width
+                    - "512"
+                    - --coco_path
+                    - /data/gpfs/datasets/COCO
+                    - --num_steps
+                    - "10000"
+                    - --K
+                    - "4"
+                    - --tau
+                    - "0.1"
+                    - --lambda_align
+                    - "0"
+                    - --beta_kl
+                    - "0"
+                    - --lr_student
+                    - "1e-5"
+                    - --lr_projector
+                    - "1e-4"
+                    - --num_inference_steps
+                    - "28"
+                    - --output_dir
+                    - checkpoints/distill_e2e_sd3_KL_0
+                    - --save_every
+                    - "1000"
+                    - --log_every
+                    - "50"
+                codePath: train_distill_e2e_sd3.py
+                codePathLocal: train_distill_e2e_sd3.py
+                cpu_count: 32
+                cpu_count_logical: 32
+                cudaVersion: "12.4"
+                disk:
+                    /:
+                        total: "237748080640"
+                        used: "19926695936"
+                email: arian.yazdan2001@gmail.com
+                executable: /data/gpfs/projects/punim2198/Aryan/EnergybasedDit/virtualenv/Python3.11.3/bin/python
+                gpu: NVIDIA A100-PCIE-40GB
+                gpu_count: 1
+                gpu_nvidia:
+                    - architecture: Ampere
+                      cudaCores: 6912
+                      memoryTotal: "42949672960"
+                      name: NVIDIA A100-PCIE-40GB
+                      uuid: GPU-98259097-c114-98df-f9d2-bd103165c458
+                host: spartan-gpgpu091.hpc.unimelb.edu.au
+                memory:
+                    total: "269347422208"
+                os: Linux-5.14.0-570.30.1.el9_6.x86_64-x86_64-with-glibc2.34
+                program: /data/gpfs/projects/punim2198/Aryan/EnergybasedDit/train_distill_e2e_sd3.py
+                python: CPython 3.11.3
+                root: /data/gpfs/projects/punim2198/Aryan/EnergybasedDit
+                slurm:
+                    job_id: "22927666"
+                    latest: /apps/slurm/latest
+                startedAt: "2026-03-19T05:52:13.492126Z"
+                writerId: 7gk4w8t2puzc1lsc9odj3rumphd93ftz
+        m: []
+        python_version: 3.11.3
+        t:
+            "1":
+                - 1
+                - 11
+                - 41
+                - 49
+                - 71
+                - 83
+            "2":
+                - 1
+                - 11
+                - 41
+                - 49
+                - 71
+                - 83
+            "3":
+                - 16
+            "4": 3.11.3
+            "5": 0.25.1
+            "6": 5.3.0
+            "12": 0.25.1
+            "13": linux-x86_64
+K:
+    value: 4
+beta_kl:
+    value: 0
+coco_path:
+    value: /data/gpfs/datasets/COCO
+dinov2_id:
+    value: facebook/dinov2-base
+height:
+    value: 512
+lambda_align:
+    value: 0
+log_every:
+    value: 50
+lr_projector:
+    value: 0.0001
+lr_student:
+    value: 1e-05
+no_wandb:
+    value: false
+num_inference_steps:
+    value: 28
+num_steps:
+    value: 10000
+output_dir:
+    value: checkpoints/distill_e2e_sd3_KL_0
+save_every:
+    value: 1000
+seed:
+    value: 42
+student_id:
+    value: stabilityai/stable-diffusion-3.5-medium
+tau:
+    value: 0.1
+teacher_id:
+    value: stabilityai/stable-diffusion-3.5-large
+wandb_project:
+    value: energy-based-dit
+width:
+    value: 512

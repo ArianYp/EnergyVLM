@@ -1,0 +1,1 @@
+{"train/loss":34.515663146972656,"_step":10000,"train/L_distill":18.207000732421875,"train/energy_mean":0.8844045400619507,"train/L_align":0.8844045996665955,"_runtime":7367.144005824,"train/L_KL":74.64618682861328,"_wandb":{"runtime":7367},"train/q_entropy":1.2245614528656006,"_timestamp":1.7738222334738066e+09}

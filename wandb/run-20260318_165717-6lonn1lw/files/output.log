@@ -1,0 +1,34 @@
+Distillation:   4%|█▊                                           | 403/10000 [04:56<1:57:31,  1.36it/s, align=1.0461, distill=133.6572, loss=189.4405]
+Step 50 | Loss: 5227.9429 | L_distill: 3768.6750 | L_align: 1.0407 | L_KL: 14591.6396
+Step 100 | Loss: 3825.9277 | L_distill: 2735.2021 | L_align: 0.9344 | L_KL: 10906.3203
+Step 150 | Loss: 3206.2612 | L_distill: 2256.2764 | L_align: 0.8222 | L_KL: 9499.0254
+Step 200 | Loss: 1370.0212 | L_distill: 980.3535 | L_align: 1.0067 | L_KL: 3895.6714
+Step 250 | Loss: 122.2503 | L_distill: 85.0381 | L_align: 1.0183 | L_KL: 371.1031
+Step 300 | Loss: 56.3297 | L_distill: 40.0408 | L_align: 0.9094 | L_KL: 161.9787
+Step 350 | Loss: 51.3240 | L_distill: 34.9952 | L_align: 1.1028 | L_KL: 162.1861
+Step 400 | Loss: 13.4646 | L_distill: 9.5310 | L_align: 1.1599 | L_KL: 38.1759
+Traceback (most recent call last):
+  File "/data/gpfs/projects/punim2198/Aryan/EnergybasedDit/train_distill_e2e.py", line 509, in <module>
+    main()
+  File "/data/gpfs/projects/punim2198/Aryan/EnergybasedDit/train_distill_e2e.py", line 373, in main
+    h_T, image_tensor, final_latents = run_teacher_denoising_capture_hidden(
+                                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/data/gpfs/projects/punim2198/Aryan/EnergybasedDit/train_distill_e2e.py", line 85, in run_teacher_denoising_capture_hidden
+    noise_pred = transformer(
+                 ^^^^^^^^^^^^
+  File "/data/gpfs/projects/punim2198/Aryan/EnergybasedDit/virtualenv/Python3.11.3/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1776, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/data/gpfs/projects/punim2198/Aryan/EnergybasedDit/virtualenv/Python3.11.3/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1787, in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/data/gpfs/projects/punim2198/Aryan/EnergybasedDit/virtualenv/Python3.11.3/lib/python3.11/site-packages/diffusers/models/transformers/pixart_transformer_2d.py", line 330, in forward
+    hidden_states = block(
+                    ^^^^^^
+  File "/data/gpfs/projects/punim2198/Aryan/EnergybasedDit/virtualenv/Python3.11.3/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1776, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/data/gpfs/projects/punim2198/Aryan/EnergybasedDit/virtualenv/Python3.11.3/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1787, in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+KeyboardInterrupt

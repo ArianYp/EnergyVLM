@@ -1,0 +1,72 @@
+{
+  "os": "Linux-5.14.0-570.30.1.el9_6.x86_64-x86_64-with-glibc2.34",
+  "python": "CPython 3.11.3",
+  "startedAt": "2026-03-18T05:57:17.077897Z",
+  "args": [
+    "--student_layers",
+    "14",
+    "--height",
+    "512",
+    "--width",
+    "512",
+    "--coco_path",
+    "/data/gpfs/datasets/COCO",
+    "--num_steps",
+    "10000",
+    "--K",
+    "4",
+    "--tau",
+    "0.1",
+    "--lambda_align",
+    "0.1",
+    "--beta_kl",
+    "0.1",
+    "--lr_student",
+    "1e-5",
+    "--lr_projector",
+    "1e-4",
+    "--num_inference_steps",
+    "20",
+    "--output_dir",
+    "checkpoints/distill_e2e",
+    "--save_every",
+    "500",
+    "--log_every",
+    "50"
+  ],
+  "program": "/data/gpfs/projects/punim2198/Aryan/EnergybasedDit/train_distill_e2e.py",
+  "codePath": "train_distill_e2e.py",
+  "codePathLocal": "train_distill_e2e.py",
+  "email": "arian.yazdan2001@gmail.com",
+  "root": "/data/gpfs/projects/punim2198/Aryan/EnergybasedDit",
+  "host": "spartan-gpgpu172.hpc.unimelb.edu.au",
+  "executable": "/data/gpfs/projects/punim2198/Aryan/EnergybasedDit/virtualenv/Python3.11.3/bin/python",
+  "cpu_count": 64,
+  "cpu_count_logical": 64,
+  "gpu": "NVIDIA H100 80GB HBM3",
+  "gpu_count": 1,
+  "disk": {
+    "/": {
+      "total": "477142667264",
+      "used": "25067229184"
+    }
+  },
+  "memory": {
+    "total": "1081147744256"
+  },
+  "gpu_nvidia": [
+    {
+      "name": "NVIDIA H100 80GB HBM3",
+      "memoryTotal": "85520809984",
+      "cudaCores": 16896,
+      "architecture": "Hopper",
+      "uuid": "GPU-d2bc18c2-d4fb-54f6-5a30-97e752272c20"
+    }
+  ],
+  "cudaVersion": "12.4",
+  "slurm": {
+    "job_id": "22903278",
+    "latest": "/apps/slurm/latest"
+  },
+  "writerId": "uldo93pdask5tz1w2b22n3e5e4pf7g43"
+}

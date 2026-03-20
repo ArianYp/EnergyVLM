@@ -1,0 +1,16 @@
+# Energy-based DiT: Projector training
+# Python 3.11+
+
+torch>=2.0.0
+torchvision>=0.15.0
+diffusers>=0.27.0
+transformers>=4.35.0
+accelerate>=0.25.0
+safetensors>=0.4.0
+sentencepiece>=0.1.99  # Required for T5 tokenizer (PixArt)
+protobuf>=3.20.0  # Required by SentencePieceExtractor; without it, transformers falls back to tiktoken and fails on spiece.model
+Pillow>=9.0.0
+tqdm>=4.65.0
+wandb>=0.16.0
+beautifulsoup4>=4.0.0  # For clean_caption in PixArt encode_prompt
+ftfy>=6.0.0  # For clean_caption in PixArt encode_prompt
