@@ -33,7 +33,7 @@ def _make_hook(capture_dict: dict, is_final_step: list):
         if is_final_step[0]:
             # JointTransformerBlock returns (encoder_hidden_states, hidden_states)
             enc, hid = output
-            capture_dict["hidden"] = hid.detach()
+            capture_dict["hidden"] = hid
 
     return hook
 
@@ -53,7 +53,7 @@ def run_teacher_denoising_capture_hidden(
         timesteps = scheduler.timesteps
         for i, t in enumerate(timesteps):
             is_final_step_ref[0] = (i == len(timesteps) - 1)
-            latent_model_input = latents  # FlowMatchEulerDiscreteScheduler has no scale_model_input
+            latent_model_input = latents 
             timestep = t.expand(latent_model_input.shape[0])
 
             with torch.no_grad():
@@ -112,6 +112,122 @@ def get_prompts(num: int, pool: list | None, seed: int) -> list:
     return [base[rng.randint(0, len(base) - 1)] for _ in range(num)]
 
 
+def _scalar_timestep_value(t) -> float:
+    if torch.is_tensor(t):
+        return float(t.flatten()[0].item())
+    return float(t)
+
+
+def _resolve_device(gpu_index: int) -> torch.device:
+    if not torch.cuda.is_available():
+        print("CUDA is not available; falling back to CPU.")
+        return torch.device("cpu")
+
+    cuda_count = torch.cuda.device_count()
+    if gpu_index < 0 or gpu_index >= cuda_count:
+        raise ValueError(f"--gpu {gpu_index} is out of range; found {cuda_count} CUDA device(s).")
+
+    device = torch.device(f"cuda:{gpu_index}")
+    torch.cuda.set_device(device)
+    return device
+
+
+def _make_generator(device: torch.device, seed: int) -> torch.Generator:
+    generator_device = str(device) if device.type == "cuda" else "cpu"
+    return torch.Generator(device=generator_device).manual_seed(seed)
+
+
+def _parameter_l2_norm(parameters) -> float:
+    total = 0.0
+    for p in parameters:
+        total += p.detach().float().pow(2).sum().item()
+    return total ** 0.5
+
+
+def _gradient_l2_norm(parameters) -> float:
+    total = 0.0
+    for p in parameters:
+        if p.grad is not None:
+            total += p.grad.detach().float().pow(2).sum().item()
+    return total ** 0.5
+
+
+def _tensor_stats(tensor: torch.Tensor) -> dict:
+    value = tensor.detach().float()
+    return {
+        "mean": value.mean().item(),
+        "std": value.std(unbiased=False).item(),
+        "min": value.min().item(),
+        "max": value.max().item(),
+        "rms": value.pow(2).mean().sqrt().item(),
+        "has_nan": bool(torch.isnan(value).any().item()),
+        "has_inf": bool(torch.isinf(value).any().item()),
+    }
+
+
+def _gradient_debug_summary(named_parameters, top_k: int) -> dict:
+    records = []
+    total_sq = 0.0
+    max_abs_grad = 0.0
+    params_with_grad = 0
+    params_without_grad = 0
+    tensors_with_nonfinite_grad = 0
+    nonfinite_grad_values = 0
+
+    for name, param in named_parameters:
+        if param.grad is None:
+            params_without_grad += 1
+            continue
+
+        params_with_grad += 1
+        grad = param.grad.detach().float()
+        finite_mask = torch.isfinite(grad)
+        has_nonfinite = not bool(finite_mask.all().item())
+        grad_max_abs = grad.abs().max().item()
+        max_abs_grad = max(max_abs_grad, grad_max_abs)
+
+        record = {
+            "name": name,
+            "shape": list(param.shape),
+            "numel": param.numel(),
+            "max_abs_grad": grad_max_abs,
+            "has_nonfinite_grad": has_nonfinite,
+        }
+        if has_nonfinite:
+            tensors_with_nonfinite_grad += 1
+            nonfinite_grad_values += int((~finite_mask).sum().item())
+            record["grad_norm"] = None
+        else:
+            grad_norm = grad.norm().item()
+            record["grad_norm"] = grad_norm
+            total_sq += grad.pow(2).sum().item()
+        records.append(record)
+
+    records.sort(
+        key=lambda item: (
+            item["has_nonfinite_grad"],
+            item["grad_norm"] if item["grad_norm"] is not None else float("inf"),
+            item["max_abs_grad"],
+        ),
+        reverse=True,
+    )
+
+    return {
+        "total_grad_norm": total_sq ** 0.5,
+        "max_abs_grad": max_abs_grad,
+        "params_with_grad": params_with_grad,
+        "params_without_grad": params_without_grad,
+        "tensors_with_nonfinite_grad": tensors_with_nonfinite_grad,
+        "nonfinite_grad_values": nonfinite_grad_values,
+        "top_parameters": records[:top_k],
+    }
+
+
+def _append_jsonl(path: Path, record: dict) -> None:
+    with open(path, "a") as f:
+        f.write(json.dumps(record) + "\n")
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--output_dir", default="checkpoints/distill_e2e_sd3")
@@ -123,6 +239,7 @@ def main():
     parser.add_argument("--tau", type=float, default=0.1)
     parser.add_argument("--lambda_align", type=float, default=0.1)
     parser.add_argument("--beta_kl", type=float, default=0.1)
+    parser.add_argument("--beta_ent", type=float, default=0.00)
     parser.add_argument("--lr_student", type=float, default=1e-5)
     parser.add_argument("--lr_projector", type=float, default=1e-4)
     parser.add_argument("--num_inference_steps", type=int, default=28)
@@ -131,13 +248,24 @@ def main():
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--save_every", type=int, default=1000)
     parser.add_argument("--log_every", type=int, default=50)
+    parser.add_argument(
+        "--debug_every",
+        type=int,
+        default=0,
+        help="Write detailed gradient debug records every N steps (0 uses log_every)",
+    )
+    parser.add_argument("--debug_top_k", type=int, default=5)
     parser.add_argument("--coco_path", default="/data/gpfs/datasets/COCO")
+    parser.add_argument("--gpu", type=int, default=0, help="CUDA device index to use")
     parser.add_argument("--wandb_project", default="energy-based-dit")
     parser.add_argument("--no_wandb", action="store_true")
     args = parser.parse_args()
 
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    device = _resolve_device(args.gpu)
     torch.manual_seed(args.seed)
+    if device.type == "cuda":
+        torch.cuda.manual_seed_all(args.seed)
+    print(f"Using device: {device}")
 
     caption_pool = None
     if args.coco_path and Path(args.coco_path).exists():
@@ -186,6 +314,10 @@ def main():
     dit_dim = pipe_teacher.transformer.config.num_attention_heads * pipe_teacher.transformer.config.attention_head_dim
     dinov2_dim = dinov2_model.config.hidden_size
     projector = DiT2DINOProjector(dit_dim=dit_dim, dinov2_dim=dinov2_dim).to(device)
+    student_named_params = list(pipe_student.transformer.named_parameters())
+    projector_named_params = list(projector.named_parameters())
+    student_params = [param for _, param in student_named_params]
+    projector_params = [param for _, param in projector_named_params]
 
     # --- Freeze all except student DiT and projector ---
     for c in [pipe_student.vae, pipe_student.text_encoder, pipe_student.text_encoder_2, pipe_student.text_encoder_3]:
@@ -195,8 +327,8 @@ def main():
 
     optimizer = torch.optim.AdamW(
         [
-            {"params": pipe_student.transformer.parameters(), "lr": args.lr_student},
-            {"params": projector.parameters(), "lr": args.lr_projector},
+            {"params": student_params, "lr": args.lr_student},
+            {"params": projector_params, "lr": args.lr_projector},
         ]
     )
 
@@ -206,6 +338,8 @@ def main():
     Path(args.output_dir).mkdir(parents=True, exist_ok=True)
     scheduler = pipe_teacher.scheduler
     latent_channels = pipe_teacher.transformer.config.in_channels
+    debug_every = args.debug_every if args.debug_every > 0 else args.log_every
+    debug_path = Path(args.output_dir) / "debug_train_metrics.jsonl"
 
     pbar = tqdm(range(args.num_steps), desc="Distillation SD3.5")
 
@@ -234,7 +368,7 @@ def main():
             args.width,
             prompt_embeds.dtype,
             device,
-            generator=torch.Generator(device).manual_seed(args.seed + step + 1),
+            generator=_make_generator(device, args.seed + step + 1),
         )
 
         scheduler.set_timesteps(args.num_inference_steps, device=device)
@@ -253,8 +387,9 @@ def main():
             z_DINO = F.normalize(z_DINO, p=2, dim=-1)
 
         z_DiT = projector(h_T.float())
-        L_align = 1.0 - (z_DiT * z_DINO).sum(dim=-1).mean()
-        E = 1.0 - (z_DiT * z_DINO).sum(dim=-1)
+        cos_sim = (z_DiT * z_DINO).sum(dim=-1)
+        L_align = 1.0 - cos_sim.mean()
+        E = 1.0 - cos_sim
         q = F.softmax(-E / args.tau, dim=0)
 
         timesteps = scheduler.timesteps
@@ -290,29 +425,162 @@ def main():
         )[0]
 
         diff = eps_stu.float() - eps_tea
-        mse_per = (diff ** 2).sum(dim=(1, 2, 3))
+        mse_per = (diff ** 2).mean(dim=(1, 2, 3))
         L_distill = (q * mse_per).sum()
-        L_KL = (mse_per).sum()
-        loss = L_distill + args.lambda_align * L_align + args.beta_kl * L_KL
+
+        eps_flat_T = eps_tea.reshape(args.K, -1)
+        eps_flat_S = eps_stu.float().reshape(args.K, -1)
+        mu_T = eps_flat_T.mean(0)
+        mu_S = eps_flat_S.mean(0)
+        var_T = eps_flat_T.var(0).clamp(min=1e-4)
+        var_S = eps_flat_S.var(0).clamp(min=1e-4)
+        L_KL = 0.5 * (var_S / var_T + (mu_S - mu_T).pow(2) / var_T
+                       - 1.0 + (var_T / var_S).log()).mean()
+
+        L_entropy = (q * (q + 1e-8).log()).sum()
+
+        loss = (L_distill + args.lambda_align * L_align
+                + args.beta_kl * L_KL + args.beta_ent * L_entropy)
 
         loss.backward()
-        torch.nn.utils.clip_grad_norm_(
-            list(pipe_student.transformer.parameters()) + list(projector.parameters()),
+        student_grad_norm = _gradient_l2_norm(student_params)
+        projector_grad_norm = _gradient_l2_norm(projector_params)
+        should_debug = debug_every > 0 and ((step + 1) % debug_every == 0)
+        student_grad_debug = None
+        projector_grad_debug = None
+        if should_debug:
+            student_grad_debug = _gradient_debug_summary(student_named_params, args.debug_top_k)
+            projector_grad_debug = _gradient_debug_summary(projector_named_params, args.debug_top_k)
+        grad_norm = torch.nn.utils.clip_grad_norm_(
+            student_params + projector_params,
             max_norm=1.0,
         )
+        if torch.is_tensor(grad_norm):
+            grad_norm = grad_norm.item()
+        student_grad_norm_post_clip = _gradient_l2_norm(student_params)
+        projector_grad_norm_post_clip = _gradient_l2_norm(projector_params)
+        grad_norm_post_clip = (
+            student_grad_norm_post_clip ** 2 + projector_grad_norm_post_clip ** 2
+        ) ** 0.5
         optimizer.step()
+        student_param_norm = _parameter_l2_norm(student_params)
+        projector_param_norm = _parameter_l2_norm(projector_params)
+        grad_clip_ratio = grad_norm_post_clip / grad_norm if grad_norm > 0 else 1.0
 
-        pbar.set_postfix(loss=f"{loss.item():.4f}", align=f"{L_align.item():.4f}")
+        q_entropy = -(q * (q + 1e-8).log()).sum()
+        q_effective_k = torch.exp(q_entropy)
+        mse_mean = mse_per.mean()
+        mse_std = mse_per.std(unbiased=False)
+        energy_mean = E.mean()
+        energy_std = E.std(unbiased=False)
+        cos_mean = cos_sim.mean()
+        cos_std = cos_sim.std(unbiased=False)
+        h_t_norm_mean = h_T.float().norm(dim=-1).mean()
+        metrics = {
+            "train/loss": loss.item(),
+            "train/L_distill": L_distill.item(),
+            "train/L_align": L_align.item(),
+            "train/L_KL": L_KL.item(),
+            "train/L_entropy": L_entropy.item(),
+            "train/weighted_L_align": (args.lambda_align * L_align).item(),
+            "train/weighted_L_KL": (args.beta_kl * L_KL).item(),
+            "train/weighted_L_entropy": (args.beta_ent * L_entropy).item(),
+            "train/cos_mean": cos_mean.item(),
+            "train/cos_std": cos_std.item(),
+            "train/energy_mean": energy_mean.item(),
+            "train/energy_std": energy_std.item(),
+            "train/q_entropy": q_entropy.item(),
+            "train/q_effective_k": q_effective_k.item(),
+            "train/q_max": q.max().item(),
+            "train/q_min": q.min().item(),
+            "train/mse_per_mean": mse_mean.item(),
+            "train/mse_per_std": mse_std.item(),
+            "train/h_T_norm_mean": h_t_norm_mean.item(),
+            "train/grad_norm": grad_norm,
+            "train/grad_norm_post_clip": grad_norm_post_clip,
+            "train/student_grad_norm": student_grad_norm,
+            "train/projector_grad_norm": projector_grad_norm,
+            "train/student_grad_norm_post_clip": student_grad_norm_post_clip,
+            "train/projector_grad_norm_post_clip": projector_grad_norm_post_clip,
+            "train/grad_clip_ratio": grad_clip_ratio,
+            "train/student_param_norm": student_param_norm,
+            "train/projector_param_norm": projector_param_norm,
+            "train/energy_min": E.min().item(),
+            "train/energy_max": E.max().item(),
+            "train/cos_min": cos_sim.min().item(),
+            "train/cos_max": cos_sim.max().item(),
+            "train/latent_rms": latent_model_input.pow(2).mean().sqrt().item(),
+            "train/final_latents_rms": final_latents.float().pow(2).mean().sqrt().item(),
+            "train/eps_teacher_rms": eps_tea.pow(2).mean().sqrt().item(),
+            "train/eps_student_rms": eps_stu.float().pow(2).mean().sqrt().item(),
+            "train/diff_rms": diff.pow(2).mean().sqrt().item(),
+            "train/timestep_idx": t_idx,
+            "train/timestep_value": _scalar_timestep_value(t),
+        }
+
+        pbar.set_postfix(
+            loss=f"{metrics['train/loss']:.1f}",
+            align=f"{metrics['train/L_align']:.3f}",
+            cos=f"{metrics['train/cos_mean']:.3f}",
+            qmax=f"{metrics['train/q_max']:.3f}",
+            grad=f"{metrics['train/grad_norm']:.2f}",
+        )
 
         if not args.no_wandb:
-            wandb.log(
-                {
-                    "train/loss": loss.item(),
-                    "train/L_distill": L_distill.item(),
-                    "train/L_align": L_align.item(),
-                    "train/L_KL": L_KL.item(),
+            wandb.log(metrics, step=step + 1)
+
+        if (step + 1) % args.log_every == 0:
+            print(
+                f"Step {step+1} | loss={metrics['train/loss']:.1f} | "
+                f"distill={metrics['train/L_distill']:.1f} | "
+                f"align={metrics['train/L_align']:.3f} (w={metrics['train/weighted_L_align']:.3f}) | "
+                f"KL={metrics['train/L_KL']:.4f} (w={metrics['train/weighted_L_KL']:.4f}) | "
+                f"ent={metrics['train/L_entropy']:.4f} (w={metrics['train/weighted_L_entropy']:.4f}) | "
+                f"cos={metrics['train/cos_mean']:.3f}+/-{metrics['train/cos_std']:.3f} | "
+                f"E={metrics['train/energy_mean']:.3f}+/-{metrics['train/energy_std']:.3f} "
+                f"[{metrics['train/energy_min']:.3f},{metrics['train/energy_max']:.3f}] | "
+                f"qmax={metrics['train/q_max']:.3f} qmin={metrics['train/q_min']:.3f} "
+                f"qH={metrics['train/q_entropy']:.3f} q_eff={metrics['train/q_effective_k']:.2f} | "
+                f"mse={metrics['train/mse_per_mean']:.1f}+/-{metrics['train/mse_per_std']:.1f} | "
+                f"grad={metrics['train/grad_norm']:.2f}->{metrics['train/grad_norm_post_clip']:.2f} "
+                f"(stu={metrics['train/student_grad_norm']:.2f}->{metrics['train/student_grad_norm_post_clip']:.2f}, "
+                f"proj={metrics['train/projector_grad_norm']:.2f}->{metrics['train/projector_grad_norm_post_clip']:.2f}, "
+                f"clip={metrics['train/grad_clip_ratio']:.5f}) | "
+                f"param={metrics['train/student_param_norm']:.2f}/{metrics['train/projector_param_norm']:.2f} | "
+                f"rms(lat={metrics['train/latent_rms']:.3f}, fin={metrics['train/final_latents_rms']:.3f}, "
+                f"tea={metrics['train/eps_teacher_rms']:.3f}, stu={metrics['train/eps_student_rms']:.3f}, diff={metrics['train/diff_rms']:.3f}) | "
+                f"t_idx={metrics['train/timestep_idx']} t={metrics['train/timestep_value']:.1f}"
+            )
+
+        if should_debug:
+            debug_record = {
+                "step": step + 1,
+                "prompt": prompts[0],
+                "metrics": metrics,
+                "q_values": [float(x) for x in q.detach().cpu().tolist()],
+                "energies": [float(x) for x in E.detach().cpu().tolist()],
+                "cos_sim": [float(x) for x in cos_sim.detach().cpu().tolist()],
+                "mse_per": [float(x) for x in mse_per.detach().cpu().tolist()],
+                "tensor_stats": {
+                    "h_T": _tensor_stats(h_T),
+                    "z_DiT": _tensor_stats(z_DiT),
+                    "z_DINO": _tensor_stats(z_DINO),
+                    "latent_model_input": _tensor_stats(latent_model_input),
+                    "final_latents": _tensor_stats(final_latents),
+                    "eps_teacher": _tensor_stats(eps_tea),
+                    "eps_student": _tensor_stats(eps_stu),
+                    "diff": _tensor_stats(diff),
                 },
-                step=step + 1,
+                "gradient_debug": {
+                    "student": student_grad_debug,
+                    "projector": projector_grad_debug,
+                },
+            }
+            _append_jsonl(debug_path, debug_record)
+            print(
+                f"[debug] step={step+1} wrote {debug_path.name} | "
+                f"student_top={student_grad_debug['top_parameters'][0]['name'] if student_grad_debug['top_parameters'] else 'none'} | "
+                f"projector_top={projector_grad_debug['top_parameters'][0]['name'] if projector_grad_debug['top_parameters'] else 'none'}"
             )
 
         if (step + 1) % args.save_every == 0:
