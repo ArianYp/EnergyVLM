@@ -240,6 +240,7 @@ def main():
     parser.add_argument("--lambda_align", type=float, default=0.1)
     parser.add_argument("--beta_kl", type=float, default=0.1)
     parser.add_argument("--beta_ent", type=float, default=0.00)
+    parser.add_argument("--snr_gamma", type=float, default=5.0, help="min-SNR-gamma clamp for L_KL weighting")
     parser.add_argument("--lr_student", type=float, default=1e-5)
     parser.add_argument("--lr_projector", type=float, default=1e-4)
     parser.add_argument("--num_inference_steps", type=int, default=28)
@@ -428,14 +429,11 @@ def main():
         mse_per = (diff ** 2).mean(dim=(1, 2, 3))
         L_distill = (q * mse_per).sum()
 
-        eps_flat_T = eps_tea.reshape(args.K, -1)
-        eps_flat_S = eps_stu.float().reshape(args.K, -1)
-        mu_T = eps_flat_T.mean(0)
-        mu_S = eps_flat_S.mean(0)
-        var_T = eps_flat_T.var(0).clamp(min=1e-4)
-        var_S = eps_flat_S.var(0).clamp(min=1e-4)
-        L_KL = 0.5 * (var_S / var_T + (mu_S - mu_T).pow(2) / var_T
-                       - 1.0 + (var_T / var_S).log()).mean()
+        sigma_t = scheduler.sigmas[t_idx]
+        alpha_t = 1.0 - sigma_t
+        snr = (alpha_t / sigma_t.clamp(min=1e-6)) ** 2
+        w_t = snr.clamp(max=args.snr_gamma) / snr.clamp(min=1e-6)
+        L_KL = w_t * mse_per.mean()
 
         L_entropy = (q * (q + 1e-8).log()).sum()
 
@@ -496,6 +494,9 @@ def main():
             "train/mse_per_mean": mse_mean.item(),
             "train/mse_per_std": mse_std.item(),
             "train/h_T_norm_mean": h_t_norm_mean.item(),
+            "train/snr": float(snr),
+            "train/w_t": float(w_t),
+            "train/sigma_t": float(sigma_t),
             "train/grad_norm": grad_norm,
             "train/grad_norm_post_clip": grad_norm_post_clip,
             "train/student_grad_norm": student_grad_norm,
