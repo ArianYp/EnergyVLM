@@ -1,0 +1,32 @@
+bsub -J distill-sana-mse-5ep -G team361 -q training-parallel \
+  -n 16 -W 72:00 \
+  -R "span[hosts=1]" -R "select[mem>256000]" -R "rusage[mem=256000]" -M 256000 \
+  -gpu "num=4:mode=exclusive_process" \
+  -cwd /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM \
+  -o logs/lsf-distill-sana-mse-5ep-%J.out -e logs/lsf-distill-sana-mse-5ep-%J.err \
+  /bin/bash -c '
+    export HF_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/huggingface
+    export TORCH_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/torch
+    export XDG_CACHE_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/xdg
+    export HUGGINGFACE_HUB_TOKEN=${HUGGINGFACE_HUB_TOKEN}
+    export OMP_NUM_THREADS=1
+    export TORCH_NCCL_ASYNC_ERROR_HANDLING=1
+    export TOKENIZERS_PARALLELISM=false
+    mkdir -p logs
+    torchrun --nproc_per_node=4 --standalone train_distill_sd3.py \
+      --output_dir checkpoints/distill_sana_mse_5ep \
+      --coco_path /lustre/scratch126/cellgen/lotfollahi/ha11/COCO \
+      --feat_loss_type mse \
+      --beta_feat 1.0 \
+      --adam_weight_decay 0.0 \
+      --lr 5e-6 --lr_projector 5e-4 \
+      --warmup_steps 1000 --warmup_feat_steps 1000 \
+      --batch_size 4 --gradient_accumulation_steps 1 \
+      --num_steps 185000 \
+      --timestep_sampling logit_normal \
+      --gradient_checkpointing \
+      --num_workers 4 \
+      --save_every 5000 --log_every 100 \
+      --wandb_project sana-distillation \
+      --wandb_run_name distill-sana-mse-last-5ep
+  '

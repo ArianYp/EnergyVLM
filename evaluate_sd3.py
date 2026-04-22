@@ -1,13 +1,18 @@
 #!/usr/bin/env python3
 """
-Evaluate SD3 teacher/base/distilled models on held-out prompts.
+Evaluate Sana teacher/base/distilled models on held-out prompts.
 
 This script covers two questions:
 1. Model quality: compare teacher vs base student vs distilled student using
    CLIP text-image similarity on held-out prompts.
-2. Energy hypothesis: if a projector checkpoint is available, test whether
-   low-energy teacher samples tend to score higher than random teacher samples
-   for the same prompt.
+2. Energy hypothesis (optional): if a DiT->DINOv2 projector checkpoint is
+   available, test whether low-energy teacher samples tend to score higher
+   than random teacher samples for the same prompt.
+
+Baseline-only mode:
+  If --distilled_ckpt / --checkpoint_dir are not provided (or --skip_distilled
+  is passed), the script just evaluates the teacher and the base student.
+  This is useful for getting reference CLIP scores before distillation runs.
 
 Outputs:
   - summary.json
@@ -16,13 +21,17 @@ Outputs:
   - teacher_energy_samples.jsonl (if a projector checkpoint is available)
   - images/ (optional)
 
-Example:
+Example (GenEval2, all 800 prompts):
   python evaluate_sd3.py \
-    --checkpoint_dir checkpoints/distill_e2e_sd3_KL_1 \
-    --coco_path /data/gpfs/datasets/COCO \
-    --num_prompts 100 \
-    --teacher_candidates 8 \
-    --output_dir logs/eval_sd3
+    --checkpoint_dir checkpoints/distill_sana_mse_5ep \
+    --geneval2_path GenEval2/geneval2_data.jsonl \
+    --output_dir logs/eval_sana
+
+Baselines only (no distilled checkpoint needed):
+  python evaluate_sd3.py \
+    --geneval2_path GenEval2/geneval2_data.jsonl \
+    --skip_distilled \
+    --output_dir logs/eval_sana_baselines
 """
 
 from __future__ import annotations
@@ -37,12 +46,10 @@ from statistics import mean, pstdev
 
 import torch
 import torch.nn.functional as F
-from diffusers import StableDiffusion3Pipeline
+from diffusers import SanaPipeline
 from PIL import Image
 from tqdm import tqdm
 from transformers import AutoImageProcessor, AutoModel, CLIPModel, CLIPProcessor
-
-from projector import DiT2DINOProjector
 
 
 FALLBACK_PROMPTS = [
@@ -131,6 +138,35 @@ def read_prompt_file(prompt_file: str) -> list[str]:
         return [line.strip() for line in f if line.strip()]
 
 
+def load_geneval2_prompts(geneval2_path: str) -> tuple[list[str], str]:
+    """Load prompts from GenEval2's `geneval2_data.jsonl` (or the repo dir).
+
+    Each line is `{"prompt": str, "atom_count": int, "vqa_list": [...], "skills": [...]}`.
+    We only use the "prompt" field here (Soft-TIFA VQA scoring is out of scope
+    for this CLIP-score eval; see GenEval2/evaluation.py for that).
+    """
+    path = Path(geneval2_path)
+    if path.is_dir():
+        candidate = path / "geneval2_data.jsonl"
+        if not candidate.exists():
+            raise FileNotFoundError(f"No geneval2_data.jsonl found under {geneval2_path}")
+        path = candidate
+    if not path.exists():
+        raise FileNotFoundError(f"GenEval2 prompts file not found: {geneval2_path}")
+
+    prompts = []
+    with open(path) as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            record = json.loads(line)
+            prompt = str(record.get("prompt", "")).strip()
+            if prompt:
+                prompts.append(prompt)
+    return prompts, "geneval2"
+
+
 def load_coco_eval_captions(coco_path: str) -> tuple[list[str], str]:
     path = Path(coco_path)
     if path.is_dir():
@@ -199,17 +235,59 @@ def resolve_checkpoint(checkpoint_dir: str | None, prefix: str, step: int | None
     return step_paths[-1]
 
 
+def resolve_training_checkpoint(checkpoint_dir: str | None, step: int | None) -> Path | None:
+    """Locate a `checkpoint_step*.pt` / `checkpoint_final.pt` saved by train_distill_sd3.py.
+
+    That training script saves the student under a 'model' key (and optionally 'ema')
+    inside a single dict, rather than a bare `student_stepN.pt`.  We try those names
+    first, then fall back to the legacy `student_*.pt` layout.
+    """
+    if checkpoint_dir is None:
+        return None
+    ckpt_dir = Path(checkpoint_dir)
+    if step is not None:
+        for name in (f"checkpoint_step{step}.pt", f"student_step{step}.pt"):
+            path = ckpt_dir / name
+            if path.exists():
+                return path
+        raise FileNotFoundError(f"No checkpoint for step {step} under {ckpt_dir}")
+
+    for name in ("checkpoint_final.pt", "student_final.pt"):
+        path = ckpt_dir / name
+        if path.exists():
+            return path
+
+    candidates = sorted(ckpt_dir.glob("checkpoint_step*.pt")) + sorted(ckpt_dir.glob("student_step*.pt"))
+    if not candidates:
+        return None
+    candidates.sort(key=lambda p: int(p.stem.split("step")[-1]))
+    return candidates[-1]
+
+
 def build_eval_prompts(args: argparse.Namespace) -> tuple[list[str], str]:
+    """Resolve the prompt pool. Priority: --prompt_file > --geneval2_path > --coco_path > fallback.
+
+    --num_prompts <= 0 means "use all prompts from the source" (useful for GenEval2's 800).
+    """
+    use_all = args.num_prompts is None or args.num_prompts <= 0
+
     prompt_source = "fallback_prompts"
     if args.prompt_file:
         prompt_pool = read_prompt_file(args.prompt_file)
-        prompts = sample_prompts(prompt_pool, min(args.num_prompts, len(prompt_pool)), args.seed)
+        n = len(prompt_pool) if use_all else min(args.num_prompts, len(prompt_pool))
+        prompts = sample_prompts(prompt_pool, n, args.seed)
         prompt_source = Path(args.prompt_file).name
+    elif args.geneval2_path and Path(args.geneval2_path).exists():
+        prompt_pool, prompt_source = load_geneval2_prompts(args.geneval2_path)
+        n = len(prompt_pool) if use_all else min(args.num_prompts, len(prompt_pool))
+        prompts = sample_prompts(prompt_pool, n, args.seed)
     elif args.coco_path and Path(args.coco_path).exists():
-        caption_pool, prompt_source = load_coco_eval_captions(args.coco_path)
-        prompts = sample_prompts(caption_pool, args.num_prompts, args.seed)
+        prompt_pool, prompt_source = load_coco_eval_captions(args.coco_path)
+        n = len(prompt_pool) if use_all else args.num_prompts
+        prompts = sample_prompts(prompt_pool, n, args.seed)
     else:
-        prompts = sample_prompts(FALLBACK_PROMPTS, min(args.num_prompts, len(FALLBACK_PROMPTS)), args.seed)
+        n = len(FALLBACK_PROMPTS) if use_all else min(args.num_prompts, len(FALLBACK_PROMPTS))
+        prompts = sample_prompts(FALLBACK_PROMPTS, n, args.seed)
 
     if args.include_compositional_prompts:
         prompts = prompts + COMPOSITIONAL_PROMPTS
@@ -263,14 +341,15 @@ def compare_prompt_means(left: dict[int, float], right: dict[int, float]) -> dic
 def _make_hook(capture_dict: dict, is_final_step: list[bool]):
     def hook(module, input, output):
         if is_final_step[0]:
-            enc, hid = output
+            # Sana transformer blocks return a single Tensor [B, seq, D].
+            hid = output[0] if isinstance(output, tuple) else output
             capture_dict["hidden"] = hid.detach()
 
     return hook
 
 
 def generate_and_capture_hidden(
-    pipe: StableDiffusion3Pipeline,
+    pipe: SanaPipeline,
     prompt: str,
     num_images: int,
     height: int,
@@ -279,24 +358,23 @@ def generate_and_capture_hidden(
     guidance_scale: float,
     device: torch.device,
     seed: int,
+    max_sequence_length: int,
 ) -> tuple[list[Image.Image], torch.Tensor]:
     transformer = pipe.transformer
     scheduler = pipe.scheduler
     vae = pipe.vae
 
-    prompt_embeds, negative_prompt_embeds, pooled_embeds, negative_pooled_embeds = pipe.encode_prompt(
+    prompt_embeds, prompt_attention_mask, neg_prompt_embeds, neg_prompt_attention_mask = pipe.encode_prompt(
         prompt=[prompt] * num_images,
-        prompt_2=[prompt] * num_images,
-        prompt_3=[prompt] * num_images,
         negative_prompt=[""] * num_images,
-        negative_prompt_2=[""] * num_images,
-        negative_prompt_3=[""] * num_images,
         do_classifier_free_guidance=True,
         device=device,
         num_images_per_prompt=1,
+        max_sequence_length=max_sequence_length,
+        complex_human_instruction=None,
     )
-    prompt_embeds = torch.cat([negative_prompt_embeds, prompt_embeds], dim=0)
-    pooled_embeds = torch.cat([negative_pooled_embeds, pooled_embeds], dim=0)
+    prompt_embeds = torch.cat([neg_prompt_embeds, prompt_embeds], dim=0)
+    prompt_attention_mask = torch.cat([neg_prompt_attention_mask, prompt_attention_mask], dim=0)
 
     latent_channels = transformer.config.in_channels
     latents = pipe.prepare_latents(
@@ -326,10 +404,9 @@ def generate_and_capture_hidden(
             with torch.no_grad():
                 noise_pred = transformer(
                     hidden_states=latent_model_input,
-                    timestep=timestep,
                     encoder_hidden_states=prompt_embeds,
-                    pooled_projections=pooled_embeds,
-                    joint_attention_kwargs=None,
+                    encoder_attention_mask=prompt_attention_mask,
+                    timestep=timestep,
                     return_dict=False,
                 )[0]
             noise_pred_uncond, noise_pred_text = noise_pred.chunk(2)
@@ -344,8 +421,9 @@ def generate_and_capture_hidden(
         handle.remove()
 
     if "hidden" not in capture_dict:
-        raise RuntimeError("Failed to capture SD3 hidden states at the final denoising step")
+        raise RuntimeError("Failed to capture Sana hidden states at the final denoising step")
 
+    # Conditional half of the CFG-doubled batch; mean-pool tokens.
     h_t = capture_dict["hidden"][num_images:].mean(dim=1)
     return pil_images, h_t
 
@@ -431,34 +509,51 @@ def save_images(
     return saved_paths
 
 
-def load_teacher_pipeline(model_id: str, device: torch.device) -> StableDiffusion3Pipeline:
-    pipe = StableDiffusion3Pipeline.from_pretrained(model_id, torch_dtype=torch.bfloat16)
+def load_teacher_pipeline(model_id: str, device: torch.device) -> SanaPipeline:
+    # Sana's official recipe: transformer in fp16 (bf16 produces garbage for the
+    # 1.6B 1024px variant, which has no BF16 release), but the Gemma-2 text
+    # encoder and the DC-AE VAE must be in bf16 -- Gemma-2's attn_logit_softcapping
+    # silently overflows in fp16 and can yield NaN prompt embeddings.
+    pipe = SanaPipeline.from_pretrained(model_id, torch_dtype=torch.float16)
     pipe = pipe.to(device)
+    pipe.text_encoder.to(torch.bfloat16)
+    pipe.vae.to(torch.bfloat16)
     pipe.transformer.eval()
     pipe.set_progress_bar_config(disable=True)
     return pipe
 
 
+def _extract_student_state_dict(checkpoint_path: Path, use_ema: bool) -> dict:
+    """Load a student state dict from either a bare state_dict file or a
+    full training checkpoint dict with {"model", "ema", ...} keys."""
+    obj = torch.load(checkpoint_path, map_location="cpu")
+    if isinstance(obj, dict) and "model" in obj:
+        key = "ema" if use_ema and "ema" in obj else "model"
+        print(f"  Loaded training checkpoint (step={obj.get('steps', '?')}), using key='{key}'")
+        return obj[key]
+    return obj
+
+
 def load_student_pipeline(
     student_id: str,
-    teacher_pipe: StableDiffusion3Pipeline,
+    teacher_pipe: SanaPipeline,
     device: torch.device,
     checkpoint_path: Path | None = None,
-) -> StableDiffusion3Pipeline:
-    pipe = StableDiffusion3Pipeline.from_pretrained(student_id, torch_dtype=torch.bfloat16)
+    use_ema: bool = False,
+) -> SanaPipeline:
+    # Keep dtype consistent with the teacher (fp16) so the shared text encoder
+    # and VAE run at one precision and no silent casts happen between stages.
+    pipe = SanaPipeline.from_pretrained(student_id, torch_dtype=torch.float16)
     if checkpoint_path is not None:
-        state_dict = torch.load(checkpoint_path, map_location="cpu")
+        state_dict = _extract_student_state_dict(checkpoint_path, use_ema)
         pipe.transformer.load_state_dict(state_dict)
     pipe = pipe.to(device)
 
-    # Match the training setup: only the student transformer differs.
+    # Match the training setup: only the student transformer differs.  Sana has
+    # a single Gemma text encoder and tokenizer (unlike SD3's three-encoder stack).
     pipe.vae = teacher_pipe.vae
     pipe.text_encoder = teacher_pipe.text_encoder
-    pipe.text_encoder_2 = teacher_pipe.text_encoder_2
-    pipe.text_encoder_3 = teacher_pipe.text_encoder_3
     pipe.tokenizer = teacher_pipe.tokenizer
-    pipe.tokenizer_2 = teacher_pipe.tokenizer_2
-    pipe.tokenizer_3 = teacher_pipe.tokenizer_3
     pipe.scheduler = teacher_pipe.scheduler
     pipe.transformer.eval()
     pipe.set_progress_bar_config(disable=True)
@@ -467,7 +562,7 @@ def load_student_pipeline(
 
 def evaluate_model(
     model_name: str,
-    pipe: StableDiffusion3Pipeline,
+    pipe: SanaPipeline,
     prompts: list[str],
     clip_model: CLIPModel,
     clip_processor: CLIPProcessor,
@@ -526,7 +621,7 @@ def evaluate_model(
 
 
 def evaluate_teacher_energy(
-    teacher_pipe: StableDiffusion3Pipeline,
+    teacher_pipe: SanaPipeline,
     projector_ckpt: Path,
     prompts: list[str],
     clip_model: CLIPModel,
@@ -535,6 +630,9 @@ def evaluate_teacher_energy(
     args: argparse.Namespace,
     device: torch.device,
 ) -> tuple[dict, list[dict]]:
+    # Lazy import: only needed for the energy-hypothesis path.
+    from projector import DiT2DINOProjector
+
     dinov2_processor = AutoImageProcessor.from_pretrained(args.dinov2_id)
     dinov2_model = AutoModel.from_pretrained(args.dinov2_id).to(device).eval()
 
@@ -570,6 +668,7 @@ def evaluate_teacher_energy(
             args.guidance_scale,
             device,
             args.seed + prompt_idx * 1000 + 1,
+            args.max_sequence_length,
         )
         energies = compute_energies(
             h_t,
@@ -664,35 +763,59 @@ def evaluate_teacher_energy(
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Evaluate SD3 teacher/base/distilled models")
-    parser.add_argument("--output_dir", default="logs/eval_sd3")
-    parser.add_argument("--teacher_id", default="stabilityai/stable-diffusion-3.5-large")
-    parser.add_argument("--student_id", default="stabilityai/stable-diffusion-3.5-medium")
-    parser.add_argument("--checkpoint_dir", default=None, help="Directory containing student/projector checkpoints")
-    parser.add_argument("--distilled_ckpt", default=None, help="Path to distilled student checkpoint")
-    parser.add_argument("--projector_ckpt", default=None, help="Path to projector checkpoint")
+    parser = argparse.ArgumentParser(description="Evaluate Sana teacher/base/distilled models")
+    parser.add_argument("--output_dir", default="logs/eval_sana")
+    parser.add_argument("--teacher_id",
+                        default="Efficient-Large-Model/Sana_1600M_1024px_diffusers")
+    parser.add_argument("--student_id",
+                        default="Efficient-Large-Model/Sana_600M_1024px_diffusers")
+    parser.add_argument("--checkpoint_dir", default=None,
+                        help="Directory containing distilled student and/or DiT->DINO projector checkpoints.")
+    parser.add_argument("--distilled_ckpt", default=None,
+                        help="Path to a specific distilled student checkpoint "
+                             "(overrides auto-resolution from --checkpoint_dir).")
+    parser.add_argument("--projector_ckpt", default=None,
+                        help="Path to DiT->DINOv2 projector (for energy hypothesis; optional).")
     parser.add_argument("--step", type=int, default=None, help="Checkpoint step to evaluate")
-    parser.add_argument("--coco_path", default=None, help="COCO root or captions JSON")
-    parser.add_argument("--prompt_file", default=None, help="Optional newline-delimited or JSON prompt file")
-    parser.add_argument("--num_prompts", type=int, default=100)
+    parser.add_argument("--skip_distilled", action="store_true",
+                        help="Always skip distilled-student evaluation (baselines only). "
+                             "Useful for getting reference CLIP scores before distillation starts.")
+    parser.add_argument("--geneval2_path",
+                        default="GenEval2/geneval2_data.jsonl",
+                        help="Path to GenEval2's geneval2_data.jsonl (or the repo dir "
+                             "containing it). Default prompt source for this eval.")
+    parser.add_argument("--coco_path", default=None,
+                        help="COCO root or captions JSON (used only if --geneval2_path "
+                             "does not resolve).")
+    parser.add_argument("--prompt_file", default=None,
+                        help="Explicit newline-delimited or JSON prompt file (highest priority).")
+    parser.add_argument("--num_prompts", type=int, default=0,
+                        help="Number of prompts to sample. 0 or negative means 'use all' "
+                             "(e.g. all 800 GenEval2 prompts).")
     parser.add_argument("--num_images_per_prompt", type=int, default=1)
     parser.add_argument("--teacher_candidates", type=int, default=8)
-    parser.add_argument("--height", type=int, default=512)
-    parser.add_argument("--width", type=int, default=512)
+    parser.add_argument("--height", type=int, default=1024)
+    parser.add_argument("--width", type=int, default=1024)
     parser.add_argument("--num_inference_steps", type=int, default=28)
-    parser.add_argument("--guidance_scale", type=float, default=7.0)
+    parser.add_argument("--guidance_scale", type=float, default=4.5,
+                        help="CFG scale. Sana recommends ~4.5 (vs SD3's ~7.0).")
+    parser.add_argument("--max_sequence_length", type=int, default=300,
+                        help="Gemma tokenizer max seq length (Sana default: 300).")
     parser.add_argument("--tau", type=float, default=0.1, help="Temperature used to convert energies into q values")
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--clip_id", default="openai/clip-vit-large-patch14")
     parser.add_argument("--clip_batch_size", type=int, default=8)
     parser.add_argument("--dinov2_id", default="facebook/dinov2-base")
+    parser.add_argument("--use_ema", action="store_true",
+                        help="Load EMA weights from the training checkpoint (if present).")
     parser.add_argument("--save_images", action="store_true")
     parser.add_argument("--max_image_prompts", type=int, default=20)
     parser.add_argument(
         "--include_compositional_prompts",
         action=argparse.BooleanOptionalAction,
-        default=True,
-        help="Append a fixed set of hard compositional prompts",
+        default=False,
+        help="Append a fixed set of 10 hand-crafted compositional prompts. "
+             "Off by default since GenEval2 already contains 800 compositional prompts.",
     )
     args = parser.parse_args()
 
@@ -703,7 +826,16 @@ def main():
     if image_dir is not None:
         image_dir.mkdir(parents=True, exist_ok=True)
 
-    distilled_ckpt = Path(args.distilled_ckpt) if args.distilled_ckpt else resolve_checkpoint(args.checkpoint_dir, "student", args.step)
+    # Resolve distilled checkpoint (explicit path > auto-resolve from checkpoint_dir).
+    # Skip entirely if --skip_distilled is set.
+    if args.skip_distilled:
+        distilled_ckpt = None
+    elif args.distilled_ckpt:
+        distilled_ckpt = Path(args.distilled_ckpt)
+    else:
+        distilled_ckpt = resolve_training_checkpoint(args.checkpoint_dir, args.step)
+
+    # Projector checkpoint is entirely independent; only used for the energy path.
     projector_ckpt = Path(args.projector_ckpt) if args.projector_ckpt else resolve_checkpoint(args.checkpoint_dir, "projector", args.step)
 
     prompts, prompt_source = build_eval_prompts(args)
@@ -716,8 +848,10 @@ def main():
     print(f"Using {len(prompts)} evaluation prompts from {prompt_source}")
     if distilled_ckpt is not None:
         print(f"Resolved distilled checkpoint: {distilled_ckpt}")
+    elif args.skip_distilled:
+        print("--skip_distilled set: evaluating baselines only (teacher + base student)")
     else:
-        print("No distilled checkpoint provided; skipping distilled student evaluation")
+        print("No distilled checkpoint provided; evaluating baselines only (teacher + base student)")
     if projector_ckpt is not None:
         print(f"Resolved projector checkpoint: {projector_ckpt}")
     else:
@@ -791,7 +925,10 @@ def main():
 
     if distilled_ckpt is not None:
         print("Loading distilled student pipeline...")
-        distilled_pipe = load_student_pipeline(args.student_id, teacher_pipe, device, checkpoint_path=distilled_ckpt)
+        distilled_pipe = load_student_pipeline(
+            args.student_id, teacher_pipe, device,
+            checkpoint_path=distilled_ckpt, use_ema=args.use_ema,
+        )
         distilled_summary, distilled_records = evaluate_model(
             "distilled_student",
             distilled_pipe,

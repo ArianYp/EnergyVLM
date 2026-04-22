@@ -1,0 +1,27 @@
+bsub -J eval-sana-baselines -G team361 -q training-parallel \
+  -n 8 -W 6:00 \
+  -R "span[hosts=1]" -R "select[mem>128000]" -R "rusage[mem=128000]" -M 128000 \
+  -gpu "num=4:mode=exclusive_process" \
+  -cwd /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM \
+  -o logs/lsf-eval-sana-baselines-%J.out -e logs/lsf-eval-sana-baselines-%J.err \
+  /bin/bash -c '
+    set -euo pipefail
+    export HF_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/huggingface
+    export TORCH_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/torch
+    export XDG_CACHE_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/xdg
+    export HUGGINGFACE_HUB_TOKEN=${HUGGINGFACE_HUB_TOKEN}
+    export TOKENIZERS_PARALLELISM=false
+    mkdir -p "$HF_HOME" "$TORCH_HOME" "$XDG_CACHE_HOME" logs
+    python -u evaluate_sd3.py \
+      --skip_distilled \
+      --coco_path /lustre/scratch126/cellgen/lotfollahi/ha11/COCO \
+      --num_prompts 100 \
+      --num_images_per_prompt 1 \
+      --height 1024 --width 1024 \
+      --num_inference_steps 28 \
+      --guidance_scale 4.5 \
+      --output_dir logs/eval_sana_baselines \
+      --save_images \
+      --max_image_prompts 20
+    if command -v my-job-stats >/dev/null 2>&1; then my-job-stats -a -n -s; fi
+  '
