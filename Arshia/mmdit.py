@@ -13,11 +13,7 @@ import torch, math
 from torch import nn
 from transformers import CLIPTokenizer, T5TokenizerFast
 
-# ORCA T2I module
-import sys
-import os
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from orca_t2i import ORCA_T2I
+# ORCA T2I module (lazy-loaded when use_orca=True)
 
 
 #################################################################################################
@@ -523,6 +519,8 @@ class MMDiT(nn.Module):
         patch_size: int = 2,
         in_channels: int = 4,
         depth: int = 24,
+        hidden_size: Optional[int] = None,
+        num_heads: Optional[int] = None,
         mlp_ratio: float = 4.0,
         learn_sigma: bool = False,
         adm_in_channels: Optional[int] = None,
@@ -574,10 +572,15 @@ class MMDiT(nn.Module):
         self.pos_embed_offset = pos_embed_offset
         self.pos_embed_max_size = pos_embed_max_size = 16
 
-        # apply magic --> this defines a head_size of 64
-        # hidden_size = 64 * depth
-        hidden_size = 32 * depth
-        num_heads = depth
+        # If not explicitly given, fall back to the legacy "hidden_size = 32*depth,
+        # num_heads = depth" formula (keeps prior DiT-L behavior at depth=24).
+        if hidden_size is None:
+            hidden_size = 32 * depth
+        if num_heads is None:
+            num_heads = depth
+        assert hidden_size % num_heads == 0, (
+            f"hidden_size ({hidden_size}) must be divisible by num_heads ({num_heads})"
+        )
 
         self.num_heads = num_heads
 
@@ -628,6 +631,9 @@ class MMDiT(nn.Module):
         # ORCA T2I
         self.use_orca = use_orca
         if self.use_orca:
+            import sys, os as _os
+            sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
+            from orca_t2i import ORCA_T2I
             self.orca_module = ORCA_T2I(
                 d_model=hidden_size,    # 768 for DiT-L/2 (depth=24 → 32*24=768)
                 d_clip_text=768,

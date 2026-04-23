@@ -628,37 +628,25 @@ def main():
             z_DINO = dinov2_out.last_hidden_state[:, 0, :]  # [B*K, dino_dim]
             z_DINO = F.normalize(z_DINO, p=2, dim=-1)
 
-        # ── Projector: map teacher hidden states → DINOv2 space ───────────────
         z_DiT = F.normalize(projector(h_T.float()), p=2, dim=-1)  # [B*K, dino_dim]
         cos_sim = (z_DiT * z_DINO).sum(dim=-1)  # [B*K]
         E = 1.0 - cos_sim                        # [B*K], energy per sample
 
-        # ── Issue 5: tau warmup — start uniform, sharpen as projector learns ────
-        # While the projector is randomly initialised, energies are meaningless.
-        # Starting at tau_max≈uniform and decaying to tau prevents random q from
-        # poisoning the distillation weights during the first warmup_steps steps.
+        # ── Tau warmup — start uniform, sharpen as projector learns ─────────────
         tau_frac = min(1.0, global_step / max(1, args.warmup_steps))
         current_tau = args.tau_max + (args.tau - args.tau_max) * tau_frac
 
-        # ── Energy-based Gibbs weights (per prompt group of K) ─────────────────
-        # Reshape to [B, K] so softmax is computed within each prompt group.
         E_BK = E.view(B, K)                                   # [B, K]
         q_BK = F.softmax(-E_BK / current_tau, dim=1)         # [B, K], sums to 1 over K
 
-        # ── Issue 2: per-sample independent timesteps ─────────────────────────
-        # REPA samples t per sample; a single t per batch means the student only
-        # trains at one noise level per step (28× higher variance, uneven coverage).
         timesteps = scheduler.timesteps
         t_indices = torch.randint(0, len(timesteps), (BK,), device=device)  # [B*K]
         t_batch   = timesteps[t_indices]                                      # [B*K] timestep values
 
-        # Forward diffusion: z_t = σ_t * ε + (1 - σ_t) * x_0  (linear flow matching)
-        # scale_noise uses an internal step_index scalar and does not support per-sample
-        # timesteps, so we compute the noisy latents directly from sigmas.
         noise     = torch.randn_like(final_latents, dtype=torch.float32)
-        sigmas_BK = scheduler.sigmas[t_indices].to(dtype=torch.float32)      # [B*K]
-        z_t       = sigmas_BK.view(BK, 1, 1, 1) * noise \
-                  + (1.0 - sigmas_BK.view(BK, 1, 1, 1)) * final_latents
+        sigmas_flat = scheduler.sigmas[t_indices].to(dtype=torch.float32)      # [B*K]
+        z_t       = sigmas_flat.view(BK, 1, 1, 1) * noise \
+                  + (1.0 - sigmas_flat.view(BK, 1, 1, 1)) * final_latents
 
         # ── Teacher noise prediction (frozen, bfloat16) ───────────────────────
         with torch.no_grad():
@@ -686,42 +674,17 @@ def main():
         diff      = eps_stu - eps_tea                       # [B*K, C, H, W], both float32
         mse_per   = (diff ** 2).mean(dim=(1, 2, 3))        # [B*K]
 
-        # Normalise by teacher output magnitude so mse_per is a dimensionless
-        # relative error (≈1 at init when student ≈ random, →0 at convergence).
-        # Without this, L_distill and L_KL are in raw transformer output units
-        # (typically 10–100×), while L_align ∈ [0, 2].  The normalisation puts
-        # all three losses on the same O(1) scale, so lambda_align and beta_kl
-        # become true relative-importance weights rather than scale-dependent knobs.
-        # eps_tea was computed under torch.no_grad(), so mse_ref carries no grad.
         mse_ref   = eps_tea.pow(2).mean(dim=(1, 2, 3)).detach() + 1e-6  # [B*K]
         mse_per   = mse_per / mse_ref                      # relative MSE, O(1)
 
         mse_per_BK = mse_per.view(B, K)                    # [B, K]
 
-        # Stop-gradient on q: projector's only training signal is L_KL below.
-        # Without detach, dL_distill/d(projector) = mse_i * dq_i/d(projector),
-        # pushing q to up-weight samples where the student already performs well —
-        # conflating "image quality" with "student difficulty".
         L_distill = (q_BK.detach() * mse_per_BK).sum(dim=1).mean()
 
-        # L_KL: DINO-style KL divergence between projected teacher hidden states
-        # and DINOv2 CLS token.  Replaces both the old cosine L_align and the
-        # SNR-weighted MSE L_KL.
-        #
-        # Both z_DiT and z_DINO are L2-normalised, so each is a unit vector in
-        # R^{dino_dim}.  Dividing by temperature T before softmax sharpens the
-        # distribution: low T concentrates probability mass on the largest
-        # components (the "dominant semantic directions"); the KL then penalises
-        # the projector heavily for missing those directions, providing richer
-        # gradient signal than cosine loss which weights all dimensions equally.
-        #
-        # Gradient flows through z_DiT → projector only (h_T is teacher, no grad;
-        # z_DINO is detached).  Student receives no gradient from L_KL.
         log_p_stu = F.log_softmax(z_DiT / args.kl_temp, dim=-1)          # [B*K, dino_dim]
         p_tea     = F.softmax(z_DINO / args.kl_temp, dim=-1).detach()    # [B*K, dino_dim]
         L_KL      = F.kl_div(log_p_stu, p_tea, reduction="batchmean")    # KL(p_tea ‖ p_stu)
 
-        # L_entropy: optional regularization on q (negative entropy → penalizes spread)
         L_entropy = (q_BK * (q_BK + 1e-8).log()).sum(dim=1).mean()
 
         loss = (
@@ -754,6 +717,11 @@ def main():
         if torch.is_tensor(grad_norm):
             grad_norm = grad_norm.item()
 
+        # Capture post-clip norms before zero_grad wipes p.grad
+        student_grad_norm_post = _gradient_l2_norm(student_params)
+        projector_grad_norm_post = _gradient_l2_norm(projector_params)
+        grad_norm_post = (student_grad_norm_post ** 2 + projector_grad_norm_post ** 2) ** 0.5
+
         optimizer.step()
         lr_scheduler.step()
         optimizer.zero_grad()
@@ -763,9 +731,6 @@ def main():
         pbar.update(1)
 
         # ── Metrics ───────────────────────────────────────────────────────────
-        student_grad_norm_post = _gradient_l2_norm(student_params)
-        projector_grad_norm_post = _gradient_l2_norm(projector_params)
-        grad_norm_post = (student_grad_norm_post ** 2 + projector_grad_norm_post ** 2) ** 0.5
         student_param_norm = _parameter_l2_norm(student_params)
         projector_param_norm = _parameter_l2_norm(projector_params)
         grad_clip_ratio = grad_norm_post / grad_norm if grad_norm > 0 else 1.0
@@ -803,7 +768,7 @@ def main():
             "train/h_T_norm_mean": h_t_norm_mean.item(),
             "train/tau": current_tau,
             "train/kl_temp": args.kl_temp,
-            "train/sigma_t_mean": sigmas_BK.mean().item(),
+            "train/sigma_t_mean": sigmas_flat.mean().item(),
             "train/timestep_value_mean": t_batch.float().mean().item(),
             "train/grad_norm": grad_norm,
             "train/grad_norm_post_clip": grad_norm_post,

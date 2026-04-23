@@ -9,7 +9,7 @@ bsub -J eval-sana-baselines -G team361 -q training-parallel \
     export HF_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/huggingface
     export TORCH_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/torch
     export XDG_CACHE_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/xdg
-    export HUGGINGFACE_HUB_TOKEN=${HUGGINGFACE_HUB_TOKEN}
+    source ~/.secrets/hf_token
     export TOKENIZERS_PARALLELISM=false
     mkdir -p "$HF_HOME" "$TORCH_HOME" "$XDG_CACHE_HOME" logs
     python -u evaluate_sd3.py \

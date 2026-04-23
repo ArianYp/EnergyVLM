@@ -18,12 +18,10 @@ from accelerate import Accelerator, DistributedDataParallelKwargs
 from accelerate.logging import get_logger
 from accelerate.utils import ProjectConfiguration, set_seed
 
-from models.mmdit import MMDiT
+from mmdit import MMDiT
 from loss import SILoss
-from utils import load_encoders
 
 from dataset import MSCOCO256Features
-from dataset_orca import MSCOCO256FeaturesORCA, collate_fn_orca
 from diffusers.models import AutoencoderKL
 # import wandb_utils
 import wandb
@@ -163,6 +161,7 @@ def main(args):
     latent_size = args.resolution // 8
 
     if args.enc_type != 'None':
+        from utils import load_encoders
         encoders, encoder_types, architectures = load_encoders(args.enc_type, device)
     else:
         encoders, encoder_types, architectures = [None], [None], [None]
@@ -170,6 +169,9 @@ def main(args):
     #block_kwargs = {"fused_attn": args.fused_attn, "qk_norm": args.qk_norm}
     model = MMDiT(
         input_size=latent_size,
+        depth=args.depth,
+        hidden_size=args.hidden_size,
+        num_heads=args.num_heads,
         z_dims = z_dims,
         encoder_depth=args.encoder_depth,
         use_orca=args.use_orca,
@@ -251,6 +253,7 @@ def main(args):
     
     # Setup data:
     if args.use_orca and args.orca_embeddings_dir:
+        from dataset_orca import MSCOCO256FeaturesORCA, collate_fn_orca
         if accelerator.is_main_process:
             logger.info(f"Using ORCA dataset with embeddings from {args.orca_embeddings_dir}")
         dataset_factory = MSCOCO256FeaturesORCA(
@@ -592,6 +595,12 @@ def parse_args(input_args=None):
                         help="Path to checkpoint to resume training from")
 
     # model
+    parser.add_argument("--depth", type=int, default=24,
+                        help="Number of MMDiT joint blocks. DiT-L=24, DiT-XL=28.")
+    parser.add_argument("--hidden-size", type=int, default=None,
+                        help="Transformer hidden size. If unset, falls back to 32*depth (legacy). DiT-XL=1152.")
+    parser.add_argument("--num-heads", type=int, default=None,
+                        help="Number of attention heads. If unset, falls back to depth (legacy). DiT-XL=16.")
     parser.add_argument("--encoder-depth", type=int, default=8)
     parser.add_argument("--fused-attn", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--qk-norm",  action=argparse.BooleanOptionalAction, default=False)
