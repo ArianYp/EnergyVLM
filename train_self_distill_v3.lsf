@@ -1,0 +1,81 @@
+#!/usr/bin/env bash
+#BSUB -J self-distill-v3
+#BSUB -G s10396
+#BSUB -q training-parallel
+#BSUB -n 16
+#BSUB -W 168:00
+#BSUB -R "span[hosts=1]"
+#BSUB -R "select[mem>64000]"
+#BSUB -R "rusage[mem=64000]"
+#BSUB -M 64000
+#BSUB -gpu "num=4:mode=exclusive_process"
+#BSUB -cwd /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM
+#BSUB -o /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-self-distill-v3-%J.out
+#BSUB -e /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-self-distill-v3-%J.err
+
+# v3 — same hyperparams as v2 but:
+#   * --lambda_align 0: no auxiliary projector alignment loss. Projector
+#     gets gradient ONLY through the W-path (s = cos(projector(x̂_0), f̄)).
+#     Tests whether the chicken-and-egg (W concentrates only after s
+#     varies) actually breaks training, vs. v2 where L_align gives the
+#     projector a direct gradient signal.
+#   * --probe_every 0: CompBench probe disabled (was 12 prompts × K=10
+#     teacher forwards every 500 steps; corresponding code path in
+#     train_self_distill.py is currently commented out anyway).
+#   * Image sampling kept on (--log_image_samples, --save_train_images_every
+#     500) so wandb shows teacher-EMA samples + per-step trajectory dumps.
+
+set -euo pipefail
+
+export HF_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/huggingface
+export TORCH_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/torch
+export XDG_CACHE_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/xdg
+
+# Disable NVLS multicast (cluster-side cgroup blocks /dev/nvidia-caps/*).
+export NCCL_NVLS_ENABLE=0
+
+source ~/.secrets/hf_token
+
+mkdir -p "$HF_HOME" "$TORCH_HOME" "$XDG_CACHE_HOME" logs
+
+echo "[`date`] self-distill v3: 150000 steps, lambda_align=0, no probes"
+echo "Host: $(hostname) | LSF: ${LSB_JOBID:-unknown}"
+nvidia-smi --query-gpu=index,name,memory.total --format=csv
+
+RUN_NAME="self_distill_v3_$(date +%Y%m%d_%H%M%S)_${LSB_JOBID:-local}"
+
+torchrun \
+  --standalone \
+  --nproc-per-node=4 \
+  train_self_distill.py \
+  --output_dir "checkpoints/${RUN_NAME}" \
+  --coco_split train2017 \
+  --num_steps 150000 \
+  --num_warmup_steps 500 \
+  --lr 1e-4 \
+  --projector_lr 1e-3 \
+  --weight_decay 0.0 \
+  --grad_clip 5.0 \
+  --projector_grad_clip 5.0 \
+  --N_traj 4 \
+  --K_steps 8 \
+  --scoring_window 0.4,0.9 \
+  --delta_min 1 --delta_max 3 \
+  --tau_N 0.5 --tau_K 0.5 \
+  --ema_decay 0.999 \
+  --distance mse \
+  --guidance_scale 7.0 \
+  --lambda_align 0.0 \
+  --gradient_checkpointing \
+  --save_every 500 \
+  --probe_every 0 \
+  --log_every 10 \
+  --save_train_images_every 500 \
+  --log_image_samples \
+  --sample_inference_steps 28 \
+  --wandb_project dino-self-distill \
+  --wandb_run_name "${RUN_NAME}"
+
+if command -v my-job-stats >/dev/null 2>&1; then
+  my-job-stats -a -n -s
+fi

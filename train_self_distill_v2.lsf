@@ -1,0 +1,100 @@
+#!/usr/bin/env bash
+#BSUB -J self-distill-v2
+#BSUB -G s10396
+#BSUB -q training-parallel
+#BSUB -n 16
+#BSUB -W 168:00
+#BSUB -R "span[hosts=1]"
+#BSUB -R "select[mem>64000]"
+#BSUB -R "rusage[mem=64000]"
+#BSUB -M 64000
+#BSUB -gpu "num=4:mode=exclusive_process"
+#BSUB -cwd /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM
+#BSUB -o /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-self-distill-v2-%J.out
+#BSUB -e /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-self-distill-v2-%J.err
+
+# Production v2 — diagnostic-suite run with all the projector-training fixes:
+#
+#   * --lambda_align 1.0 (default): direct projector alignment loss
+#       L_align = 1 − cos(projector(VAE_encode(real_image)), f̄)
+#     gives the projector a strong direct gradient signal, breaking the
+#     chicken-and-egg where W concentrates only after s starts varying.
+#
+#   * --projector_lr 5e-4 (vs student's 5e-6): projector starts from random
+#     init and needs ~100× more LR than the pretrained student.
+#
+#   * --projector_grad_clip 5.0, --grad_clip 1.0: student and projector
+#     clipped SEPARATELY so projector grad isn't squeezed.
+#
+#   * --save_train_images_every 500: every 500 steps, rank 0 dumps the
+#     N teacher trajectories for that step's prompt + metadata.json. Now
+#     also includes per-trajectory Tweedie x̂₀ images (saves both
+#     traj_i_eulerK.png and traj_i_tweedie.png).
+#
+#   * --K_steps 10 (was 5) + scoring_window 0.7,1.0:
+#       score_idxs = [7, 8, 9], K_w = 3
+#       Cleanest scoring index 9 → σ ≈ 0.10
+#       Tweedie x̂₀ at σ=0.10 is much sharper than at σ=0.20 (the K=5 setting)
+#       because the model's single-shot ε prediction is more accurate at
+#       lower σ, and there's no Euler integration error.
+#
+# Compute impact of K=10:
+#   * Pass 1a (teacher rollout): 10 forwards/step instead of 5 → 2× rollout time
+#   * Pass 1b/2: with N*K_w = 4*3 = 12 student forwards (was 4*1 = 4) → 3× more
+#   * Net step time: ~2-3× the K=5 v2. If at 168h limit, drop --num_steps
+#     proportionally (current 150k → ~60-80k for safety).
+
+set -euo pipefail
+
+export HF_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/huggingface
+export TORCH_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/torch
+export XDG_CACHE_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/xdg
+
+# Disable NVLS multicast (cluster-side cgroup blocks /dev/nvidia-caps/*).
+export NCCL_NVLS_ENABLE=0
+
+source ~/.secrets/hf_token
+
+mkdir -p "$HF_HOME" "$TORCH_HOME" "$XDG_CACHE_HOME" logs
+
+echo "[`date`] self-distill PRODUCTION v2: 150000 steps with align loss + per-component LR/clip"
+echo "Host: $(hostname) | LSF: ${LSB_JOBID:-unknown}"
+nvidia-smi --query-gpu=index,name,memory.total --format=csv
+
+RUN_NAME="self_distill_v2_$(date +%Y%m%d_%H%M%S)_${LSB_JOBID:-local}"
+
+torchrun \
+  --standalone \
+  --nproc-per-node=4 \
+  train_self_distill.py \
+  --output_dir "checkpoints/${RUN_NAME}" \
+  --coco_split train2017 \
+  --num_steps 150000 \
+  --num_warmup_steps 500 \
+  --lr 1e-4 \
+  --projector_lr 1e-3 \
+  --weight_decay 0.0 \
+  --grad_clip 5.0 \
+  --projector_grad_clip 5.0 \
+  --N_traj 3 \
+  --K_steps 10 \
+  --scoring_window 0.4,0.8 \
+  --delta_min 1 --delta_max 3 \
+  --tau_N 0.5 --tau_K 0.5 \
+  --ema_decay 0.999 \
+  --distance mse \
+  --guidance_scale 7.0 \
+  --lambda_align 10.0 \
+  --gradient_checkpointing \
+  --save_every 500 \
+  --probe_every 500 \
+  --log_every 10 \
+  --save_train_images_every 500 \
+  --log_image_samples \
+  --sample_inference_steps 28 \
+  --wandb_project dino-self-distill \
+  --wandb_run_name "${RUN_NAME}"
+
+if command -v my-job-stats >/dev/null 2>&1; then
+  my-job-stats -a -n -s
+fi

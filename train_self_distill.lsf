@@ -1,0 +1,91 @@
+#!/usr/bin/env bash
+#BSUB -J self-distill
+#BSUB -G team361
+#BSUB -q gpu-lotfollahi
+#BSUB -n 16
+#BSUB -W 168:00
+#BSUB -R "span[hosts=1]"
+#BSUB -R "select[mem>64000]"
+#BSUB -R "rusage[mem=64000]"
+#BSUB -M 64000
+#BSUB -gpu "num=4:mode=exclusive_process"
+#BSUB -cwd /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM
+#BSUB -o /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-self-distill-adamw-%J.out
+#BSUB -e /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-self-distill-adamw-%J.err
+
+# Production self-distillation run on COCO train2017 (~118k images, ~590k captions).
+# 4-GPU DDP via torchrun: each rank samples a different prompt per step,
+# DDP all-reduces gradients across ranks → effective batch = 4 prompts/step.
+#
+# Pass 2 has been refactored to a single backward (one all-reduce per step
+# instead of N*K_w=6 per-pair backwards). DINO precompute runs only on rank 0
+# and is broadcast via shared disk. Logging + checkpointing gated to rank 0.
+#
+# Key arg deltas vs smoke:
+#   * train2017 instead of val2017 (more diversity → meaningful DINO weighting)
+#   * 150000 steps (~1× COCO train2017 pass: ~591k (image,caption) pairs / 4 DDP ranks
+#     ≈148k steps/epoch; see --num_steps) instead of smoke 50
+#   * K_steps=6 (mid-noise scoring band closer to spec)
+#   * Δ ∈ [1, 2] for timestep-gap variance
+#   * grad_clip=5 (smoke had grad_norm≈370; clip=1 was throwing away ~99.7% of signal)
+#   * W&B on (drop --no_wandb)
+#   * save_every=500, log_every=10
+#
+# Time budget on 4×H200 (rough):
+#   * Startup: ~5-15 min for DINO precompute + DDP init
+#   * Training: ~3.5 s/step * 150000 ≈ 6–7 d wall clock — raise -W if your queue allows
+#   * Checkpoints every --save_every 500 (training does not auto-resume; use ckpts manually if needed)
+
+set -euo pipefail
+
+export HF_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/huggingface
+export TORCH_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/torch
+export XDG_CACHE_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/xdg
+
+# Disable NVLS (NVLink-Sharp / multicast). Some farm nodes advertise NVLS
+# hardware but the cgroup blocks /dev/nvidia-caps/* — NCCL then aborts on
+# the first collective with "transport/nvls.cc:157 Cuda failure 1
+# 'invalid argument'". Falls back to ring/tree allreduce (negligible perf hit).
+export NCCL_NVLS_ENABLE=0
+
+source ~/.secrets/hf_token
+
+mkdir -p "$HF_HOME" "$TORCH_HOME" "$XDG_CACHE_HOME" logs
+
+echo "[`date`] self-distill PRODUCTION: 150000 steps on COCO train2017 (4×H200 DDP)"
+echo "Host: $(hostname) | LSF: ${LSB_JOBID:-unknown}"
+nvidia-smi --query-gpu=index,name,memory.total --format=csv
+
+RUN_NAME="self_distill_$(date +%Y%m%d_%H%M%S)_${LSB_JOBID:-local}"
+
+torchrun \
+  --standalone \
+  --nproc-per-node=4 \
+  train_self_distill.py \
+  --output_dir "checkpoints/${RUN_NAME}" \
+  --coco_split train2017 \
+  --num_steps 150000 \
+  --num_warmup_steps 500 \
+  --lr 5e-6 \
+  --weight_decay 0.0 \
+  --grad_clip 5.0 \
+  --N_traj 3 \
+  --K_steps 6 \
+  --scoring_window 0.3,0.7 \
+  --delta_min 1 --delta_max 2 \
+  --tau_N 0.5 --tau_K 0.5 \
+  --ema_decay 0.999 \
+  --distance mse \
+  --gradient_checkpointing \
+  --save_every 500 \
+  --log_every 10 \
+  --log_image_samples \
+  --sample_inference_steps 28 \
+  --wandb_project dino-self-distill \
+  --wandb_run_name "${RUN_NAME}"
+  # Add `--use_8bit_adam \` above to switch to bnb.AdamW8bit if optimizer
+  # state memory becomes tight (saves ~15 GB on SD3.5-M; not needed on H200).
+
+if command -v my-job-stats >/dev/null 2>&1; then
+  my-job-stats -a -n -s
+fi

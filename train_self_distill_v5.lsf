@@ -1,0 +1,97 @@
+#!/usr/bin/env bash
+#BSUB -J self-distill-v5
+#BSUB -G s10396
+#BSUB -q training-parallel
+#BSUB -n 16
+#BSUB -W 168:00
+#BSUB -R "span[hosts=1]"
+#BSUB -R "select[mem>64000]"
+#BSUB -R "rusage[mem=64000]"
+#BSUB -M 64000
+#BSUB -gpu "num=4:mode=exclusive_process"
+#BSUB -cwd /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM
+#BSUB -o /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-self-distill-v5-%J.out
+#BSUB -e /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-self-distill-v5-%J.err
+
+# v5 — literature-alignment fixes over v4 (see train_self_distill.py docstring):
+#   1. W detached (RWR/soft-RAFT): no gradient through the softmax weights.
+#      Alignment reaches the student ONLY via --lambda_reward 1.0
+#      (L_reward = mean(1 − s), ReFL-style through the projector proxy).
+#   2. s scored against the CAPTION's CLIP text embedding (CLIPScore proxy),
+#      not the paired image's embedding. --lambda_align 1.0 re-enabled as the
+#      projector anchor: regress projector(VAE(real_img)) → f̄_img so the
+#      reward can't be hacked by projector collapse.
+#   3. fp32 master weights for student + teacher, fp32 EMA, bf16 autocast
+#      compute (pure-bf16 EMA increments round to zero at decay 0.999).
+#      Needs ~50 GB extra vs bf16 — fine on the H200s (141 GB).
+#   4. lr 1e-5 (was 1e-4 — far above the distillation literature for a
+#      pretrained 2.5B model); projector_lr 1e-4 (REPA default);
+#      grad_clip 1.0.
+#   5. Consistency loss in x₀ space with pseudo-Huber (iCT), replacing
+#      hidden-state MSE: teacher target x̃₀ uses the CFG-MIXED velocity
+#      (guidance distillation à la LCM); norm_out/proj_out now trainable.
+#   6. --score_norm zscore: s is standardized within each softmax axis
+#      before the Boltzmann weighting. Without it, raw CLIP-cosine spreads
+#      (~0.01-0.05) under tau=0.5 left W ~uniform (W_entropy pinned at
+#      log(N*K_w) in the first v5 run). With unit-variance inputs,
+#      tau_N=tau_K=1.0 gives moderate selectivity (max traj weight ~0.5
+#      at N=4); lower tau to sharpen.
+
+set -euo pipefail
+
+export HF_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/huggingface
+export TORCH_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/torch
+export XDG_CACHE_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/xdg
+
+# Disable NVLS multicast (cluster-side cgroup blocks /dev/nvidia-caps/*).
+export NCCL_NVLS_ENABLE=0
+
+source ~/.secrets/hf_token
+
+mkdir -p "$HF_HOME" "$TORCH_HOME" "$XDG_CACHE_HOME" logs
+
+echo "[`date`] self-distill v5: 150000 steps, CLIP-text scoring, detached W + reward, fp32 masters, pseudo-Huber x0 loss"
+echo "Host: $(hostname) | LSF: ${LSB_JOBID:-unknown}"
+nvidia-smi --query-gpu=index,name,memory.total --format=csv
+
+RUN_NAME="self_distill_v5_$(date +%Y%m%d_%H%M%S)_${LSB_JOBID:-local}"
+
+torchrun \
+  --standalone \
+  --nproc-per-node=4 \
+  train_self_distill.py \
+  --output_dir "checkpoints/${RUN_NAME}" \
+  --coco_split train2017 \
+  --feature_encoder clip \
+  --clip_id openai/clip-vit-large-patch14 \
+  --num_steps 150000 \
+  --num_warmup_steps 500 \
+  --lr 1e-5 \
+  --projector_lr 1e-4 \
+  --weight_decay 0.0 \
+  --grad_clip 1.0 \
+  --projector_grad_clip 5.0 \
+  --N_traj 4 \
+  --K_steps 8 \
+  --scoring_window 0.4,0.9 \
+  --delta_min 1 --delta_max 3 \
+  --tau_N 1.0 --tau_K 1.0 \
+  --score_norm zscore \
+  --ema_decay 0.999 \
+  --distance pseudo_huber \
+  --guidance_scale 7.0 \
+  --lambda_align 1.0 \
+  --lambda_reward 1.0 \
+  --gradient_checkpointing \
+  --save_every 500 \
+  --probe_every 0 \
+  --log_every 10 \
+  --save_train_images_every 500 \
+  --log_image_samples \
+  --sample_inference_steps 28 \
+  --wandb_project dino-self-distill \
+  --wandb_run_name "${RUN_NAME}"
+
+if command -v my-job-stats >/dev/null 2>&1; then
+  my-job-stats -a -n -s
+fi
