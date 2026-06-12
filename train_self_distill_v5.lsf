@@ -10,8 +10,8 @@
 #BSUB -M 64000
 #BSUB -gpu "num=4:mode=exclusive_process"
 #BSUB -cwd /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM
-#BSUB -o /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-self-distill-v5-%J.out
-#BSUB -e /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-self-distill-v5-%J.err
+#BSUB -o /lustre/scratch126/cellgen/lotfollahi/ap55/EnergyVLM/logs/lsf-self-distill-v5-%J.out
+#BSUB -e /lustre/scratch126/cellgen/lotfollahi/ap55/EnergyVLM/logs/lsf-self-distill-v5-%J.err
 
 # v5 — literature-alignment fixes over v4 (see train_self_distill.py docstring):
 #   1. W detached (RWR/soft-RAFT): no gradient through the softmax weights.

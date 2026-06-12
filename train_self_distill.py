@@ -1001,11 +1001,17 @@ def main():
     # fast-path without recomputing.
     if is_main:
         print(f"Loading COCO ({args.coco_split}) from {args.coco_path}...")
-    # Load image tensors per-sample only if we'll use them for L_align
+    # Load image tensors per-sample if we'll use them for L_align OR for the
+    # real-image denoising reward L_reward (which now replaces the CLIP
+    # text-image alignment reward).
     align_enabled = (
         not args.latent_matching_baseline and args.lambda_align > 0
     )
-    dataset_image_size = args.height if align_enabled else None
+    reward_uses_real_image = (
+        not args.latent_matching_baseline and args.lambda_reward > 0
+    )
+    need_real_image = align_enabled or reward_uses_real_image
+    dataset_image_size = args.height if need_real_image else None
     dataset = COCOPairDataset(
         args.coco_path, split=args.coco_split,
         max_examples=args.max_dataset_examples,
