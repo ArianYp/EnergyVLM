@@ -151,9 +151,9 @@
       <p><strong>Boundary:</strong> one seed and no confidence interval on the CMMD difference.</p>
     </div>
     <div class="card purple">
-      <h3>Pairwise student training <span class="status pass">works</span></h3>
+      <h3>Pairwise student training <span class="status pass">signal</span></h3>
       <p>Correct teacher preferences beat randomized labels on independent CompBench and GenEval2.</p>
-      <p><strong>Effect:</strong> \(+0.04587\) and \(+0.04958\), with both paired \(95\%\) intervals above zero.</p>
+      <p><strong>Boundary:</strong> the objective is a PSO/Diffusion-DPO-family baseline, not the method novelty.</p>
     </div>
     <div class="card red">
       <h3>MMDiT ranker <span class="status null">text read null</span></h3>
@@ -161,7 +161,7 @@
       <p><strong>Boundary:</strong> useful image-quality signal, not yet prompt-specific compatibility.</p>
     </div>
   </div>
-  <div class="claim purple"><strong>Most promising path:</strong> direct pairwise preference training is now the generator path. Keep REPA as the fidelity branch, and use the matched correct-versus-counterfactual label intervention to test whether the gain truly comes from prompt composition.</div>
+  <div class="claim purple"><strong>Decision:</strong> keep direct preference as the generator path and REPA as the fidelity branch, but pause scaling. The completed counterfactual run changed pair membership as well as orientation; the next decisive experiment freezes each image pair and changes only its preference sign.</div>
 </section>
 
 <section>
@@ -367,6 +367,33 @@
 </section>
 
 <section>
+  <h2>Three selection numbers — three different interventions</h2>
+  <div class="diagram">
+    <div class="node blue">frozen teacher<br>training cache</div>
+    <div class="arrow">\(\longrightarrow\)</div>
+    <div class="node blue">top-of-\(4\) minus mean<br>VQAScore</div>
+    <div class="arrow">\(\longrightarrow\)</div>
+    <div class="node blue"><strong>\(+0.1220\)</strong><br>\([+0.1191,+0.1250]\)</div>
+  </div>
+  <div class="diagram">
+    <div class="node green">frozen teacher<br>held-out candidates</div>
+    <div class="arrow">\(\longrightarrow\)</div>
+    <div class="node green">best-of-\(4\) minus random<br>official CompBench</div>
+    <div class="arrow">\(\longrightarrow\)</div>
+    <div class="node green"><strong>\(+0.0717\)</strong><br>\([+0.0573,+0.0865]\)</div>
+  </div>
+  <div class="diagram">
+    <div class="node purple">frozen \(M1\)<br>four initial-noise seeds</div>
+    <div class="arrow">\(\longrightarrow\)</div>
+    <div class="node purple">best-of-\(4\) minus random<br>official CompBench</div>
+    <div class="arrow">\(\longrightarrow\)</div>
+    <div class="node purple"><strong>\(+0.0485\)</strong><br>\([+0.0386,+0.0585]\)</div>
+  </div>
+  <div class="claim bad"><strong>Correction:</strong> the teacher oracle is \(+0.0717\), not \(+0.0485\). The latter is a valid but distinct noise-selection oracle. Amortization fractions must use the intervention-matched denominator and jointly account for uncertainty.</div>
+  <p class="sources">Teacher oracle: <span class="tag">exp0/primary_headroom/verdict.md</span> · noise oracle: <span class="tag">reports/phaseH_gate_report.md</span>.</p>
+</section>
+
+<section>
   <h2>Decisive prior test — oracle selection did not transfer through \(M1\)</h2>
   <div class="diagram">
     <div class="node blue">same prompt<br>\(4\) teacher trajectories</div>
@@ -382,8 +409,8 @@
     <div class="metric card red"><div class="value">\(+0.0004\)</div><div class="label">independent CompBench</div><div class="ci">\([-0.0090,+0.0097]\)</div></div>
     <div class="metric card red"><div class="value">\(+0.0065\)</div><div class="label">GenEval2</div><div class="ci">\([-0.0109,+0.0239]\)</div></div>
   </div>
-  <div class="claim bad"><strong>Phase C1 conclusion:</strong> even a perfect endpoint selector moved the student mainly on its own metric and transferred almost nothing (\(T\approx0.03\)). Selecting a different initial-noise trajectory changes which input–target pair is seen, but not the teacher’s conditional map under fresh inference noise.</div>
-  <div class="claim purple"><strong>Implication:</strong> building a better ranker remains useful for reranking and for defining reward, but the generator path must modify the target marginal or add a reward gradient; input-side trajectory selection alone is already falsified.</div>
+  <div class="claim bad"><strong>Phase C1 conclusion:</strong> under this audited selected-trajectory consistency recipe, the large candidate intervention moved the student mainly on its own metric and produced no measurable independent transfer (\(T\approx0.03\)).</div>
+  <div class="claim purple"><strong>Boundary:</strong> this is an objective-specific quantitative limitation, not population-optimum invariance or a universal impossibility theorem. The point-denominator ratio \(0.0097/0.0717\approx13.5\%\) is not yet a formal \(95\%\) bound.</div>
 </section>
 
 <section>
@@ -419,7 +446,41 @@
     <div class="card purple"><h3>Preference</h3><p>VQAScore orients the same pair: high-scoring teacher endpoint preferred to low-scoring endpoint.</p></div>
     <div class="card green"><h3>Preference \(+\) REPA</h3><p>The same preference loss plus the separately synchronized DINOv2 representation branch.</p></div>
   </div>
-  <div class="claim"><strong>Causal comparison:</strong> all three arms start from the same \(M1\), use the same candidates, data order, noise coupling, optimizer, and \(3{,}000\) updates. Only the label sign and REPA branch change.</div>
+  <div class="claim"><strong>Causal comparison:</strong> all three arms start from the same \(M1\), use the same candidates, data order, shared pair noise, optimizer, and \(3{,}000\) updates. Only the label sign and REPA branch change. The pilot value \(\beta=100\) is not literature-derived and must be calibrated.</div>
+</section>
+
+<section>
+  <h2>Where the preference objective comes from</h2>
+  <div class="diagram">
+    <div class="node blue"><strong>Diffusion-DPO</strong><br>reference-relative denoising preference</div>
+    <div class="arrow">\(\longrightarrow\)</div>
+    <div class="node purple"><strong>D3PO</strong><br>paired on-policy diffusion trajectories</div>
+    <div class="arrow">\(\longrightarrow\)</div>
+    <div class="node purple"><strong>PSO</strong><br>offline and online sample preference</div>
+    <div class="arrow">\(\longrightarrow\)</div>
+    <div class="node green"><strong>Phase I</strong><br>cached rectified-flow targets</div>
+  </div>
+  <div class="equation">
+    \[
+      \mathcal L_{\mathrm{PSO}}
+      =-\log\sigma\!\left(\beta\left[
+      \log\frac{p_\theta(\tau^+\mid c)}{p_0(\tau^+\mid c)}
+      -\log\frac{p_\theta(\tau^-\mid c)}{p_0(\tau^-\mid c)}
+      \right]\right),
+    \]
+    \[
+      \log\frac{p_\theta(u\mid z_t,c)}{p_0(u\mid z_t,c)}
+      \ \widehat{\propto}\
+      -\big(e_\theta(u)-e_0(u)\big).
+    \]
+  </div>
+  <div class="cards three">
+    <div class="card red"><h3>Not novel</h3><p>The reference-relative Bradley–Terry structure and offline sample pairs are established by prior work.</p></div>
+    <div class="card green"><h3>Our adaptation</h3><p>Frozen-teacher pairs, shared noising, a flow-error surrogate, an explicit \(M1\) anchor, and optional REPA.</p></div>
+    <div class="card gold"><h3>What must be tested</h3><p>Whether the surrogate tracks a true transition log ratio, how \(\beta\) is calibrated, and whether shared noise reduces gradient variance.</p></div>
+  </div>
+  <div class="claim purple"><strong>Paper position:</strong> use Phase I as a strong baseline and experimental instrument. Claim novelty in the controlled reward-channel mechanism and fixed-pair causal evidence—not in the logistic loss.</div>
+  <p class="sources"><a href="https://openaccess.thecvf.com/content/CVPR2024/html/Wallace_Diffusion_Model_Alignment_Using_Direct_Preference_Optimization_CVPR_2024_paper.html">Diffusion-DPO, CVPR \(2024\)</a> · <a href="https://arxiv.org/abs/2311.13231">D3PO, CVPR \(2024\)</a> · <a href="https://openreview.net/forum?id=fXnE4gB64o">Pairwise Sample Optimization, ICLR \(2025\)</a>.</p>
 </section>
 
 <section>
@@ -440,7 +501,7 @@
     </tbody>
   </table>
   <div class="claim good"><strong>Supported:</strong> a pairwise comparative loss can move the output distribution where winner-only consistency regression did not.</div>
-  <div class="claim bad"><strong>Fidelity caveat:</strong> the first Phase I FID/CMMD file compared CompBench-prompt generations with COCO references, so those numbers are excluded. The new evaluation job uses a separate matched \(2{,}398\)-caption COCO pool and four-seed diversity tests.</div>
+  <div class="claim bad"><strong>Fidelity caveat:</strong> the first Phase I FID/CMMD file compared CompBench-prompt generations with COCO references and is excluded. Later Phase-I jobs use a matched \(2{,}398\)-caption COCO pool, but an unexplained cross-job shift remains; publication comparisons require \(M1\) regenerated in the same job or an exact lineage reconciliation.</div>
   <p class="sources">Completed training jobs \(99952\)–\(99954\); evaluation job \(99955\). Paired prompt bootstrap intervals use official CompBench category scorers and an independent GenEval2 judge.</p>
 </section>
 
@@ -463,7 +524,7 @@
     <div class="card green"><h3>Robust pattern</h3><p>Preference supervision clearly improves colour, shape, texture, two-dimensional relations, and complex prompts.</p></div>
     <div class="card gold"><h3>Open pattern</h3><p>Numeracy and three-dimensional relations remain difficult. REPA is mixed by category even though its equal-category CompBench aggregate is positive.</p></div>
   </div>
-  <div class="claim"><strong>Interpretation:</strong> the aggregate is not driven by one category, but neither method solves every compositional skill. The matched counterfactual-label experiment therefore keeps all categories and reports them separately.</div>
+  <div class="claim"><strong>Interpretation:</strong> the aggregate is not driven by one category, but neither method solves every compositional skill. The fixed-pair counterfactual repair therefore keeps all categories, reports them separately, and treats numeracy as a named failure mode.</div>
 </section>
 
 <section>
@@ -894,48 +955,43 @@
 </section>
 
 <section>
-  <h2>The decisive generator control — change only the label text</h2>
+  <h2>What the completed counterfactual run actually changed</h2>
   <div class="diagram">
-    <div class="node blue">original prompt \(c\)<br>same seeds</div>
+    <div class="node blue">same prompt record \(i\)<br>same candidate bank \(\{x_{ij}\}_{j=1}^{4}\)</div>
     <div class="arrow">\(\longrightarrow\)</div>
-    <div class="node blue wide">frozen SD\(3.5\)-M teacher<br>\(4\) trajectories, \(8\) steps, \(\operatorname{CFG}=7\)</div>
-    <div class="arrow">\(\longrightarrow\)</div>
-    <div class="node purple">same candidate set<br>\(\{x_j\}_{j=1}^{4}\)</div>
+    <div class="node green">correct text constructs<br>\((a_i,b_i)\)</div>
+    <div class="plus">\(\neq\)</div>
+    <div class="node red">counterfactual text constructs<br>\((\widetilde a_i,\widetilde b_i)\)</div>
   </div>
-  <div class="branch">
-    <div class="lane">
-      <div class="lane-label">Correct-label arm</div>
-      <div class="node green">score \(R(x_j,c)\)</div>
-      <div class="node green">orient pair with \(j_c^+=\arg\max_j R(x_j,c)\)</div>
-    </div>
-    <div class="mid">
-      <div class="node gold">both students receive the original prompt \(c\)</div>
-      <div class="node gold">same \(5{,}042\) records, \(M1\) start, noise, optimizer, and \(3{,}000\) updates</div>
-    </div>
-    <div class="lane">
-      <div class="lane-label">Counterfactual-label arm</div>
-      <div class="node red">score \(R(x_j,\widetilde c)\)</div>
-      <div class="node red">orient pair with \(j_{\mathrm{cf}}^+=\arg\max_j R(x_j,\widetilde c)\)</div>
-    </div>
+  <div class="equation">
+    \[
+      (a_i,b_i)=\left(\operatorname*{arg\,max}_{j}R(x_{ij},c_i),\operatorname*{arg\,min}_{j}R(x_{ij},c_i)\right),
+      \qquad
+      (\widetilde a_i,\widetilde b_i)=\left(\operatorname*{arg\,max}_{j}R(x_{ij},\widetilde c_i),\operatorname*{arg\,min}_{j}R(x_{ij},\widetilde c_i)\right).
+    \]
+  </div>
+  <div class="cards four">
+    <div class="metric card blue"><div class="value">\(5{,}042\)</div><div class="label">shared prompt records</div></div>
+    <div class="metric card red"><div class="value">\(60.75\%\)</div><div class="label">unordered image pair changed</div></div>
+    <div class="metric card red"><div class="value">\(67.53\%\)</div><div class="label">ordered pair changed</div></div>
+    <div class="metric card gold"><div class="value">\(27.23\%\)</div><div class="label">original fixed pair reverses under \(\widetilde c\)</div><div class="ci">\(1{,}373/5{,}042\)</div></div>
   </div>
   <div class="diagram">
-    <div class="node green">generate fresh samples from \(\theta_{c}\)</div>
-    <div class="plus">\(\text{versus}\)</div>
-    <div class="node red">generate fresh samples from \(\theta_{\mathrm{cf}}\)</div>
+    <div class="node green">different pair<br>and orientation</div>
     <div class="arrow">\(\longrightarrow\)</div>
-    <div class="node purple wide">evaluate both against unseen original prompts<br>CompBench, GenEval2, fidelity, diversity</div>
+    <div class="node purple wide">total policy effect combines<br>pair mining and orientation</div>
   </div>
-  <div class="claim purple"><strong>What this isolates:</strong> candidate images, student conditioning, dataset, and compute are fixed. If \(\theta_c\) wins, the useful training signal depends on the requested composition—not only generic image quality.</div>
-  <p class="sources">Preference labels use the structured T2I-CompBench training pool. COCO is used only for the REPA real-image branch and the matched fidelity evaluation—not as the compositional preference dataset.</p>
+  <div class="claim bad"><strong>Validity correction:</strong> images were shared at the bank level, but the selected training pair was not fixed. The result estimates the total effect of the text-conditioned pair-construction policy; it does not isolate the direct effect of orientation.</div>
+  <p class="sources">The audit recomputed pair identities directly from all \(5{,}042\) cached records. Both students still received the original prompt \(c\); pair identity is a downstream mediator of the text policy.</p>
 </section>
 
 <section>
-  <h2>Full label gate passed — the intervention is strong enough to decide</h2>
+  <h2>The intuition is real — teacher samples differ semantically</h2>
   <div class="cards four">
     <div class="metric card blue"><div class="value">\(5{,}042\)</div><div class="label">matched editable prompts</div><div class="ci">\(90.70\%\) of \(5{,}559\)</div></div>
-    <div class="metric card green"><div class="value">\(55.04\%\)</div><div class="label">top candidate changes under \(\widetilde c\)</div><div class="ci">gate \(\ge 20\%\)</div></div>
-    <div class="metric card purple"><div class="value">\(67.53\%\)</div><div class="label">top–bottom pair changes</div><div class="ci">gate \(\ge 30\%\)</div></div>
-    <div class="metric card gold"><div class="value">\(0.255\)</div><div class="label">mean absolute score change</div><div class="ci">gate \(\ge 0.05\)</div></div>
+    <div class="metric card green"><div class="value">\(55.04\%\)</div><div class="label">best candidate changes under \(\widetilde c\)</div></div>
+    <div class="metric card purple"><div class="value">\(74.65\%\)</div><div class="label">at least one candidate pair reverses</div></div>
+    <div class="metric card gold"><div class="value">\(0.255\)</div><div class="label">mean absolute score response</div></div>
   </div>
   <p class="tiny center">Training audit example: “The wooden frame and glass pane of the window provide a view of the metallic skyscrapers.”</p>
   <div class="candidate-grid">
@@ -952,54 +1008,154 @@
       <div class="candidate-caption">\(x_1\): rejected under the correct “wooden frame” label</div>
     </div>
   </div>
-  <div class="claim good"><strong>All preregistered data gates pass:</strong> original-prompt penalty of the counterfactual winner is \(0.06020\;[0.05642,0.06404]\), and counterfactual recovery is \(0.08163\;[0.07751,0.08583]\). The images above illustrate one logged pair; the gate uses all \(5{,}042\) prompts.</div>
+  <div class="claim purple"><strong>What survives:</strong> the candidate bank has abundant prompt-responsive variation, exactly as the squirrel and window examples suggest. The next experiment should exploit that variation while fixing \(\{a_i,b_i\}\), so only the preference sign can explain a difference.</div>
 </section>
 
 <section>
-  <h2>Current campaign — immutable jobs, automatic gates, complete logging</h2>
+  <h2>Completed counterfactual result — strong total effect, incomplete decomposition</h2>
+  <div class="cards four">
+    <div class="metric card green"><div class="value">\(+0.04923\)</div><div class="label">correct construction minus counterfactual<br>CompBench</div><div class="ci">\([+0.04069,+0.05805]\)</div></div>
+    <div class="metric card green"><div class="value">\(+0.04100\)</div><div class="label">correct construction minus counterfactual<br>GenEval2</div><div class="ci">\([+0.02412,+0.05824]\)</div></div>
+    <div class="metric card green"><div class="value">\(-6.735\)</div><div class="label">CMMD difference<br>lower is better</div></div>
+    <div class="metric card red"><div class="value">\(-0.04136\)</div><div class="label">DINO diversity difference</div><div class="ci">\([-0.04794,-0.03472]\)</div></div>
+  </div>
   <table>
-    <thead><tr><th>Job</th><th>Purpose</th><th>State at deck update</th><th>Output</th></tr></thead>
+    <thead><tr><th>Endpoint</th><th class="num">correct minus counterfactual</th><th>Preregistered read</th></tr></thead>
     <tbody>
-      <tr class="good"><td class="num">\(100589\)</td><td>real reconstruction and scoring smoke</td><td>completed</td><td>exact score reproduction; maximum error \(0\)</td></tr>
-      <tr class="good"><td class="num">\(100590\)</td><td>full matched correct and counterfactual caches</td><td>completed</td><td>all label gates passed on \(5{,}042\) prompts</td></tr>
-      <tr class="good"><td class="num">\(100591\)</td><td>correct-prompt labels</td><td>completed</td><td>final checkpoint at \(3{,}000\) updates</td></tr>
-      <tr class="good"><td class="num">\(100592\)</td><td>counterfactual-prompt labels</td><td>completed</td><td>final checkpoint at \(3{,}000\) updates</td></tr>
-      <tr><td class="num">\(100593\)</td><td>held-out paired evaluation</td><td>running</td><td>fresh CompBench, GenEval2, fidelity, and diversity samples</td></tr>
+      <tr class="good"><td>official CompBench</td><td class="num">\(+0.04923\)</td><td>positive</td></tr>
+      <tr class="good"><td>GenEval2 Soft-TIFA</td><td class="num">\(+0.04100\)</td><td>positive replication</td></tr>
+      <tr class="good"><td>FID</td><td class="num">\(-0.388\)</td><td>favorable point estimate</td></tr>
+      <tr class="good"><td>precision; recall</td><td class="num">\(+0.03336;\ +0.02127\)</td><td>favorable point estimates</td></tr>
+      <tr><td>LPIPS diversity</td><td class="num">\(-0.01273\)</td><td>within tolerance</td></tr>
+      <tr class="bad"><td>DINO diversity</td><td class="num">\(-0.04136\)</td><td>gate failed</td></tr>
     </tbody>
   </table>
-  <div class="cards three">
-    <div class="card blue"><h3>Alignment</h3><p>Official CompBench with paired category bootstrap and GenEval2 Soft-TIFA on fresh four-step samples.</p></div>
-    <div class="card green"><h3>Fidelity and diversity</h3><p>A separate \(2{,}398\)-caption COCO generation pool versus matching real images; four seeds on \(50\) prompts per category for DINO and LPIPS diversity.</p></div>
-    <div class="card purple"><h3>Auditability</h3><p>Unique job-based directories and W&amp;B run identifiers; code and cache hashes, losses, gradients, checkpoints, training pairs, and held-out samples are logged.</p></div>
-  </div>
-  <div class="diagram">
-    <div class="node green">correct-label student wins with positive \(95\%\) interval</div>
-    <div class="arrow">\(\Longrightarrow\)</div>
-    <div class="node purple">evidence for text-specific preference transfer</div>
-    <div class="plus">\(\text{otherwise}\)</div>
-    <div class="node red">generic quality prior or scorer bias remains the explanation</div>
-  </div>
-  <p class="sources">W&amp;B group <span class="tag">phaseI_cf_distill_20260807T024412Z</span>: <a href="https://wandb.ai/mll_sut/sd-pref-repa-v1/runs/phaseI_counterfactual_data_100590">full label gate</a> · <a href="https://wandb.ai/mll_sut/sd-pref-repa-v1/runs/phaseI_preference_matched_100591">correct-label training</a> · <a href="https://wandb.ai/mll_sut/sd-pref-repa-v1/runs/phaseI_counterfactual_100592">counterfactual-label training</a>.</p>
+  <div class="claim bad"><strong>Correct conclusion:</strong> the text-conditioned pair-construction policy produces a large held-out difference, but it combines pair mining with orientation and reduces DINO diversity. It does not yet prove that orientation alone improves the generator.</div>
+  <p class="sources">Completed jobs \(100589\)–\(100593\); W&amp;B group <span class="tag">phaseI_cf_distill_20260807T024412Z</span>. All intervals are paired prompt bootstraps from fresh four-step samples.</p>
 </section>
 
 <section>
-  <div class="eyebrow">Phase L · publication-scale campaign</div>
-  <h2>Scale data and replication—not only the update count</h2>
+  <h2>The held-out effect is not confined to a VQA evaluator</h2>
   <div class="diagram">
-    <div class="node blue wide">\(5{,}559\) compositional training prompts<br>\(\times\;4\) independent teacher seed pools</div>
+    <div class="node blue">colour, shape, texture<br><strong>BLIP-VQA</strong></div>
+    <div class="arrow">\(\longrightarrow\)</div>
+    <div class="node blue"><strong>\(\overline{\Delta}\approx+0.0405\)</strong><br>correct minus counterfactual</div>
+    <div class="plus">\(\text{and}\)</div>
+    <div class="node green">spatial, depth, numeracy<br><strong>UniDet</strong></div>
+    <div class="arrow">\(\longrightarrow\)</div>
+    <div class="node green"><strong>\(\overline{\Delta}\approx+0.0689\)</strong><br>correct minus counterfactual</div>
+  </div>
+  <div class="cards three">
+    <div class="card blue"><h3>What this helps</h3><p>The detection-family point effect is larger than the VQA-family point effect, so the aggregate is not obviously only scorer-family circularity.</p></div>
+    <div class="card gold"><h3>What remains</h3><p>These are means of category effects. The next analysis must bootstrap each evaluator family jointly before treating the comparison as formal evidence.</p></div>
+    <div class="card purple"><h3>What final validation needs</h3><p>Official benchmarks for comparability, one held-out non-VQA judge, and a blinded human study with atomic binary questions.</p></div>
+  </div>
+  <div class="claim"><strong>Evaluation rule:</strong> never report CompBench as one undifferentiated “VQA” endpoint. Show BLIP-VQA, UniDet, CLIP, and complex-category results separately, alongside absolute scores for \(M1\) and every arm.</div>
+</section>
+
+<section>
+  <div class="eyebrow">Next decisive experiment · fixed-pair causal repair</div>
+  <h2>Freeze the images; change only the preference orientation</h2>
+  <div class="equation">
+    \[
+      (a_i,b_i)=\left(
+      \operatorname*{arg\,max}_{j}R(x_{ij},c_i),
+      \operatorname*{arg\,min}_{j}R(x_{ij},c_i)
+      \right)
+      \quad\text{is stored once.}
+    \]
+  </div>
+  <div class="diagram">
+    <div class="node blue">fixed images<br>\(\{x_{ia_i},x_{ib_i}\}\)</div>
     <div class="arrow">\(\Longrightarrow\)</div>
-    <div class="node purple">\(22{,}236\) scored preference records<br>\(4\) candidates per pool</div>
+    <div class="node purple wide">every arm receives the same<br>\(c_i,\ z_i,\ t_i\), order, and compute</div>
     <div class="arrow">\(\Longrightarrow\)</div>
-    <div class="node green wide">preference \(+\) REPA<br>\(12{,}000\) updates \(\times\;3\) training seeds</div>
+    <div class="node green">change only<br>\(y_i\in\{-1,+1\}\)</div>
   </div>
   <div class="cards four">
-    <div class="card blue"><h3>Admission gate</h3><p>Job \(100644\) promotes the run only when job \(100593\) shows a positive prompt-specific CompBench interval, matching GenEval2 direction, and non-inferior fidelity and diversity.</p></div>
-    <div class="card purple"><h3>Training</h3><p>Jobs \(100645\), \(100646\), and \(100647\) share the locked objective and differ only in training seed. The full cache is job \(100643\).</p></div>
-    <div class="card green"><h3>Evaluation</h3><p>Full CompBench and GenEval2, \(5{,}000\) matched COCO fidelity images, and \(8\)-seed diversity on \(400\) held-out prompts.</p></div>
-    <div class="card gold"><h3>Final verdict</h3><p>Jobs \(100649\)–\(100652\) report prompt uncertainty per seed and training-seed variation separately, against frozen \(M1\) and the Phase-I pilot.</p></div>
+    <div class="card green"><h3>Correct</h3><p>Use the original-prompt orientation, \(y_i=+1\).</p></div>
+    <div class="card purple"><h3>Counterfactual</h3><p>Use the sign induced by \(\widetilde c_i\) on the same fixed pair.</p></div>
+    <div class="card blue"><h3>Random</h3><p>Use a deterministic balanced random sign as the placebo.</p></div>
+    <div class="card red"><h3>Inverted</h3><p>Reverse every original-prompt sign as the sanity check.</p></div>
   </div>
-  <div class="claim good"><strong>Real smoke passed:</strong> job \(100640\) exercised all eight categories, generation, VQAScore, immutable caching, audit images, and W&amp;B artifacts. Its \(16\) records had mean best-to-worst headroom \(0.332\); the full cache is now running.</div>
-  <p class="sources">W&amp;B group <span class="tag">phaseL_publication_20260807T044116Z</span> in <a href="https://wandb.ai/mll_sut/sd-pref-repa-publication-v1/runs/phaseL_selection_100640">sd-pref-repa-publication-v1</a> · immutable manifest <span class="tag">phaseL/campaign_20260807T044116Z.json</span>.</p>
+  <div class="diagram">
+    <div class="node blue">cache identity assertion</div>
+    <div class="arrow">\(\longrightarrow\)</div>
+    <div class="node purple">four-arm smoke test</div>
+    <div class="arrow">\(\longrightarrow\)</div>
+    <div class="node green">pilot with independent metrics</div>
+    <div class="arrow">\(\longrightarrow\)</div>
+    <div class="node gold">only then scale \(\times3\) seeds</div>
+  </div>
+  <div class="claim purple"><strong>Primary population:</strong> all \(5{,}042\) editable prompts. <strong>Secondary sensitivity:</strong> the \(1{,}373\) prompts where \(\widetilde c_i\) reverses the fixed original pair. Promotion requires CompBench and GenEval2 agreement, independent-judge support, and fidelity and diversity non-inferiority.</div>
+  <p class="sources">Complete dependencies, stop conditions, and deliverables are recorded in <span class="tag">reports/research_verdict_and_roadmap.md</span>.</p>
+</section>
+
+<section>
+  <div class="eyebrow">Mechanism hypothesis · must be falsified</div>
+  <h2>Why shared pair noise may matter most at high noise</h2>
+  <div class="equation">
+    \[
+      z^+-z^-=(1-\sigma)(x^+-x^-),
+      \qquad
+      u^+-u^-=x^- - x^+.
+    \]
+  </div>
+  <div class="diagram">
+    <div class="node blue">low \(\sigma\)<br>inputs remain distinguishable</div>
+    <div class="arrow">\(\longrightarrow\)</div>
+    <div class="node purple">increase \(\sigma\)</div>
+    <div class="arrow">\(\longrightarrow\)</div>
+    <div class="node gold">\(\sigma\rightarrow1\)<br>inputs coalesce</div>
+    <div class="plus">\(\text{while}\)</div>
+    <div class="node green">targets remain separated</div>
+  </div>
+  <div class="cards three">
+    <div class="card green"><h3>Prediction \(1\)</h3><p>Shared \(\epsilon\) should outperform independent \(\epsilon^+,\epsilon^-\) at matched compute.</p></div>
+    <div class="card purple"><h3>Prediction \(2\)</h3><p>The useful preference gradient should concentrate in the high-\(\sigma\) band used by the student's first large step.</p></div>
+    <div class="card red"><h3>Kill condition</h3><p>If independent noise and all \(\sigma\) bands behave alike, retire input coalescence and report the mechanism as unresolved.</p></div>
+  </div>
+  <div class="claim bad"><strong>Theory discipline:</strong> BOND does not prove the C1 null, and the deterministic proximal map in arXiv:2605.11361 is a Wasserstein construction—not an exact representation theorem for the KL exponential tilt.</div>
+</section>
+
+<section>
+  <div class="eyebrow">Before the next GPU pilot</div>
+  <h2>Close the zero-training evidence gaps first</h2>
+  <div class="cards three">
+    <div class="card blue"><h3>Numbers</h3><p>Reconcile every oracle ratio; compute absolute arm-versus-\(M1\) results; bootstrap evaluator families; audit the FID/CMMD lineage.</p></div>
+    <div class="card purple"><h3>Objective</h3><p>Inspect \(\beta(\Delta_\theta-\Delta_0)\), sigmoid saturation, winner and loser errors separately, gradient clipping, and per-\(\sigma\) contribution.</p></div>
+    <div class="card green"><h3>Diversity</h3><p>Measure teacher-best versus teacher-random DINO and LPIPS on repeated cached quartets, then compare the student's price with both \(M1\) and the oracle.</p></div>
+  </div>
+  <div class="diagram">
+    <div class="node blue">immutable result registry</div>
+    <div class="arrow">\(\longrightarrow\)</div>
+    <div class="node purple">zero-training audits</div>
+    <div class="arrow">\(\longrightarrow\)</div>
+    <div class="node green">fixed-pair \(+\) noise pilots</div>
+    <div class="arrow">\(\longrightarrow\)</div>
+    <div class="node gold">only then replication and scale</div>
+  </div>
+  <div class="claim purple"><strong>W&amp;B contract:</strong> one immutable run per job, unique local paths, full code and cache hashes, separate positive/negative errors, logit histograms, gradient metrics, \(\sigma\)-band metrics, fixed samples, and a manifest linking cache to final report.</div>
+</section>
+
+<section>
+  <div class="eyebrow">Publication plan · the shortest defensible route</div>
+  <h2>Mechanism first, scale second</h2>
+  <div class="diagram">
+    <div class="node blue"><strong>Input channel</strong><br>best-of-\(K\) trajectory selection</div>
+    <div class="arrow">\(\longrightarrow\)</div>
+    <div class="node red">ordinary consistency regression<br>held-out transfer \(\approx0\)</div>
+    <div class="plus">\(\text{whereas}\)</div>
+    <div class="node purple"><strong>Objective channel</strong><br>PSO-family pairwise comparison</div>
+    <div class="arrow">\(\longrightarrow\)</div>
+    <div class="node green">fresh-sample transfer<br>with fidelity–diversity constraints</div>
+  </div>
+  <div class="cards three">
+    <div class="card blue"><h3>Required baselines</h3><p>Frozen SD\(3.5\)-M, \(M1\), a canonical recent consistency method, offline PSO, randomized and inverted labels.</p></div>
+    <div class="card purple"><h3>Required ablations</h3><p>Fixed versus recomputed pairs, shared versus independent noise, \(\sigma\) bands, calibrated \(\beta\), anchor strength, and REPA isolation.</p></div>
+    <div class="card green"><h3>Required evidence</h3><p>At least three training seeds, evaluator-family splits, blinded human audit, same-job fidelity, and oracle-referenced DINO plus LPIPS diversity.</p></div>
+  </div>
+  <div class="claim"><strong>Novelty boundary:</strong> the pairwise loss is prior art. The potential paper contribution is the controlled channel mechanism, its fixed-pair causal test, and a quantitative alignment–fidelity–diversity frontier for few-step rectified-flow models.</div>
 </section>
 
 <section class="center">
@@ -1008,11 +1164,11 @@
   <div class="cards four" style="text-align:left;margin-top:.8em">
     <div class="card orange"><h3>\(M1\)</h3><p>A useful internal compression control built from recognised consistency ingredients, but not yet the reviewer-facing SOTA baseline.</p></div>
     <div class="card green"><h3>REPA</h3><p>Promising fidelity protection and a positive CompBench increment when combined with preference training; still needs replicated, correctly matched fidelity evaluation.</p></div>
-    <div class="card purple"><h3>Direct preference</h3><p>The strongest completed result: independent CompBench and GenEval2 both improve over a randomized-label placebo.</p></div>
+    <div class="card purple"><h3>Direct preference</h3><p>A strong baseline result from the PSO/Diffusion-DPO family: independent CompBench and GenEval2 improve over randomized orientation.</p></div>
     <div class="card red"><h3>Standalone ranker</h3><p>Better than random reranking, but its correct-versus-counterfactual prompt effect is null under official CompBench.</p></div>
   </div>
-  <div class="claim purple" style="text-align:left;margin-top:.8em"><strong>Decision now:</strong> the publication-scale preference \(+\) REPA campaign is launched, but expensive training remains causally gated by the matched label-source evaluation. This gives us the upside of scaling immediately without silently promoting a generic quality prior. Retain a canonical \(s\mathrm{CM}\) or \(r\mathrm{CM}\) reviewer-facing baseline alongside it.</div>
-  <p class="sources">Audited evidence: <span class="tag">reports/phaseR_repa_result.md</span> · <span class="tag">reports/phaseC1_results_report.md</span> · <span class="tag">phaseK/official/phaseK_counterfactual_99863_99941/</span> · <span class="tag">phaseI/eval_99955/</span> · <span class="tag">phaseI/counterfactual_data_100590/summary.json</span> · <span class="tag">phaseL/campaign_20260807T044116Z.json</span>.</p>
+  <div class="claim purple" style="text-align:left;margin-top:.8em"><strong>Decision now:</strong> complete the zero-training audit, then run the fixed-pair four-arm pilot and shared-noise falsification together. Scale only after prompt-specific orientation survives, fidelity is same-job matched, and diversity is acceptable relative to both \(M1\) and best-of-four.</div>
+  <p class="sources">Complete handoff: <span class="tag">reports/project_handoff_2026-08-07.md</span> · operational roadmap: <span class="tag">reports/research_verdict_and_roadmap.md</span>.</p>
 </section>
 
 </div></div>
