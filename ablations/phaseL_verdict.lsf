@@ -1,0 +1,50 @@
+#!/usr/bin/env bash
+#BSUB -J sd-phaseL-verdict
+#BSUB -G s10396
+#BSUB -q training-parallel
+#BSUB -n 2
+#BSUB -W 1:00
+#BSUB -R "span[hosts=1]"
+#BSUB -R "select[mem>16000]"
+#BSUB -R "rusage[mem=16000]"
+#BSUB -M 16000
+#BSUB -gpu "num=1:mode=exclusive_process"
+#BSUB -cwd /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM
+#BSUB -o /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-phaseL-verdict-%J.out
+#BSUB -e /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-phaseL-verdict-%J.err
+
+set -euo pipefail
+export PATH="/software/cellgen/team361/ha11/envs/nichejepa/bin:$PATH"
+export WANDB_MODE=online
+
+: "${PHASEL_GROUP:?missing Phase-L W&B group}"
+: "${PHASEL_TRAIN_JOBS:?expected semicolon-delimited seed=job list}"
+: "${PHASEL_ALIGNMENT_JOB:?missing alignment evaluation job id}"
+: "${PHASEL_FIDELITY_JOB:?missing fidelity evaluation job id}"
+: "${PHASEL_DIVERSITY_JOB:?missing diversity evaluation job id}"
+
+JOB=${LSB_JOBID:-local}
+ALIGNMENT="phaseL/alignment_eval_${PHASEL_ALIGNMENT_JOB}"
+FIDELITY="phaseL/fidelity_eval_${PHASEL_FIDELITY_JOB}/fidelity.json"
+DIVERSITY="phaseL/diversity_eval_${PHASEL_DIVERSITY_JOB}/diversity.json"
+if [[ ! -d "$ALIGNMENT" || ! -s "$FIDELITY" || ! -s "$DIVERSITY" ]]; then
+  jq -n --arg job "$JOB" \
+    '{skipped:true,job:$job,reason:"one or more gated publication evaluations were skipped"}' \
+    > "phaseL/skipped_verdict_${JOB}.json"
+  exit 0
+fi
+
+TREATMENTS=()
+IFS=';' read -ra TRAIN_ITEMS <<< "$PHASEL_TRAIN_JOBS"
+for item in "${TRAIN_ITEMS[@]}"; do
+  seed=${item%%=*}
+  TREATMENTS+=("L${seed}")
+done
+TREATMENT_CSV=$(IFS=,; echo "${TREATMENTS[*]}")
+
+python3 phaseL/analyze_publication.py \
+  --alignment_root "$ALIGNMENT" --fidelity_report "$FIDELITY" \
+  --diversity_report "$DIVERSITY" --treatments "$TREATMENT_CSV" \
+  --out "phaseL/verdict_${JOB}/verdict.md" \
+  --project sd-pref-repa-publication-v1 --group "$PHASEL_GROUP" \
+  --run_name "phaseL_verdict_${JOB}" --train_jobs "$PHASEL_TRAIN_JOBS"

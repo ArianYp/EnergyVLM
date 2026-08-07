@@ -1,0 +1,8 @@
+# Scheduler- and W&B-owned runtime outputs. Source, manifests, and reports stay tracked.
+selection_*/
+promotion_gate_*/
+alignment_eval_*/
+fidelity_eval_*/
+diversity_eval_*/
+verdict_*/
+skipped_*.json

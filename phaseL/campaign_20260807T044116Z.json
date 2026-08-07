@@ -1,0 +1,88 @@
+{
+  "campaign": "phaseL_publication_20260807T044116Z",
+  "created_utc": "2026-08-07T04:41:16Z",
+  "git_revision_at_submission": "bccc34ee27e243b505a793d988e748d14f1ed29d",
+  "wandb_project": "sd-pref-repa-publication-v1",
+  "source_mechanism_evaluation_job": 100593,
+  "jobs": {
+    "selection_smoke": 100640,
+    "selection_full": 100643,
+    "promotion_gate": 100644,
+    "train_seed_20260807": 100645,
+    "train_seed_20260808": 100646,
+    "train_seed_20260809": 100647,
+    "alignment_evaluation": 100649,
+    "fidelity_evaluation": 100650,
+    "diversity_evaluation": 100651,
+    "publication_verdict": 100652
+  },
+  "dependencies": {
+    "promotion_gate": "done(100593)",
+    "training": "done(100643) && ended(100644); each arm reads the gate before model loading",
+    "evaluations": "done(100645) && done(100646) && done(100647)",
+    "publication_verdict": "done(100649) && done(100650) && done(100651)"
+  },
+  "locked_design": {
+    "source_dataset": "T2I-CompBench training split",
+    "source_prompts": 5559,
+    "teacher_seed_pools_per_prompt": 4,
+    "candidate_count_per_pool": 4,
+    "expected_preference_records": 22236,
+    "teacher_steps": 8,
+    "teacher_cfg": 7.0,
+    "student_steps": 4,
+    "student_cfg": 1.0,
+    "training_updates": 12000,
+    "training_seeds": [20260807, 20260808, 20260809],
+    "learning_rate": 1e-6,
+    "beta": 100.0,
+    "lambda_anchor": 1.0,
+    "lambda_repa": 0.5,
+    "repa_layer": 8
+  },
+  "promotion_rule": {
+    "compbench": "paired 95% CI lower bound above zero for correct-label versus counterfactual-label student",
+    "geneval2": "positive delta in the same direction",
+    "fidelity": "matched CMMD non-inferiority passes",
+    "diversity": "DINOv2 and LPIPS non-inferiority pass"
+  },
+  "evaluation": {
+    "alignment": "full held-out T2I-CompBench validation and GenEval2, paired seeds",
+    "fidelity": "5000 COCO captions versus matching COCO real images",
+    "diversity": "8 seeds on 400 stratified held-out prompts",
+    "baselines": ["M1", "Phase-I PreferenceREPA job 99954"],
+    "reporting": "per-seed prompt bootstrap plus separate across-training-seed mean, standard deviation, and range"
+  },
+  "paths": {
+    "selection_smoke": "phaseL/selection_100640",
+    "selection_full": "phaseL/selection_100643",
+    "promotion_gate": "phaseL/promotion_gate_100644",
+    "train_seed_20260807": "checkpoints/phaseL/phaseL_preference_repa_seed20260807_100645",
+    "train_seed_20260808": "checkpoints/phaseL/phaseL_preference_repa_seed20260808_100646",
+    "train_seed_20260809": "checkpoints/phaseL/phaseL_preference_repa_seed20260809_100647",
+    "alignment_evaluation": "phaseL/alignment_eval_100649",
+    "fidelity_evaluation": "phaseL/fidelity_eval_100650",
+    "diversity_evaluation": "phaseL/diversity_eval_100651",
+    "publication_verdict": "phaseL/verdict_100652"
+  },
+  "expected_wandb_runs": {
+    "selection_smoke": "phaseL_selection_100640",
+    "selection_full": "phaseL_selection_100643",
+    "promotion_gate": "phaseL_promotion_gate_100644",
+    "train_seed_20260807": "phaseL_preference_repa_seed20260807_100645",
+    "train_seed_20260808": "phaseL_preference_repa_seed20260808_100646",
+    "train_seed_20260809": "phaseL_preference_repa_seed20260809_100647",
+    "alignment_evaluation": "phaseL_alignment_eval_100649",
+    "fidelity_evaluation": "phaseL_fidelity_eval_100650",
+    "diversity_evaluation": "phaseL_diversity_eval_100651",
+    "publication_verdict": "phaseL_verdict_100652"
+  },
+  "smoke_result": {
+    "job": 100640,
+    "pass": true,
+    "categories": 8,
+    "records": 16,
+    "mean_top_bottom_margin": 0.33180783363059163,
+    "wandb_run": "phaseL_selection_100640"
+  }
+}

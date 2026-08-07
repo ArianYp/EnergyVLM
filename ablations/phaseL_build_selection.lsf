@@ -1,0 +1,61 @@
+#!/usr/bin/env bash
+#BSUB -J sd-phaseL-selection
+#BSUB -G s10396
+#BSUB -q training-parallel
+#BSUB -n 16
+#BSUB -W 48:00
+#BSUB -R "span[hosts=1]"
+#BSUB -R "select[mem>256000 && hname!='farm-gpu0504']"
+#BSUB -R "rusage[mem=256000]"
+#BSUB -M 256000
+#BSUB -gpu "num=4:mode=exclusive_process:gmodel=NVIDIAH200"
+#BSUB -cwd /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM
+#BSUB -o /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-phaseL-selection-%J.out
+#BSUB -e /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-phaseL-selection-%J.err
+
+set -euo pipefail
+
+export PATH="/software/cellgen/team361/ha11/envs/nichejepa/bin:$PATH"
+export HF_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/huggingface
+export TORCH_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/torch
+export XDG_CACHE_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/xdg
+export TOKENIZERS_PARALLELISM=false
+export NCCL_NVLS_ENABLE=0
+export WANDB_MODE=online
+source ~/.secrets/hf_token
+
+: "${PHASEL_GROUP:?submit with an immutable Phase-L W&B group}"
+PHASEL_ADDITIONAL_REPEATS=${PHASEL_ADDITIONAL_REPEATS:-3}
+PHASEL_LIMIT_PER_CATEGORY=${PHASEL_LIMIT_PER_CATEGORY:-0}
+PHASEL_EXPECTED_RECORDS=${PHASEL_EXPECTED_RECORDS:-22236}
+
+JOB=${LSB_JOBID:-local}
+ROOT="phaseL/selection_${JOB}"
+RUN="phaseL_selection_${JOB}"
+if [[ -e "$ROOT" ]]; then
+  echo "Refusing to overwrite $ROOT" >&2
+  exit 2
+fi
+mkdir -p "$ROOT"
+
+echo "[$(date --iso-8601=seconds)] Phase-L selection start | job=$JOB root=$ROOT"
+echo "  group=$PHASEL_GROUP additional_repeats=$PHASEL_ADDITIONAL_REPEATS limit_per_category=$PHASEL_LIMIT_PER_CATEGORY"
+nvidia-smi --query-gpu=index,name,memory.total --format=csv
+python3 phaseL/test_publication.py
+
+torchrun --standalone --nproc-per-node=4 phaseL/build_selection.py \
+  --out_root "$ROOT" --source_selection_dir phaseC \
+  --additional_repeats "$PHASEL_ADDITIONAL_REPEATS" \
+  --limit_per_category "$PHASEL_LIMIT_PER_CATEGORY" \
+  --N 4 --K 8 --cfg 7 --height 512
+
+python3 phaseL/summarize_selection.py \
+  --root "$ROOT" --expected_records "$PHASEL_EXPECTED_RECORDS" \
+  --expected_repeats "$((PHASEL_ADDITIONAL_REPEATS + 1))" \
+  --project sd-pref-repa-publication-v1 --group "$PHASEL_GROUP" --run_name "$RUN"
+
+jq -e '.pass == true' "$ROOT/summary.json" >/dev/null
+echo "[$(date --iso-8601=seconds)] Phase-L selection complete: $ROOT"
+if command -v my-job-stats >/dev/null 2>&1; then
+  my-job-stats -a -n -s
+fi

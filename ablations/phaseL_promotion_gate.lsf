@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+#BSUB -J sd-phaseL-gate
+#BSUB -G s10396
+#BSUB -q training-parallel
+#BSUB -n 2
+#BSUB -W 1:00
+#BSUB -R "span[hosts=1]"
+#BSUB -R "select[mem>16000]"
+#BSUB -R "rusage[mem=16000]"
+#BSUB -M 16000
+#BSUB -gpu "num=1:mode=exclusive_process"
+#BSUB -cwd /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM
+#BSUB -o /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-phaseL-gate-%J.out
+#BSUB -e /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-phaseL-gate-%J.err
+
+set -euo pipefail
+export PATH="/software/cellgen/team361/ha11/envs/nichejepa/bin:$PATH"
+export WANDB_MODE=online
+
+: "${PHASEL_GROUP:?missing Phase-L W&B group}"
+: "${PHASEI_EVAL_JOB:?missing Phase-I counterfactual evaluation job id}"
+
+JOB=${LSB_JOBID:-local}
+ROOT="phaseL/promotion_gate_${JOB}"
+RUN="phaseL_promotion_gate_${JOB}"
+python3 phaseL/check_promotion.py \
+  --eval_root "phaseI/counterfactual_eval_${PHASEI_EVAL_JOB}" \
+  --out "$ROOT/summary.json" \
+  --project sd-pref-repa-publication-v1 --group "$PHASEL_GROUP" --run_name "$RUN"
+
+echo "[$(date --iso-8601=seconds)] Phase-L promotion decision"
+jq . "$ROOT/summary.json"

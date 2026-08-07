@@ -1,0 +1,1047 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Few-step text-to-image generation — consistency, REPA, and preference distillation</title>
+
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/reveal.js@5.1.0/dist/reveal.css">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/reveal.js@5.1.0/dist/theme/white.css">
+
+<style>
+  :root {
+    --ink:#202124; --muted:#667085; --line:#cbd0d6;
+    --blue:#2c7fb8; --blue-bg:#eaf4fa;
+    --orange:#d97706; --orange-bg:#fff3e3;
+    --green:#27864f; --green-bg:#eaf7ef;
+    --purple:#7251b5; --purple-bg:#f3effb;
+    --red:#b43c31; --red-bg:#fbecea;
+    --gold:#9b7617; --gold-bg:#fbf7e8;
+  }
+  * { box-sizing:border-box; }
+  .reveal { font-size:28px; color:var(--ink); }
+  .reveal .slides { text-align:left; }
+  .reveal section { padding:8px 18px; }
+  .reveal h1 { font-size:1.72em; line-height:1.08; margin:0 0 .35em; letter-spacing:-.025em; }
+  .reveal h2 { font-size:1.20em; line-height:1.15; margin:0 0 .48em; letter-spacing:-.01em; }
+  .reveal h3 { font-size:.72em; line-height:1.2; margin:.15em 0 .35em; color:var(--muted); }
+  .reveal p, .reveal li { font-size:.62em; line-height:1.38; }
+  .reveal p { margin:.35em 0; }
+  .reveal ul { margin:.25em 0 .25em 1em; }
+  .reveal li { margin:.18em 0; }
+  .reveal a { color:var(--blue); text-decoration:none; }
+  .small { font-size:.54em !important; }
+  .tiny { font-size:.43em !important; color:var(--muted); line-height:1.35 !important; }
+  .center { text-align:center; }
+  .muted { color:var(--muted); }
+  .eyebrow { font-size:.46em; color:var(--muted); text-transform:uppercase;
+             letter-spacing:.09em; font-weight:700; margin-bottom:.7em; }
+  .subtitle { font-size:.68em !important; color:var(--muted); max-width:920px; margin:.4em auto !important; }
+  .claim { border-left:5px solid var(--gold); background:var(--gold-bg); border-radius:3px;
+           padding:.52em .72em; margin:.55em 0; font-size:.62em; line-height:1.36; }
+  .claim.good { border-color:var(--green); background:var(--green-bg); }
+  .claim.bad { border-color:var(--red); background:var(--red-bg); }
+  .claim.purple { border-color:var(--purple); background:var(--purple-bg); }
+
+  .cards { display:grid; grid-template-columns:repeat(3,1fr); gap:.55em; margin:.45em 0; }
+  .cards.two { grid-template-columns:repeat(2,1fr); }
+  .cards.four { grid-template-columns:repeat(4,1fr); }
+  .card { border:1.5px solid var(--line); border-radius:9px; padding:.52em .62em; background:#fff; color:var(--ink); }
+  .card h3 { margin:0 0 .28em; font-size:.66em; color:var(--ink); }
+  .card p, .card li { font-size:.50em; }
+  .card.blue { border-color:var(--blue); background:var(--blue-bg); }
+  .card.orange { border-color:var(--orange); background:var(--orange-bg); }
+  .card.green { border-color:var(--green); background:var(--green-bg); }
+  .card.purple { border-color:var(--purple); background:var(--purple-bg); }
+  .card.red { border-color:var(--red); background:var(--red-bg); }
+  .card.gold { border-color:var(--gold); background:var(--gold-bg); }
+  .status { display:inline-block; font-size:.38em; font-weight:700; padding:.18em .48em;
+            border-radius:999px; border:1px solid currentColor; vertical-align:middle; }
+  .status.pass { color:var(--green); background:var(--green-bg); }
+  .status.null { color:var(--red); background:var(--red-bg); }
+  .status.open { color:var(--gold); background:var(--gold-bg); }
+
+  .diagram { display:flex; align-items:center; justify-content:center; gap:.35em; margin:.48em auto; width:100%; }
+  .node { flex:1 1 0; min-width:0; border:1.6px solid var(--line); border-radius:9px;
+          background:#fff; padding:.48em .5em; text-align:center; font-size:.53em; line-height:1.27; color:var(--ink); }
+  .node.wide { flex:1.4 1 0; }
+  .node.blue { border-color:var(--blue); background:var(--blue-bg); }
+  .node.orange { border-color:var(--orange); background:var(--orange-bg); }
+  .node.green { border-color:var(--green); background:var(--green-bg); }
+  .node.purple { border-color:var(--purple); background:var(--purple-bg); }
+  .node.red { border-color:var(--red); background:var(--red-bg); }
+  .node.gold { border-color:var(--gold); background:var(--gold-bg); }
+  .arrow { flex:0 0 1.75em; text-align:center; color:var(--muted); font-size:.72em; line-height:1; }
+  .plus { flex:0 0 1.2em; text-align:center; color:var(--muted); font-size:.65em; }
+  .branch { display:grid; grid-template-columns:1fr 1.15fr 1fr; gap:.5em; align-items:stretch; margin:.4em 0; }
+  .branch .lane, .branch .mid { display:flex; flex-direction:column; justify-content:center; gap:.38em; }
+  .lane-label { font-size:.47em; font-weight:700; text-align:center; color:var(--muted); }
+
+  .equation { border:1px solid #e0e2e6; border-radius:8px; background:#fcfcfd;
+              padding:.35em .5em; margin:.38em 0; text-align:center; }
+  .equation mjx-container[display="true"] { margin:.18em 0 !important; }
+  .reveal mjx-container[display="true"] { font-size:.78em; margin:.4em 0 !important;
+                                           max-width:100%; overflow-x:auto; overflow-y:hidden; }
+  .reveal mjx-container > svg { width:auto !important; height:auto !important; max-height:none !important; }
+
+  table { width:100%; border-collapse:collapse; margin:.35em auto !important; font-size:.47em !important; }
+  th, td { padding:.32em .5em !important; border-bottom:1px solid #e0e2e6 !important; vertical-align:middle; }
+  th { border-bottom:2px solid #aeb4bc !important; color:#3d4249; font-weight:700 !important; }
+  td.num, th.num { text-align:right; white-space:nowrap; }
+  tr.bad td { background:var(--red-bg); }
+  tr.good td { background:var(--green-bg); }
+
+  .metric { text-align:center; padding:.35em .3em; }
+  .metric .value { font-size:1.22em; font-weight:750; line-height:1.05; }
+  .metric .label { font-size:.43em; color:var(--muted); margin-top:.35em; line-height:1.25; }
+  .metric .ci { font-size:.39em; color:var(--muted); margin-top:.2em; }
+  .figure-frame { display:block; width:auto; max-width:68%; max-height:420px; object-fit:contain;
+                  margin:.28em auto; border:1px solid #d7dbe0; border-radius:8px;
+                  box-shadow:0 2px 12px #00000014; }
+  .examples { display:grid; grid-template-columns:repeat(3,1fr); gap:.48em; margin:.42em 0; }
+  .example { border:1.5px solid var(--line); border-radius:9px; padding:.42em; background:#fff; }
+  .example .prompt { min-height:3.2em; font-size:.43em; line-height:1.28; color:var(--ink); margin:.1em 0 .35em; }
+  .image-pair { display:grid; grid-template-columns:1fr 1fr; gap:.24em; }
+  .image-pair img, .candidate-grid img, .evolution-grid img {
+    width:100%; height:185px; object-fit:contain; background:#f6f7f8;
+    border:1px solid #d7dbe0; border-radius:6px;
+  }
+  .image-labels { display:grid; grid-template-columns:1fr 1fr; gap:.24em; margin-top:.2em;
+                  text-align:center; font-size:.38em; color:var(--muted); line-height:1.2; }
+  .candidate-grid { display:grid; grid-template-columns:repeat(3,1fr); gap:.5em; align-items:start; margin:.4em 0; }
+  .candidate-grid img { height:270px; }
+  .candidate-grid .candidate-caption { font-size:.42em; line-height:1.28; text-align:center; margin-top:.25em; }
+  .evolution-grid { display:grid; grid-template-columns:repeat(3,1fr); gap:.38em; margin:.38em 0; }
+  .evolution-grid img { height:210px; }
+  .column-labels { display:grid; grid-template-columns:repeat(3,1fr); gap:.38em; text-align:center;
+                   font-size:.42em; color:var(--muted); font-weight:700; margin:.15em 0; }
+  .sources { font-size:.39em !important; color:var(--muted); line-height:1.35 !important; margin-top:.6em !important; }
+  .tag { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; background:#f1f3f5;
+         border-radius:4px; padding:.08em .32em; }
+</style>
+</head>
+<body>
+<div class="reveal"><div class="slides">
+
+<section class="center">
+  <div class="eyebrow">Proof of concept · audited evidence · \(7\) August \(2026\)</div>
+  <h1>Few-step text-to-image generation:<br>fidelity, consistency, and semantic choice</h1>
+  <p class="subtitle">What we built, what the experiments actually establish, and the shortest path to a defensible method.</p>
+  <div class="diagram" style="margin-top:1.1em;max-width:980px">
+    <div class="node blue"><strong>Consistency distillation</strong><br>\(\text{compress sampling steps}\)</div>
+    <div class="plus">\( + \)</div>
+    <div class="node green"><strong>REPA</strong><br>\(\text{protect visual fidelity}\)</div>
+    <div class="plus">\( + \)</div>
+    <div class="node purple"><strong>Pairwise preference</strong><br>\(\text{favour the right outcome}\)</div>
+  </div>
+  <p class="tiny" style="margin-top:1.3em">Base model: Stable Diffusion \(3.5\)-Medium, a multimodal diffusion transformer trained with rectified flow.</p>
+</section>
+
+<section>
+  <h2>The answer first — four claims, four evidence levels</h2>
+  <div class="cards four">
+    <div class="card orange">
+      <h3>Sampling compression <span class="status pass">works</span></h3>
+      <p>Our \(M1\) control reduces the \(4\)-step fidelity gap dramatically relative to unmodified SD\(3.5\)-M.</p>
+      <p><strong>Boundary:</strong> it is a custom CM/LCM-inspired baseline, not a canonical implementation of recent \(s\mathrm{CM}\) or \(r\mathrm{CM}\).</p>
+    </div>
+    <div class="card green">
+      <h3>REPA on \(M1\) <span class="status open">promising</span></h3>
+      <p>At \(4\) steps, \(\operatorname{CMMD}\) moves from \(69.7\) to \(67.4\) while VQAScore holds.</p>
+      <p><strong>Boundary:</strong> one seed and no confidence interval on the CMMD difference.</p>
+    </div>
+    <div class="card purple">
+      <h3>Pairwise student training <span class="status pass">works</span></h3>
+      <p>Correct teacher preferences beat randomized labels on independent CompBench and GenEval2.</p>
+      <p><strong>Effect:</strong> \(+0.04587\) and \(+0.04958\), with both paired \(95\%\) intervals above zero.</p>
+    </div>
+    <div class="card red">
+      <h3>MMDiT ranker <span class="status null">text read null</span></h3>
+      <p>It selects better images than random, but correct versus counterfactual text is null on official CompBench.</p>
+      <p><strong>Boundary:</strong> useful image-quality signal, not yet prompt-specific compatibility.</p>
+    </div>
+  </div>
+  <div class="claim purple"><strong>Most promising path:</strong> direct pairwise preference training is now the generator path. Keep REPA as the fidelity branch, and use the matched correct-versus-counterfactual label intervention to test whether the gain truly comes from prompt composition.</div>
+</section>
+
+<section>
+  <h2>The system in one picture</h2>
+  <div class="branch">
+    <div class="lane">
+      <div class="lane-label">Generation branch</div>
+      <div class="node blue">prompt \(c\)<br>noise \(z_T\)</div>
+      <div class="arrow" style="margin:auto">\(\Downarrow\)</div>
+      <div class="node orange">few-step student<br>\(v_\theta(z_t,t,c)\)</div>
+    </div>
+    <div class="mid">
+      <div class="node orange"><strong>Consistency</strong><br>match a frozen teacher target from a noisier state</div>
+      <div class="node green"><strong>REPA</strong><br>align a hidden image representation to frozen DINOv2 features</div>
+      <div class="node purple"><strong>Preference</strong><br>compare student error on a preferred and rejected teacher outcome</div>
+    </div>
+    <div class="lane">
+      <div class="lane-label">Desired effects</div>
+      <div class="node orange">few inference steps</div>
+      <div class="node green">high visual fidelity</div>
+      <div class="node purple">correct composition</div>
+    </div>
+  </div>
+  <div class="claim purple">These are not interchangeable losses. Consistency constrains the denoising map, REPA constrains an internal representation, and pairwise training changes which teacher outcomes the student learns to reproduce.</div>
+</section>
+
+<section>
+  <h2>Minimal notation — no overloaded symbols</h2>
+  <div class="cards two">
+    <div class="card blue">
+      <h3>Along one diffusion trajectory</h3>
+      <div class="diagram">
+        <div class="node blue">\(z_{k-g}\)<br><span class="muted">noisier</span></div>
+        <div class="arrow">\(\longrightarrow\)</div>
+        <div class="node blue">\(z_k\)<br><span class="muted">cleaner</span></div>
+      </div>
+      <p>\(k\) is a scheduler index. The code calls \(g=k-(k-g)\) “delta”; here we call it the <strong>step gap</strong> to avoid confusion:</p>
+      <p class="center">\(g\in\{1,2,3\}\).</p>
+    </div>
+    <div class="card purple">
+      <h3>Across candidate images</h3>
+      <div class="diagram">
+        <div class="node purple">\(\{x_j\}_{j=1}^{J}\)</div>
+        <div class="arrow">\(\longrightarrow\)</div>
+        <div class="node purple">\(\{s_j=s(x_j,c)\}\)</div>
+      </div>
+      <p>\(J\) is the number of candidate images for one prompt. Phase J uses \(J=8\) for ranker training; Phase I and held-out generator tests use \(J=4\).</p>
+      <p>In result tables, \(\Delta_{\mathrm{CB}}\) means a paired <strong>CompBench score difference</strong>, not a diffusion step.</p>
+    </div>
+  </div>
+</section>
+
+<section>
+  <h2>Consistency distillation — what one training example does</h2>
+  <div class="diagram">
+    <div class="node blue">prompt \(c\)<br>initial noise \(z_T^{\,i}\)</div>
+    <div class="arrow">\(\longrightarrow\)</div>
+    <div class="node blue wide">frozen teacher \(\xi\)<br>\(8\) Euler steps, \(\operatorname{CFG}=7\)</div>
+    <div class="arrow">\(\longrightarrow\)</div>
+    <div class="node blue">cleaner state \(z_k^{\,i}\)<br>teacher target \(\widetilde x_0^{\,i,k}\)</div>
+  </div>
+  <div class="diagram">
+    <div class="node orange">same trajectory<br>noisier state \(z_{k-g}^{\,i}\)</div>
+    <div class="arrow">\(\longrightarrow\)</div>
+    <div class="node orange wide">trainable student \(\theta\)<br>one unguided forward</div>
+    <div class="arrow">\(\longrightarrow\)</div>
+    <div class="node orange">student estimate<br>\(\widehat x_0^{\,i,k-g}\)</div>
+    <div class="arrow">\(\longrightarrow\)</div>
+    <div class="node red">match the frozen target</div>
+  </div>
+  <div class="equation">
+    \[
+      \widetilde x_0^{\,i,k}=z_k^{\,i}-\sigma_k v_\xi^{\mathrm{CFG}}(z_k^{\,i},k,c),
+      \qquad
+      \widehat x_0^{\,i,k-g}=z_{k-g}^{\,i}-\sigma_{k-g}v_\theta(z_{k-g}^{\,i},k-g,c).
+    \]
+  </div>
+  <p class="small center">Each optimiser step uses \(4\) trajectories and \(5\) teacher indices: \(20\) student–target pairs.</p>
+</section>
+
+<section>
+  <h2>Where our consistency baseline comes from</h2>
+  <div class="diagram">
+    <div class="node blue"><strong>CM / LCM</strong><br>outputs agree along one probability-flow trajectory</div>
+    <div class="arrow">\(\longrightarrow\)</div>
+    <div class="node blue"><strong>iCT</strong><br>pseudo-Huber distance and removal of a drifting EMA target</div>
+    <div class="arrow">\(\longrightarrow\)</div>
+    <div class="node orange"><strong>our \(M1\)</strong><br>discrete \(x_0\)-matching on coarse SD\(3.5\) teacher trajectories</div>
+  </div>
+  <div class="cards two">
+    <div class="card green">
+      <h3>Literature-aligned ingredients</h3>
+      <ul>
+        <li>trajectory self-consistency;</li>
+        <li>guided teacher and unguided student;</li>
+        <li>stop-gradient target;</li>
+        <li>\(d_{\mathrm{PH}}\) with \(c=0.00054\sqrt D\) from iCT.</li>
+      </ul>
+    </div>
+    <div class="card gold">
+      <h3>Important departures</h3>
+      <ul>
+        <li>coarse \(8\)-step Euler trajectories and \(g\in\{1,2,3\}\);</li>
+        <li>no canonical CM boundary parameterisation;</li>
+        <li>not the continuous-time \(s\mathrm{CM}\) or score-regularised \(r\mathrm{CM}\) objective.</li>
+      </ul>
+    </div>
+  </div>
+  <div class="claim"><strong>Reviewer-safe description:</strong> \(M1\) is our audited internal frozen-teacher trajectory-\(x_0\) distillation control. It is valid for the one-variable REPA comparison, but a publication must additionally compare against a canonical recent baseline such as \(s\mathrm{CM}\) or \(r\mathrm{CM}\).</div>
+  <p class="sources">Primary sources: <a href="https://proceedings.mlr.press/v202/song23a.html">Consistency Models, ICML \(2023\)</a> · <a href="https://arxiv.org/abs/2310.04378">Latent Consistency Models</a> · <a href="https://openreview.net/forum?id=WNzy9bRDvG">Improved Techniques, ICLR \(2024\)</a> · <a href="https://proceedings.iclr.cc/paper_files/paper/2025/hash/7e9c2053258b1bdd32ff2654802cd594-Abstract-Conference.html">\(s\mathrm{CM}\), ICLR \(2025\)</a>.</p>
+</section>
+
+<section>
+  <h2>The exact \(M1\) objective — and what it does not contain</h2>
+  <div class="equation">
+    \[
+      \mathcal L_{\mathrm{CD}}
+      =\frac{1}{20}\sum_{i=1}^{4}\sum_{k\in\mathcal K}
+      d_{\mathrm{PH}}\!\left(
+      \widehat x_0^{\,i,k-g},\operatorname{sg}[\widetilde x_0^{\,i,k}]
+      \right),
+      \qquad
+      d_{\mathrm{PH}}(a,b)=\sqrt{\lVert a-b\rVert_2^2+c^2}-c.
+    \]
+  </div>
+  <div class="diagram">
+    <div class="node blue">teacher pairs<br>\(20\) per prompt</div>
+    <div class="arrow">\(\longrightarrow\)</div>
+    <div class="node gold">uniform weight<br>\(W_{i,k}=1/20\)</div>
+    <div class="arrow">\(\longrightarrow\)</div>
+    <div class="node orange">student update</div>
+  </div>
+  <div class="claim bad"><strong>No candidate is scored, selected, or favoured during \(M1\) distillation.</strong> The teacher produces \(4\) trajectories, and all \(20\) trajectory–timestep pairs contribute equally. A semantically wrong but visually plausible trajectory receives the same weight as a correct one.</div>
+</section>
+
+<section>
+  <h2>REPA — a separate fidelity signal on real images</h2>
+  <div class="branch">
+    <div class="lane">
+      <div class="node">real COCO image \(x\)</div>
+      <div class="node">VAE and noise<br>\(x\mapsto z_0\mapsto z_t\)</div>
+      <div class="node orange">student blocks \(1{:}8\)<br>hidden image tokens \(h_8\)</div>
+    </div>
+    <div class="mid">
+      <div class="node orange">trainable projector \(P_\phi\)</div>
+      <div class="node red">patch-wise cosine loss</div>
+    </div>
+    <div class="lane">
+      <div class="node">same clean image \(x\)</div>
+      <div class="arrow" style="margin:auto">\(\Downarrow\)</div>
+      <div class="node green">frozen DINOv2-B<br>patch tokens \(E(x)\)</div>
+    </div>
+  </div>
+  <div class="equation">
+    \[
+      \mathcal L_{\mathrm{REPA}}
+      =\frac{1}{P}\sum_{p=1}^{P}\left[1-\cos\!\left(P_\phi(h_{8,p}),E(x)_p\right)\right].
+    \]
+  </div>
+  <div class="claim">REPA never compares alternative teacher trajectories and does not teach compositional prompt correctness. It improves the visual representation learned inside the denoiser.</div>
+  <p class="sources">Source: <a href="https://openreview.net/forum?id=DJSZGGZYVi">Representation Alignment for Generation, ICLR \(2025\)</a>.</p>
+</section>
+
+<section>
+  <h2>Our REPA experiment — one treatment, one control</h2>
+  <div class="diagram">
+    <div class="node orange">same \(M1\) initialisation<br>same COCO pairs<br>same \(20{,}000\) updates</div>
+    <div class="arrow">\(\longrightarrow\)</div>
+    <div class="node gold">only changed<br>\(\lambda_{\mathrm{REPA}}:0\mapsto0.5\)<br>hook at block \(8\)</div>
+    <div class="arrow">\(\longrightarrow\)</div>
+    <div class="node green">same \(640\) evaluation prompts<br>same seeds and scorers</div>
+  </div>
+  <div class="cards four">
+    <div class="metric card"><div class="value">\(69.7\)</div><div class="label">\(M1\) CMMD at \(4\) steps</div></div>
+    <div class="metric card green"><div class="value">\(67.4\)</div><div class="label">\(M1+\mathrm{REPA}\) CMMD</div></div>
+    <div class="metric card"><div class="value">\(-2.3\)</div><div class="label">point difference, lower is better</div></div>
+    <div class="metric card"><div class="value">\(14.7\%\)</div><div class="label">gap to \(28\)-step teacher closed</div></div>
+  </div>
+  <div class="cards two">
+    <div class="card green"><h3>What passed</h3><p>VQAScore held: \(0.7910\) versus \(0.7848\). Parameter drift matched \(M1\) to three significant figures, excluding the earlier damping confound.</p></div>
+    <div class="card gold"><h3>What remains open</h3><p>The VQAScore interval crosses zero; CMMD has no paired interval; only one training seed was run. The correct claim is <strong>promising fidelity gain</strong>, not established improvement.</p></div>
+  </div>
+</section>
+
+<section>
+  <h2>Why candidate ranking is worth testing</h2>
+  <div class="cards two" style="grid-template-columns:1.15fr .85fr;align-items:center">
+    <div>
+      <img class="figure-frame" style="max-width:100%;max-height:480px;margin:0 auto"
+           src="figures/phaseJ_candidate_trajectories.png"
+           alt="Four generated candidates for a squirrel and black nut prompt">
+    </div>
+    <div>
+      <div class="card purple">
+        <h3>Same prompt, different semantics</h3>
+        <p><strong>Prompt:</strong> “a brown squirrel and a black nut.” Count, identity, scale, and spatial relation change across trajectories.</p>
+        <p><strong>Source:</strong> external \(M1\) bank, \(4\)-step samples. Candidate VQAScores are approximately</p>
+        <div class="equation">\[(0.649,\ 0.770,\ 0.815,\ 0.965).\]</div>
+      </div>
+      <div class="claim purple"><strong>Hypothesis:</strong> REPA protects fidelity, while a prompt-aware scorer identifies the outcome that preserves the requested composition. Distillation must then transfer that preference without collapsing fidelity or diversity.</div>
+    </div>
+  </div>
+</section>
+
+<section>
+  <h2>Decisive prior test — oracle selection did not transfer through \(M1\)</h2>
+  <div class="diagram">
+    <div class="node blue">same prompt<br>\(4\) teacher trajectories</div>
+    <div class="arrow">\(\longrightarrow\)</div>
+    <div class="node green">oracle VQAScore chooses endpoint<br>\(+0.124\) over random</div>
+    <div class="arrow">\(\longrightarrow\)</div>
+    <div class="node orange">distil the selected trajectory<br>current consistency recipe</div>
+    <div class="arrow">\(\longrightarrow\)</div>
+    <div class="node purple">evaluate fresh \(4\)-step samples<br>independent metrics</div>
+  </div>
+  <div class="cards three">
+    <div class="metric card gold"><div class="value">\(+0.0142\)</div><div class="label">in-objective VQAScore</div><div class="ci">\([+0.0075,+0.0207]\)</div></div>
+    <div class="metric card red"><div class="value">\(+0.0004\)</div><div class="label">independent CompBench</div><div class="ci">\([-0.0090,+0.0097]\)</div></div>
+    <div class="metric card red"><div class="value">\(+0.0065\)</div><div class="label">GenEval2</div><div class="ci">\([-0.0109,+0.0239]\)</div></div>
+  </div>
+  <div class="claim bad"><strong>Phase C1 conclusion:</strong> even a perfect endpoint selector moved the student mainly on its own metric and transferred almost nothing (\(T\approx0.03\)). Selecting a different initial-noise trajectory changes which input–target pair is seen, but not the teacher’s conditional map under fresh inference noise.</div>
+  <div class="claim purple"><strong>Implication:</strong> building a better ranker remains useful for reranking and for defining reward, but the generator path must modify the target marginal or add a reward gradient; input-side trajectory selection alone is already falsified.</div>
+</section>
+
+<section>
+  <h2>Phase I — make the preference an explicit student loss</h2>
+  <div class="diagram">
+    <div class="node blue">same prompt \(c\)<br>same \(4\) teacher candidates</div>
+    <div class="arrow">\(\longrightarrow\)</div>
+    <div class="node green">preferred target \(u^+\)<br>rejected target \(u^-\)</div>
+    <div class="arrow">\(\longrightarrow\)</div>
+    <div class="node purple wide">compare student errors<br>relative to frozen \(M1\)</div>
+    <div class="arrow">\(\longrightarrow\)</div>
+    <div class="node orange">update the \(4\)-step student<br>with an \(M1\) anchor</div>
+  </div>
+  <div class="equation">
+    \[
+      e_\theta^\pm=\left\lVert v_\theta(z_t^\pm,t,c)-u^\pm\right\rVert_2^2,
+      \qquad
+      \Delta_\theta=e_\theta^+-e_\theta^-,
+      \qquad
+      \Delta_0=e_0^+-e_0^-,
+    \]
+    \[
+      \mathcal L_{\mathrm{pref}}
+      =-\log\sigma\!\left[-\beta(\Delta_\theta-\Delta_0)\right],
+      \qquad
+      \mathcal L_I=\mathcal L_{\mathrm{pref}}
+      +\lambda_{\mathrm{anchor}}\mathcal L_{\mathrm{M1}}
+      +\lambda_{\mathrm{REPA}}\mathcal L_{\mathrm{REPA}}.
+    \]
+  </div>
+  <div class="cards three">
+    <div class="card red"><h3>Placebo</h3><p>The same top–bottom images and score margins, but the preferred sign is deterministically randomized.</p></div>
+    <div class="card purple"><h3>Preference</h3><p>VQAScore orients the same pair: high-scoring teacher endpoint preferred to low-scoring endpoint.</p></div>
+    <div class="card green"><h3>Preference \(+\) REPA</h3><p>The same preference loss plus the separately synchronized DINOv2 representation branch.</p></div>
+  </div>
+  <div class="claim"><strong>Causal comparison:</strong> all three arms start from the same \(M1\), use the same candidates, data order, noise coupling, optimizer, and \(3{,}000\) updates. Only the label sign and REPA branch change.</div>
+</section>
+
+<section>
+  <h2>Phase I result — explicit preferences transfer to fresh samples</h2>
+  <div class="cards four">
+    <div class="metric card green"><div class="value">\(+0.04587\)</div><div class="label">Preference minus placebo<br>official CompBench</div><div class="ci">\([+0.03660,+0.05483]\)</div></div>
+    <div class="metric card green"><div class="value">\(+0.04958\)</div><div class="label">Preference minus placebo<br>GenEval2 Soft-TIFA</div><div class="ci">\([+0.02910,+0.06943]\)</div></div>
+    <div class="metric card green"><div class="value">\(+0.00833\)</div><div class="label">Preference \(+\) REPA minus preference<br>official CompBench</div><div class="ci">\([+0.00140,+0.01540]\)</div></div>
+    <div class="metric card gold"><div class="value">\(+0.00642\)</div><div class="label">Preference \(+\) REPA minus preference<br>GenEval2 Soft-TIFA</div><div class="ci">\([-0.01112,+0.02416]\)</div></div>
+  </div>
+  <table>
+    <thead><tr><th>Four-step generator</th><th class="num">CompBench</th><th class="num">GenEval2</th><th>Interpretation</th></tr></thead>
+    <tbody>
+      <tr><td>frozen \(M1\)</td><td class="num">\(0.49482\)</td><td class="num">\(0.21294\)</td><td>starting student</td></tr>
+      <tr><td>random-label placebo</td><td class="num">\(0.49092\)</td><td class="num">\(0.20203\)</td><td>matched compute without correct orientation</td></tr>
+      <tr class="good"><td>correct preference</td><td class="num">\(0.53679\)</td><td class="num">\(0.25162\)</td><td>independent gains on both benchmarks</td></tr>
+      <tr class="good"><td>correct preference \(+\) REPA</td><td class="num">\(0.54511\)</td><td class="num">\(0.25804\)</td><td>CompBench increment passes; GenEval increment is null</td></tr>
+    </tbody>
+  </table>
+  <div class="claim good"><strong>Supported:</strong> a pairwise comparative loss can move the output distribution where winner-only consistency regression did not.</div>
+  <div class="claim bad"><strong>Fidelity caveat:</strong> the first Phase I FID/CMMD file compared CompBench-prompt generations with COCO references, so those numbers are excluded. The new evaluation job uses a separate matched \(2{,}398\)-caption COCO pool and four-seed diversity tests.</div>
+  <p class="sources">Completed training jobs \(99952\)–\(99954\); evaluation job \(99955\). Paired prompt bootstrap intervals use official CompBench category scorers and an independent GenEval2 judge.</p>
+</section>
+
+<section>
+  <h2>Phase I category audit — where the gains come from</h2>
+  <table>
+    <thead><tr><th>CompBench category</th><th class="num">Preference minus placebo</th><th class="num">Preference \(+\) REPA minus preference</th><th>Read</th></tr></thead>
+    <tbody>
+      <tr class="good"><td>colour</td><td class="num">\(+0.06360\;[+0.04409,+0.08390]\)</td><td class="num">\(+0.01007\;[-0.00207,+0.02264]\)</td><td>preference pass</td></tr>
+      <tr class="good"><td>shape</td><td class="num">\(+0.06965\;[+0.04813,+0.09166]\)</td><td class="num">\(+0.01659\;[+0.00178,+0.03137]\)</td><td>both pass</td></tr>
+      <tr class="good"><td>texture</td><td class="num">\(+0.04916\;[+0.02953,+0.06925]\)</td><td class="num">\(+0.02415\;[+0.01082,+0.03811]\)</td><td>both pass</td></tr>
+      <tr class="good"><td>two-dimensional spatial</td><td class="num">\(+0.08582\;[+0.04621,+0.12580]\)</td><td class="num">\(-0.02326\;[-0.05599,+0.00879]\)</td><td>preference pass; REPA null</td></tr>
+      <tr><td>three-dimensional spatial</td><td class="num">\(+0.00591\;[-0.01435,+0.02654]\)</td><td class="num">\(+0.02584\;[+0.00990,+0.04206]\)</td><td>REPA increment passes</td></tr>
+      <tr><td>numeracy</td><td class="num">\(+0.02097\;[-0.00372,+0.04653]\)</td><td class="num">\(+0.00242\;[-0.01972,+0.02447]\)</td><td>both null</td></tr>
+      <tr class="good"><td>complex</td><td class="num">\(+0.02597\;[+0.01645,+0.03560]\)</td><td class="num">\(+0.00249\;[-0.00321,+0.00846]\)</td><td>preference pass</td></tr>
+      <tr><td>non-spatial <span class="muted">secondary</span></td><td class="num">\(+0.00198\;[+0.00025,+0.00374]\)</td><td class="num">\(-0.00061\;[-0.00202,+0.00081]\)</td><td>small preference pass</td></tr>
+    </tbody>
+  </table>
+  <div class="cards two">
+    <div class="card green"><h3>Robust pattern</h3><p>Preference supervision clearly improves colour, shape, texture, two-dimensional relations, and complex prompts.</p></div>
+    <div class="card gold"><h3>Open pattern</h3><p>Numeracy and three-dimensional relations remain difficult. REPA is mixed by category even though its equal-category CompBench aggregate is positive.</p></div>
+  </div>
+  <div class="claim"><strong>Interpretation:</strong> the aggregate is not driven by one category, but neither method solves every compositional skill. The matched counterfactual-label experiment therefore keeps all categories and reports them separately.</div>
+</section>
+
+<section>
+  <h2>Held-out examples — what the aggregate benchmark gain looks like</h2>
+  <div class="examples">
+    <div class="example">
+      <p class="prompt">CompBench: “a small stop sign and a pyramidal paperweight”</p>
+      <div class="image-pair">
+        <img src="figures/architecture/compbench_p00460_placebo.png" alt="Placebo image for stop sign and pyramidal paperweight">
+        <img src="figures/architecture/compbench_p00460_preference.png" alt="Preference image for stop sign and pyramidal paperweight">
+      </div>
+      <div class="image-labels"><span>placebo \(0.158\)</span><span>preference \(0.938\)</span></div>
+    </div>
+    <div class="example">
+      <p class="prompt">CompBench: “a metallic desk lamp and a wooden toy”</p>
+      <div class="image-pair">
+        <img src="figures/architecture/compbench_p00609_placebo.png" alt="Placebo image for metallic lamp and wooden toy">
+        <img src="figures/architecture/compbench_p00609_preference.png" alt="Preference image for metallic lamp and wooden toy">
+      </div>
+      <div class="image-labels"><span>placebo \(0.296\)</span><span>preference \(0.912\)</span></div>
+    </div>
+    <div class="example">
+      <p class="prompt">GenEval2: “a monkey behind a penguin”</p>
+      <div class="image-pair">
+        <img src="figures/architecture/geneval2_p00056_placebo.png" alt="Placebo image for monkey behind penguin">
+        <img src="figures/architecture/geneval2_p00056_preference.png" alt="Preference image for monkey behind penguin">
+      </div>
+      <div class="image-labels"><span>placebo \(0.202\)</span><span>preference \(1.000\)</span></div>
+    </div>
+  </div>
+  <div class="claim"><strong>How to read this slide:</strong> these are transparent, fixed-index illustrations—not the statistical evidence. The claims come from all \(2{,}098\) primary CompBench pairs and all \(800\) GenEval2 prompts.</div>
+</section>
+
+<section>
+  <h2>Training-phase visual audit — quality stays stable while the student moves</h2>
+  <p class="small center">Fixed noise seeds and prompts are rendered every \(250\) updates; columns below are the same samples at steps \(0\), \(1{,}500\), and \(3{,}000\).</p>
+  <div class="column-labels"><span>step \(0\)</span><span>step \(1{,}500\)</span><span>step \(3{,}000\)</span></div>
+  <p class="tiny center">“A photograph of a tabby cat sitting on a wooden table next to a cup of coffee”</p>
+  <div class="evolution-grid">
+    <img src="figures/architecture/preference_prompt0_step0000.png" alt="Preference student cat sample at step zero">
+    <img src="figures/architecture/preference_prompt0_step1500.png" alt="Preference student cat sample at step one thousand five hundred">
+    <img src="figures/architecture/preference_prompt0_step3000.png" alt="Preference student cat sample at step three thousand">
+  </div>
+  <p class="tiny center">“A red bicycle leaning against a brick wall covered in ivy”</p>
+  <div class="evolution-grid">
+    <img src="figures/architecture/preference_prompt2_step0000.png" alt="Preference student bicycle sample at step zero">
+    <img src="figures/architecture/preference_prompt2_step1500.png" alt="Preference student bicycle sample at step one thousand five hundred">
+    <img src="figures/architecture/preference_prompt2_step3000.png" alt="Preference student bicycle sample at step three thousand">
+  </div>
+  <div class="claim"><strong>Purpose:</strong> this monitor catches collapse, seed drift, and accidental overwrite during training. It is a qualitative audit; the held-out metrics above decide the experiment.</div>
+</section>
+
+<section>
+  <h2>Phase J — the ranking experiment, end to end</h2>
+  <div class="diagram">
+    <div class="node blue">training prompts<br>\(1{,}200\)</div>
+    <div class="arrow">\(\longrightarrow\)</div>
+    <div class="node blue wide">frozen teacher<br>\(8\) candidates per prompt</div>
+    <div class="arrow">\(\longrightarrow\)</div>
+    <div class="node gold">VQAScore labels<br>\(r_{p,j}\)</div>
+    <div class="arrow">\(\longrightarrow\)</div>
+    <div class="node purple">train scalar scorer<br>\(s_\psi(x_{p,j},c_p)\)</div>
+  </div>
+  <div class="diagram">
+    <div class="node orange">external prompts<br>\(2{,}398\), zero text overlap</div>
+    <div class="arrow">\(\longrightarrow\)</div>
+    <div class="node orange wide">frozen \(M1\), \(4\) steps<br>\(4\) new candidates per prompt</div>
+    <div class="arrow">\(\longrightarrow\)</div>
+    <div class="node purple">select \(\arg\max_j s_\psi\)</div>
+    <div class="arrow">\(\longrightarrow\)</div>
+    <div class="node green">official CompBench<br>against original prompt</div>
+  </div>
+  <div class="claim"><strong>This is a reranking proof of concept, not a new generator result.</strong> It uses no ground-truth reference image, but the labels come from VQAScore and the prompts come from the CompBench family; therefore it is not publication-grade generalisation evidence.</div>
+</section>
+
+<section>
+  <h2>Scorer A — frozen SD\(3.5\) MMDiT with a small readout</h2>
+  <div class="diagram">
+    <div class="node">candidate \(x_j\)<br>prompt \(c\)</div>
+    <div class="arrow">\(\longrightarrow\)</div>
+    <div class="node blue">VAE latent<br>common re-noising<br>\(\sigma\in\{0.15,0.35,0.60\}\)</div>
+    <div class="arrow">\(\longrightarrow\)</div>
+    <div class="node blue wide">frozen SD\(3.5\) MMDiT<br>blocks \(8,16,23\)</div>
+    <div class="arrow">\(\longrightarrow\)</div>
+    <div class="node purple">trainable MLP readout<br>\(\approx1.2\) M parameters</div>
+    <div class="arrow">\(\longrightarrow\)</div>
+    <div class="node purple">scalar \(s_j\)</div>
+  </div>
+  <div class="cards two">
+    <div class="card blue"><h3>Frozen feature extractor</h3><p>For every layer–noise view, pool image-token mean and standard deviation, text-attention-weighted image features, and text-token mean; add multiplicative and absolute-difference interactions.</p></div>
+    <div class="card purple"><h3>“Ranking head” means this</h3><p>A small trainable scalar readout appended to the frozen backbone. It is unrelated to an attention head. Three independently seeded readouts are trained and their standardised scores are averaged.</p></div>
+  </div>
+</section>
+
+<section>
+  <h2>Scorer B — trainable MMDiT fusion on frozen tokens</h2>
+  <div class="branch">
+    <div class="lane">
+      <div class="node green">candidate \(x_j\)</div>
+      <div class="arrow" style="margin:auto">\(\Downarrow\)</div>
+      <div class="node green">frozen DINOv2<br>\(64\times768\) image tokens</div>
+    </div>
+    <div class="mid">
+      <div class="node purple">two trainable lucidrains-MMDiT blocks<br>\(12\) attention heads per block</div>
+      <div class="node purple">pooled interaction readout<br>\(29.1\) M trainable parameters</div>
+      <div class="node purple">scalar \(s_j\)</div>
+    </div>
+    <div class="lane">
+      <div class="node blue">prompt \(c\)</div>
+      <div class="arrow" style="margin:auto">\(\Downarrow\)</div>
+      <div class="node blue">frozen CLIP text encoder<br>\(77\times768\) text tokens</div>
+    </div>
+  </div>
+  <div class="claim">The cloned <a href="https://github.com/lucidrains/mmdit">lucidrains MMDiT</a> validates the joint text–image attention primitive. It does not supply pretrained ranking knowledge; the two fusion blocks and scalar readout learn from the \(1{,}200\)-prompt pilot bank.</div>
+</section>
+
+<section>
+  <h2>The ranking objective — every symbol and its origin</h2>
+  <div class="diagram">
+    <div class="node gold">labels<br>\(r_j=\operatorname{VQAScore}(x_j,c)\)</div>
+    <div class="arrow">\(\longrightarrow\)</div>
+    <div class="node gold">soft target<br>\(q_j=\operatorname{softmax}_j((r_j-\bar r)/\tau_r)\)</div>
+    <div class="plus">\(\parallel\)</div>
+    <div class="node purple">model scores<br>\(s_j=s_\psi(x_j,c)\)</div>
+    <div class="arrow">\(\longrightarrow\)</div>
+    <div class="node purple">predicted choice<br>\(p_j=\operatorname{softmax}_j(s_j)\)</div>
+  </div>
+  <div class="equation">
+    \[
+      \mathcal L_{\mathrm{rank}}
+      =\underbrace{-\sum_{j=1}^{J}q_j\log p_j}_{\text{ListNet-style soft listwise cross-entropy}}
+      +\lambda_{\mathrm{pair}}
+      \underbrace{\log\!\left(1+e^{-(s_{j^+}-s_{j^-})}\right)}_{\text{RankNet / Bradley--Terry-style best--worst logistic loss}},
+    \]
+    \[
+      j^+=\arg\max_j r_j,\qquad j^-=\arg\min_j r_j,\qquad
+      \tau_r=0.05,\qquad \lambda_{\mathrm{pair}}=0.25.
+    \]
+  </div>
+  <p class="small">The old slide’s \(\operatorname{CE}\) arguments were ambiguous. The code computes \(H(q,p)=-\sum_jq_j\log p_j\). Also, \(r_j-\bar r\) is mathematically redundant because softmax is invariant to a common shift.</p>
+  <p class="sources">Objective families: <a href="https://www.microsoft.com/en-us/research/publication/learning-to-rank-from-pairwise-approach-to-listwise-approach/">ListNet, ICML \(2007\)</a> · <a href="https://www.microsoft.com/en-us/research/wp-content/uploads/2005/08/icml_ranking.pdf">RankNet, ICML \(2005\)</a> · T2I precedent: <a href="https://papers.nips.cc/paper_files/paper/2023/hash/33646ef0ed554145eab65f6250fab0c9-Abstract-Conference.html">ImageReward, NeurIPS \(2023\)</a>.</p>
+</section>
+
+<section>
+  <h2>Phase J objective audit — \(0.25\) was only a pilot</h2>
+  <p class="small">The historical hybrid used an unswept best–worst coefficient \(\lambda_{\mathrm{pair}}=0.25\). We therefore reran the same fusion architecture with standard listwise and all-pairs Bradley–Terry objectives, then added two wrong-prompt controls.</p>
+  <table>
+    <thead><tr><th>Training arm</th><th class="num">external recovery</th><th class="num">cached correct minus shuffled VQAScore</th><th>Read</th></tr></thead>
+    <tbody>
+      <tr><td>historical ListNet plus best–worst, \(\lambda_{\mathrm{pair}}=0.25\)</td><td class="num">\(0.195\)</td><td class="num">\(+0.00072\;[-0.00105,+0.00251]\)</td><td>null</td></tr>
+      <tr><td>ListNet</td><td class="num">\(0.229\)</td><td class="num">\(+0.00126\;[-0.00144,+0.00389]\)</td><td>null</td></tr>
+      <tr><td>all-pairs Bradley–Terry</td><td class="num">\(0.256\)</td><td class="num">\(+0.00208\;[-0.00136,+0.00546]\)</td><td>null</td></tr>
+      <tr class="good"><td>Bradley–Terry plus absolute wrong-prompt loss</td><td class="num">\(0.230\)</td><td class="num">\(+0.01077\;[+0.00521,+0.01621]\)</td><td>cached pass</td></tr>
+      <tr class="good"><td>Bradley–Terry plus interaction wrong-prompt loss</td><td class="num">\(0.256\)</td><td class="num">\(+0.00470\;[+0.00077,+0.00864]\)</td><td>cached pass</td></tr>
+    </tbody>
+  </table>
+  <div class="claim"><strong>Conclusion:</strong> removing \(0.25\) did not hurt recovery, and all-pairs Bradley–Terry was the strongest simple objective. Explicit wrong-prompt supervision created prompt sensitivity in the cached VQAScore audit, but that signal still had to survive an independent evaluator.</div>
+  <p class="sources">Runs: <a href="https://wandb.ai/mll_sut/sd-mmdit-ranker-v1/runs/phaseJ_objective_listnet_99818">ListNet \(99818\)</a> · <a href="https://wandb.ai/mll_sut/sd-mmdit-ranker-v1/runs/phaseJ_objective_bt_99819">Bradley–Terry \(99819\)</a> · <a href="https://wandb.ai/mll_sut/sd-mmdit-ranker-v1/runs/phaseJ_objective_bt_text_99820">absolute text \(99820\)</a> · <a href="https://wandb.ai/mll_sut/sd-mmdit-ranker-v1/runs/phaseJ_objective_bt_text_interaction_99829">interaction text \(99829\)</a>.</p>
+</section>
+
+<section>
+  <h2>Training and evaluation — what is held out</h2>
+  <div class="diagram">
+    <div class="node blue">training bank<br>\(1{,}200\times8\)</div>
+    <div class="arrow">\(\longrightarrow\)</div>
+    <div class="node blue">prompt-hash split<br>\(950\) train, \(250\) validation</div>
+    <div class="arrow">\(\longrightarrow\)</div>
+    <div class="node purple">early stopping by validation headroom<br>\(3\) random seeds</div>
+    <div class="arrow">\(\longrightarrow\)</div>
+    <div class="node purple">refit selected epoch count on all \(1{,}200\)</div>
+  </div>
+  <div class="diagram">
+    <div class="node orange">external bank<br>\(2{,}398\times4\)</div>
+    <div class="arrow">\(\longleftarrow\)</div>
+    <div class="node red wide">never used for fitting or checkpoint choice</div>
+    <div class="arrow">\(\longrightarrow\)</div>
+    <div class="node green">paired \(10{,}000\)-bootstrap intervals by prompt</div>
+  </div>
+  <div class="claim"><strong>Unit of comparison:</strong> all methods rank the same candidates for each prompt. Official CompBench evaluates the selected image against the original prompt, so \(\Delta_{\mathrm{CB}}=\mathrm{CB}(A)-\mathrm{CB}(B)\) is the equal-category mean of a paired treatment–control difference.</div>
+</section>
+
+<section>
+  <h2>Phase J evidence \(1\) — the ranker selects better-than-random images</h2>
+  <div class="cards three">
+    <div class="metric card purple"><div class="value">\(+0.02513\)</div><div class="label">absolute text arm minus random<br>official \(\Delta_{\mathrm{CB}}\)</div><div class="ci">\([+0.01624,+0.03415]\)</div></div>
+    <div class="metric card blue"><div class="value">\(+0.02414\)</div><div class="label">interaction text arm minus random<br>official \(\Delta_{\mathrm{CB}}\)</div><div class="ci">\([+0.01546,+0.03292]\)</div></div>
+    <div class="metric card gold"><div class="value">\(0.315\)</div><div class="label">decoded CLIP external recovery</div><div class="ci">strongest MMDiT arm \(0.256\)</div></div>
+  </div>
+  <div class="equation">
+    \[
+      \operatorname{Recovery}
+      =\frac{\mathbb E_p[r_{p,\widehat j_p}-\bar r_p]}
+      {\mathbb E_p[r_{p,j_p^+}-\bar r_p]}.
+    \]
+  </div>
+  <div class="claim good"><strong>Supported:</strong> both text-supervised Phase J heads select candidates that score better than random under official CompBench.</div>
+  <div class="claim bad"><strong>Not yet supported by Phase J:</strong> the improvement comes from understanding the specific prompt rather than generic completeness or visual quality. Decoded CLIP also remains stronger on held-out VQAScore recovery.</div>
+</section>
+
+<section>
+  <h2>Phase J evidence \(2\) — cached prompt sensitivity does not survive CompBench</h2>
+  <div class="diagram">
+    <div class="node purple">same fusion checkpoint<br>same candidate images</div>
+    <div class="plus">\( + \)</div>
+    <div class="node blue">correct prompt \(c_p\)</div>
+    <div class="plus">\(\text{versus}\)</div>
+    <div class="node red">shuffled prompt \(c_{\pi(p)}\)</div>
+    <div class="arrow">\(\longrightarrow\)</div>
+    <div class="node green">select one image<br>evaluate both against \(c_p\)</div>
+  </div>
+  <table>
+    <thead><tr><th>Same-checkpoint arm</th><th class="num">cached VQAScore</th><th class="num">official \(\Delta_{\mathrm{CB}}\)</th><th>Final read</th></tr></thead>
+    <tbody>
+      <tr class="bad"><td>historical hybrid</td><td class="num">\(+0.00072\;[-0.00105,+0.00251]\)</td><td class="num">\(+0.00092\;[-0.00113,+0.00301]\)</td><td>null</td></tr>
+      <tr class="bad"><td>absolute wrong-prompt loss</td><td class="num">\(+0.01077\;[+0.00521,+0.01621]\)</td><td class="num">\(+0.00584\;[-0.00170,+0.01317]\)</td><td>official null</td></tr>
+      <tr class="bad"><td>interaction wrong-prompt loss</td><td class="num">\(+0.00470\;[+0.00077,+0.00864]\)</td><td class="num">\(+0.00371\;[-0.00189,+0.00926]\)</td><td>official null</td></tr>
+    </tbody>
+  </table>
+  <div class="cards two">
+    <div class="card red"><h3>Why the cached pass was insufficient</h3><p>The same VQAScore model supplied both the training labels and the cached intervention metric, so scorer-specific effects could look causal without transferring to CompBench.</p></div>
+    <div class="card gold"><h3>Additional null controls</h3><p>Frozen SD\(3\) aligned versus blank was \(+0.00368\;[-0.00124,+0.00860]\); the \(M1\) versus pretrained-backbone effect was also null.</p></div>
+  </div>
+</section>
+
+<section>
+  <h2>Why the Phase J objective permits an image-only shortcut</h2>
+  <div class="diagram">
+    <div class="node gold">one prompt \(c_p\)</div>
+    <div class="arrow">\(\longrightarrow\)</div>
+    <div class="node">candidates \(x_{p,1},\ldots,x_{p,J}\)</div>
+    <div class="arrow">\(\longrightarrow\)</div>
+    <div class="node purple">rank within this group only</div>
+  </div>
+  <div class="diagram">
+    <div class="node green">generic completeness<br>\(q(x)\)</div>
+    <div class="plus">\(\text{correlates with}\)</div>
+    <div class="node gold">VQAScore \(r(x,c)\)</div>
+    <div class="arrow">\(\Longrightarrow\)</div>
+    <div class="node red wide">reduce both losses while nearly ignoring \(c\)</div>
+  </div>
+  <div class="claim bad">Training never asks the decisive counterfactual: <strong>should this same image score lower when the count, attribute, object, or relation in the prompt is changed?</strong></div>
+  <div class="claim purple">This is a supervision-identifiability failure, not evidence that MMDiT fusion is intrinsically unable to represent text–image compatibility.</div>
+</section>
+
+<section>
+  <h2>Closest work on fast generation and representation fidelity</h2>
+  <div class="cards three">
+    <div class="card blue">
+      <h3>Consistency family</h3>
+      <p><a href="https://proceedings.mlr.press/v202/song23a.html">CM, ICML \(2023\)</a> introduces trajectory consistency. <a href="https://proceedings.iclr.cc/paper_files/paper/2025/hash/7e9c2053258b1bdd32ff2654802cd594-Abstract-Conference.html">\(s\mathrm{CM}\), ICLR \(2025\)</a> stabilises continuous-time training at scale. <a href="https://research.nvidia.com/labs/cosmos-lab/rcm/">\(r\mathrm{CM}\), ICLR \(2026\)</a> adds score regularisation for large T2I and video models.</p>
+    </div>
+    <div class="card green">
+      <h3>Representation alignment</h3>
+      <p><a href="https://openreview.net/forum?id=DJSZGGZYVi">REPA, ICLR \(2025\)</a> aligns DiT hidden states to frozen vision features. <a href="https://openreview.net/forum?id=im3FJ6quii">U-REPA, NeurIPS \(2025\)</a> extends the idea to U-Nets. <a href="https://openreview.net/forum?id=y0UxFtXqXf">iREPA, ICLR \(2026\)</a> isolates the role of spatial structure.</p>
+    </div>
+    <div class="card gold">
+      <h3>Our Phase R</h3>
+      <p>An audited one-variable test of whether clean-image REPA transfers to an already pretrained few-step SD\(3.5\)-M student. The positive \(4\)-step signal is useful, but not yet a mechanism or SOTA claim.</p>
+    </div>
+  </div>
+</section>
+
+<section>
+  <h2>Closest work says the MMDiT projector path is still valid</h2>
+  <div class="cards two">
+    <div class="card purple">
+      <h3>Diffusion-native reward models</h3>
+      <p><a href="https://arxiv.org/abs/2502.01051">LRM, NeurIPS \(2025\)</a> repurposes diffusion features with Bradley–Terry preference training. <a href="https://openreview.net/forum?id=qGihS60jfT">SLRM, ICLR \(2026\)</a> uses the complete MMDiT as a noisy-latent discriminator.</p>
+      <p><a href="https://openreview.net/forum?id=cPDN8YlKdQ">DiNa-LRM, ICML \(2026\)</a> is the closest accepted architecture: SD\(3.5\)-M features, timestep conditioning, richer token fusion, and noise-calibrated Thurstone likelihood.</p>
+    </div>
+    <div class="card blue">
+      <h3>Reward enters generator training</h3>
+      <p><a href="https://openreview.net/forum?id=DYjyFDn8K7">GRAFT / P-GRAFT, ICLR \(2026\)</a> uses top-\(K\)-of-\(M\) reward selection and intermediate distribution shaping. <a href="https://openreview.net/forum?id=VkMWujvv2c">DMSampler, ICML \(2026\)</a> couples a few-step sampler to an RL–redistillation loop.</p>
+      <p><a href="https://arxiv.org/abs/2605.26108">RTDMD, arXiv \(2026\)</a> combines distribution matching and reward-guided optimisation.</p>
+    </div>
+  </div>
+  <div class="claim"><strong>Conclusion from recent literature:</strong> our negative result rejects the small CompBench bank, weak pooled readout, and within-prompt-only loss—not the projector idea. The next scorer should use multi-layer tokens, timestep conditioning, pairwise probabilistic training, and explicit wrong-prompt negatives.</div>
+</section>
+
+<section>
+  <h2>Data decision — neither “just COCO” nor “oracle equals label”</h2>
+  <div class="diagram">
+    <div class="node green">COCO and dense-caption real images</div>
+    <div class="arrow">\(\longrightarrow\)</div>
+    <div class="node green">REPA and fidelity anchors</div>
+  </div>
+  <div class="diagram">
+    <div class="node blue">two frozen generator families</div>
+    <div class="arrow">\(\longrightarrow\)</div>
+    <div class="node blue">\(\ge10{,}000\) structured prompts<br>\(8\) candidates each</div>
+    <div class="arrow">\(\longrightarrow\)</div>
+    <div class="node purple">atom-level evaluator committee<br>plus human calibration</div>
+    <div class="arrow">\(\longrightarrow\)</div>
+    <div class="node purple">prompt-aware ranker</div>
+  </div>
+  <div class="cards three">
+    <div class="card red"><h3>Do not</h3><p>Use COCO alone as the compositional ranking dataset. Captions provide pairs, not within-prompt preferences or counterfactual correctness.</p></div>
+    <div class="card gold"><h3>Do not</h3><p>Treat a stronger “oracle” generator as its own judge. It supplies diverse candidates; a separate evaluator must label prompt satisfaction.</p></div>
+    <div class="card green"><h3>Keep untouched</h3><p>GenEval, GenEval2, and final T2I-CompBench variants. Hold out concept combinations and generator families, not merely exact prompt strings.</p></div>
+  </div>
+</section>
+
+<section>
+  <h2>Phase K — train on the smallest causal prompt intervention</h2>
+  <div class="diagram">
+    <div class="node blue">same fixed candidate<br>\(x_j\)</div>
+    <div class="plus">\( + \)</div>
+    <div class="node green">correct prompt<br>\(c\)</div>
+    <div class="plus">\(\text{versus}\)</div>
+    <div class="node red">one-span semantic edit<br>\(c^-\)</div>
+    <div class="arrow">\(\longrightarrow\)</div>
+    <div class="node purple">compare score and reward effects</div>
+  </div>
+  <div class="equation">
+    \[
+      e_j=r(x_j,c)-r(x_j,c^-),\qquad
+      d_j=s_\psi(x_j,c)-s_\psi(x_j,c^-),
+    \]
+    \[
+      \mathcal L_{K}
+      =\mathcal L_{\mathrm{BT}}\!\left(\{s_\psi(x_j,c)\},\{r(x_j,c)\}\right)
+      +\lambda_{\mathrm{int}}\,
+      \mathcal L_{\mathrm{BT}}\!\left(\{d_j\},\{e_j\}\right),
+      \qquad \lambda_{\mathrm{int}}=1,\quad \tau=0.05.
+    \]
+  </div>
+  <div class="cards two">
+    <div class="card purple"><h3>What changes</h3><p>The second term asks which image is most affected by changing exactly one requested property: colour, shape, material, count, relation, or action.</p></div>
+    <div class="card green"><h3>What stays fixed</h3><p>The candidates, frozen DINOv2 and CLIP tokens, two-block lucidrains MMDiT fusion head, data split, three seeds, and paired bootstrap protocol.</p></div>
+  </div>
+  <div class="claim purple"><strong>Key distinction from Phase J:</strong> the wrong prompt is minimally related to the correct prompt, and supervision acts on the score difference for the same image—not only on two independent rankings.</div>
+</section>
+
+<section>
+  <h2>Phase K data — large enough for a decisive cached test</h2>
+  <div class="cards four">
+    <div class="metric card blue"><div class="value">\(1{,}100/1{,}200\)</div><div class="label">training prompts accepted</div><div class="ci">\(91.67\%\) coverage, \(8\) candidates</div></div>
+    <div class="metric card orange"><div class="value">\(2{,}207/2{,}398\)</div><div class="label">external prompts accepted</div><div class="ci">\(92.04\%\) coverage, \(4\) candidates</div></div>
+    <div class="metric card gold"><div class="value">\(0.256\)</div><div class="label">mean absolute training reward effect</div><div class="ci">VQAScore under \(c\) versus \(c^-\)</div></div>
+    <div class="metric card purple"><div class="value">\(0.264\)</div><div class="label">mean absolute external reward effect</div><div class="ci">standard deviation \(0.314\)</div></div>
+  </div>
+  <div class="diagram">
+    <div class="node green">colour, shape, texture, spatial, three-dimensional spatial, numeracy<br>\(100\%\) external coverage</div>
+    <div class="plus">\( + \)</div>
+    <div class="node gold">complex<br>\(256/300\)</div>
+    <div class="plus">\( + \)</div>
+    <div class="node gold">non-spatial<br>\(153/300\)</div>
+  </div>
+  <div class="claim"><strong>Integrity checks:</strong> each accepted prompt reconstructs from one recorded span edit; candidate indices and prompt mappings match the frozen Phase J cache; the cloned lucidrains MMDiT forward, masks, text–image influence, and gradients all pass. Coverage is not a human semantic audit of every edited prompt.</div>
+  <p class="sources">Full data and cache job \(99861\): <a href="https://wandb.ai/mll_sut/sd-mmdit-ranker-v1/runs/phaseK_cf_data_train_99861">training edits</a> · <a href="https://wandb.ai/mll_sut/sd-mmdit-ranker-v1/runs/phaseK_cf_data_external_99861">external edits</a> · <a href="https://wandb.ai/mll_sut/sd-mmdit-ranker-v1/runs/phaseK_cf_cache_99861">paired VQAScore cache</a>.</p>
+</section>
+
+<section>
+  <h2>Phase K result — positive signal under minimal counterfactuals</h2>
+  <div class="cards three">
+    <div class="metric card green"><div class="value">\(+0.00604\)</div><div class="label">correct minus counterfactual selected VQAScore</div><div class="ci">\([+0.00200,+0.01041]\)</div></div>
+    <div class="metric card purple"><div class="value">\(0.248\)</div><div class="label">correct-prompt headroom recovery</div><div class="ci">\([0.198,0.297]\)</div></div>
+    <div class="metric card blue"><div class="value">\(0.132\)</div><div class="label">predicted versus oracle prompt-effect correlation</div><div class="ci">Kendall \(\tau=0.088\)</div></div>
+  </div>
+  <div class="diagram">
+    <div class="node green">correct prompt selects better<br>\(17.76\%\)</div>
+    <div class="plus">\(\text{versus}\)</div>
+    <div class="node red">counterfactual selects better<br>\(13.28\%\)</div>
+    <div class="plus">\(\text{with}\)</div>
+    <div class="node gold">same selection<br>\(68.96\%\)</div>
+  </div>
+  <div class="claim good"><strong>Supported on the frozen external cache:</strong> the Phase K objective makes the same trained scorer use the minimally changed prompt in a direction that improves the original-prompt VQAScore.</div>
+  <div class="claim bad"><strong>Why this was not sufficient:</strong> VQAScore supplies both the training signal and this cached evaluation. The preregistered independent CompBench gate was therefore required—and it did not confirm prompt-specific reading.</div>
+  <p class="sources">Full ranker job \(99863\): <a href="https://wandb.ai/mll_sut/sd-mmdit-ranker-v1/runs/phaseK_cf_ranker_99863">metrics, loss curves, checkpoints, and sample table</a>. The \(16\)-prompt jobs \(99860\) and \(99862\) were pipeline smokes only and are not used as evidence.</p>
+</section>
+
+<section>
+  <h2>Phase K independent result — better images, but not prompt-specific choices</h2>
+  <div class="diagram">
+    <div class="node purple">same trained ranker<br>same \(4\) candidates</div>
+    <div class="plus">\( + \)</div>
+    <div class="node green">correct prompt \(c\)</div>
+    <div class="plus">\(\text{versus}\)</div>
+    <div class="node red">minimal counterfactual \(c^-\)</div>
+    <div class="arrow">\(\longrightarrow\)</div>
+    <div class="node blue">official CompBench<br>always against \(c\)</div>
+  </div>
+  <div class="cards three">
+    <div class="metric card green"><div class="value">\(+0.02645\)</div><div class="label">ranker minus random candidate</div><div class="ci">\([+0.01803,+0.03487]\)</div></div>
+    <div class="metric card red"><div class="value">\(+0.00375\)</div><div class="label">correct-text selection minus counterfactual-text selection</div><div class="ci">\([-0.00177,+0.00922]\)</div></div>
+    <div class="metric card gold"><div class="value">\(1/7\)</div><div class="label">primary categories with a positive prompt-specific interval</div><div class="ci">three-dimensional spatial only</div></div>
+  </div>
+  <div class="cards two">
+    <div class="card green"><h3>What survives</h3><p>The MMDiT head identifies candidates with higher generic completeness or image quality than random selection.</p></div>
+    <div class="card red"><h3>What does not survive</h3><p>Changing only the requested concept does not reliably change which image is selected under an independent evaluator.</p></div>
+  </div>
+  <div class="claim bad"><strong>Conclusion:</strong> the projector path is architecturally valid, but this dataset, pooling scheme, and supervision do not yet establish a prompt-specific reward model. Full GenEval was not promoted after the CompBench text-sensitivity gate returned null.</div>
+  <p class="sources">Repaired official job \(99941\): <span class="tag">phaseK/official/phaseK_counterfactual_99863_99941/</span>. This replaces the earlier schema-failed job \(99864\).</p>
+</section>
+
+<section>
+  <h2>What Phase C1 and Phase I jointly teach us</h2>
+  <div class="cards two">
+    <div class="card red">
+      <h3>Already falsified</h3>
+      <div class="diagram">
+        <div class="node">choose high-reward initial-noise trajectory</div>
+        <div class="arrow">\(\longrightarrow\)</div>
+        <div class="node red">ordinary conditional-mean consistency regression</div>
+      </div>
+      <p>Selection changes the sampled input but leaves the teacher-consistent map essentially invariant under fresh inference noise.</p>
+    </div>
+    <div class="card green">
+      <h3>Now supported</h3>
+      <div class="diagram">
+        <div class="node green">explicit preferred-versus-rejected student error</div>
+        <div class="arrow">\(\longrightarrow\)</div>
+        <div class="node green">anchored few-step student update</div>
+      </div>
+      <p>Phase I changes the loss itself and transfers to fresh CompBench and GenEval2 samples.</p>
+    </div>
+  </div>
+  <div class="equation">
+    \[
+      p_{\mathrm{target}}(x\mid c)\propto p_{\xi}(x\mid c)\exp\!\big(\beta\,a_\psi(x,c)\big),
+      \qquad
+      \mathcal L_{\mathrm{student}}
+      =\mathcal L_{\mathrm{anchor}}-\lambda_{\mathrm{reward}}\,
+      \mathbb E[a_\psi(x_\theta,c)].
+    \]
+  </div>
+  <div class="claim">The equation remains a broader design principle. Our completed proof of concept uses the pairwise relative-error form on the Phase I slide; future work can compare reward-tilted targets or direct reward gradients against that now-working baseline.</div>
+</section>
+
+<section>
+  <h2>The decisive generator control — change only the label text</h2>
+  <div class="diagram">
+    <div class="node blue">original prompt \(c\)<br>same seeds</div>
+    <div class="arrow">\(\longrightarrow\)</div>
+    <div class="node blue wide">frozen SD\(3.5\)-M teacher<br>\(4\) trajectories, \(8\) steps, \(\operatorname{CFG}=7\)</div>
+    <div class="arrow">\(\longrightarrow\)</div>
+    <div class="node purple">same candidate set<br>\(\{x_j\}_{j=1}^{4}\)</div>
+  </div>
+  <div class="branch">
+    <div class="lane">
+      <div class="lane-label">Correct-label arm</div>
+      <div class="node green">score \(R(x_j,c)\)</div>
+      <div class="node green">orient pair with \(j_c^+=\arg\max_j R(x_j,c)\)</div>
+    </div>
+    <div class="mid">
+      <div class="node gold">both students receive the original prompt \(c\)</div>
+      <div class="node gold">same \(5{,}042\) records, \(M1\) start, noise, optimizer, and \(3{,}000\) updates</div>
+    </div>
+    <div class="lane">
+      <div class="lane-label">Counterfactual-label arm</div>
+      <div class="node red">score \(R(x_j,\widetilde c)\)</div>
+      <div class="node red">orient pair with \(j_{\mathrm{cf}}^+=\arg\max_j R(x_j,\widetilde c)\)</div>
+    </div>
+  </div>
+  <div class="diagram">
+    <div class="node green">generate fresh samples from \(\theta_{c}\)</div>
+    <div class="plus">\(\text{versus}\)</div>
+    <div class="node red">generate fresh samples from \(\theta_{\mathrm{cf}}\)</div>
+    <div class="arrow">\(\longrightarrow\)</div>
+    <div class="node purple wide">evaluate both against unseen original prompts<br>CompBench, GenEval2, fidelity, diversity</div>
+  </div>
+  <div class="claim purple"><strong>What this isolates:</strong> candidate images, student conditioning, dataset, and compute are fixed. If \(\theta_c\) wins, the useful training signal depends on the requested composition—not only generic image quality.</div>
+  <p class="sources">Preference labels use the structured T2I-CompBench training pool. COCO is used only for the REPA real-image branch and the matched fidelity evaluation—not as the compositional preference dataset.</p>
+</section>
+
+<section>
+  <h2>Full label gate passed — the intervention is strong enough to decide</h2>
+  <div class="cards four">
+    <div class="metric card blue"><div class="value">\(5{,}042\)</div><div class="label">matched editable prompts</div><div class="ci">\(90.70\%\) of \(5{,}559\)</div></div>
+    <div class="metric card green"><div class="value">\(55.04\%\)</div><div class="label">top candidate changes under \(\widetilde c\)</div><div class="ci">gate \(\ge 20\%\)</div></div>
+    <div class="metric card purple"><div class="value">\(67.53\%\)</div><div class="label">top–bottom pair changes</div><div class="ci">gate \(\ge 30\%\)</div></div>
+    <div class="metric card gold"><div class="value">\(0.255\)</div><div class="label">mean absolute score change</div><div class="ci">gate \(\ge 0.05\)</div></div>
+  </div>
+  <p class="tiny center">Training audit example: “The wooden frame and glass pane of the window provide a view of the metallic skyscrapers.”</p>
+  <div class="candidate-grid">
+    <div>
+      <img src="figures/architecture/counterfactual_control_correct_positive.png" alt="Wooden-frame candidate preferred by the correct prompt">
+      <div class="candidate-caption">\(x_3\): preferred under “wooden”; rejected when only “wooden” becomes “rubber”</div>
+    </div>
+    <div>
+      <img src="figures/architecture/counterfactual_control_cf_positive.png" alt="Alternative window candidate preferred by the counterfactual prompt">
+      <div class="candidate-caption">\(x_2\): preferred under the counterfactual “rubber frame” label</div>
+    </div>
+    <div>
+      <img src="figures/architecture/counterfactual_control_correct_negative.png" alt="Window candidate rejected by the correct prompt">
+      <div class="candidate-caption">\(x_1\): rejected under the correct “wooden frame” label</div>
+    </div>
+  </div>
+  <div class="claim good"><strong>All preregistered data gates pass:</strong> original-prompt penalty of the counterfactual winner is \(0.06020\;[0.05642,0.06404]\), and counterfactual recovery is \(0.08163\;[0.07751,0.08583]\). The images above illustrate one logged pair; the gate uses all \(5{,}042\) prompts.</div>
+</section>
+
+<section>
+  <h2>Current campaign — immutable jobs, automatic gates, complete logging</h2>
+  <table>
+    <thead><tr><th>Job</th><th>Purpose</th><th>State at deck update</th><th>Output</th></tr></thead>
+    <tbody>
+      <tr class="good"><td class="num">\(100589\)</td><td>real reconstruction and scoring smoke</td><td>completed</td><td>exact score reproduction; maximum error \(0\)</td></tr>
+      <tr class="good"><td class="num">\(100590\)</td><td>full matched correct and counterfactual caches</td><td>completed</td><td>all label gates passed on \(5{,}042\) prompts</td></tr>
+      <tr class="good"><td class="num">\(100591\)</td><td>correct-prompt labels</td><td>completed</td><td>final checkpoint at \(3{,}000\) updates</td></tr>
+      <tr class="good"><td class="num">\(100592\)</td><td>counterfactual-prompt labels</td><td>completed</td><td>final checkpoint at \(3{,}000\) updates</td></tr>
+      <tr><td class="num">\(100593\)</td><td>held-out paired evaluation</td><td>running</td><td>fresh CompBench, GenEval2, fidelity, and diversity samples</td></tr>
+    </tbody>
+  </table>
+  <div class="cards three">
+    <div class="card blue"><h3>Alignment</h3><p>Official CompBench with paired category bootstrap and GenEval2 Soft-TIFA on fresh four-step samples.</p></div>
+    <div class="card green"><h3>Fidelity and diversity</h3><p>A separate \(2{,}398\)-caption COCO generation pool versus matching real images; four seeds on \(50\) prompts per category for DINO and LPIPS diversity.</p></div>
+    <div class="card purple"><h3>Auditability</h3><p>Unique job-based directories and W&amp;B run identifiers; code and cache hashes, losses, gradients, checkpoints, training pairs, and held-out samples are logged.</p></div>
+  </div>
+  <div class="diagram">
+    <div class="node green">correct-label student wins with positive \(95\%\) interval</div>
+    <div class="arrow">\(\Longrightarrow\)</div>
+    <div class="node purple">evidence for text-specific preference transfer</div>
+    <div class="plus">\(\text{otherwise}\)</div>
+    <div class="node red">generic quality prior or scorer bias remains the explanation</div>
+  </div>
+  <p class="sources">W&amp;B group <span class="tag">phaseI_cf_distill_20260807T024412Z</span>: <a href="https://wandb.ai/mll_sut/sd-pref-repa-v1/runs/phaseI_counterfactual_data_100590">full label gate</a> · <a href="https://wandb.ai/mll_sut/sd-pref-repa-v1/runs/phaseI_preference_matched_100591">correct-label training</a> · <a href="https://wandb.ai/mll_sut/sd-pref-repa-v1/runs/phaseI_counterfactual_100592">counterfactual-label training</a>.</p>
+</section>
+
+<section>
+  <div class="eyebrow">Phase L · publication-scale campaign</div>
+  <h2>Scale data and replication—not only the update count</h2>
+  <div class="diagram">
+    <div class="node blue wide">\(5{,}559\) compositional training prompts<br>\(\times\;4\) independent teacher seed pools</div>
+    <div class="arrow">\(\Longrightarrow\)</div>
+    <div class="node purple">\(22{,}236\) scored preference records<br>\(4\) candidates per pool</div>
+    <div class="arrow">\(\Longrightarrow\)</div>
+    <div class="node green wide">preference \(+\) REPA<br>\(12{,}000\) updates \(\times\;3\) training seeds</div>
+  </div>
+  <div class="cards four">
+    <div class="card blue"><h3>Admission gate</h3><p>Job \(100644\) promotes the run only when job \(100593\) shows a positive prompt-specific CompBench interval, matching GenEval2 direction, and non-inferior fidelity and diversity.</p></div>
+    <div class="card purple"><h3>Training</h3><p>Jobs \(100645\), \(100646\), and \(100647\) share the locked objective and differ only in training seed. The full cache is job \(100643\).</p></div>
+    <div class="card green"><h3>Evaluation</h3><p>Full CompBench and GenEval2, \(5{,}000\) matched COCO fidelity images, and \(8\)-seed diversity on \(400\) held-out prompts.</p></div>
+    <div class="card gold"><h3>Final verdict</h3><p>Jobs \(100649\)–\(100652\) report prompt uncertainty per seed and training-seed variation separately, against frozen \(M1\) and the Phase-I pilot.</p></div>
+  </div>
+  <div class="claim good"><strong>Real smoke passed:</strong> job \(100640\) exercised all eight categories, generation, VQAScore, immutable caching, audit images, and W&amp;B artifacts. Its \(16\) records had mean best-to-worst headroom \(0.332\); the full cache is now running.</div>
+  <p class="sources">W&amp;B group <span class="tag">phaseL_publication_20260807T044116Z</span> in <a href="https://wandb.ai/mll_sut/sd-pref-repa-publication-v1/runs/phaseL_selection_100640">sd-pref-repa-publication-v1</a> · immutable manifest <span class="tag">phaseL/campaign_20260807T044116Z.json</span>.</p>
+</section>
+
+<section class="center">
+  <div class="eyebrow">Supervisor takeaway</div>
+  <h2>What we know, what we do not, and the decision now</h2>
+  <div class="cards four" style="text-align:left;margin-top:.8em">
+    <div class="card orange"><h3>\(M1\)</h3><p>A useful internal compression control built from recognised consistency ingredients, but not yet the reviewer-facing SOTA baseline.</p></div>
+    <div class="card green"><h3>REPA</h3><p>Promising fidelity protection and a positive CompBench increment when combined with preference training; still needs replicated, correctly matched fidelity evaluation.</p></div>
+    <div class="card purple"><h3>Direct preference</h3><p>The strongest completed result: independent CompBench and GenEval2 both improve over a randomized-label placebo.</p></div>
+    <div class="card red"><h3>Standalone ranker</h3><p>Better than random reranking, but its correct-versus-counterfactual prompt effect is null under official CompBench.</p></div>
+  </div>
+  <div class="claim purple" style="text-align:left;margin-top:.8em"><strong>Decision now:</strong> the publication-scale preference \(+\) REPA campaign is launched, but expensive training remains causally gated by the matched label-source evaluation. This gives us the upside of scaling immediately without silently promoting a generic quality prior. Retain a canonical \(s\mathrm{CM}\) or \(r\mathrm{CM}\) reviewer-facing baseline alongside it.</div>
+  <p class="sources">Audited evidence: <span class="tag">reports/phaseR_repa_result.md</span> · <span class="tag">reports/phaseC1_results_report.md</span> · <span class="tag">phaseK/official/phaseK_counterfactual_99863_99941/</span> · <span class="tag">phaseI/eval_99955/</span> · <span class="tag">phaseI/counterfactual_data_100590/summary.json</span> · <span class="tag">phaseL/campaign_20260807T044116Z.json</span>.</p>
+</section>
+
+</div></div>
+
+<script src="https://cdn.jsdelivr.net/npm/reveal.js@5.1.0/dist/reveal.js"></script>
+<script>
+  Reveal.initialize({
+    hash:true,
+    width:1280,
+    height:720,
+    margin:0.035,
+    minScale:0.2,
+    maxScale:2,
+    transition:'none',
+    slideNumber:'c/t',
+    controls:true,
+    progress:true
+  });
+</script>
+<script>
+  window.MathJax = {
+    tex: {
+      inlineMath: [['\\(','\\)']],
+      displayMath: [['\\[','\\]']],
+      processEscapes: true
+    },
+    svg: { fontCache: 'global' }
+  };
+</script>
+<script defer src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-svg.js"></script>
+</body>
+</html>

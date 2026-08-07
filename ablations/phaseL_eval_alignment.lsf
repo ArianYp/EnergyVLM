@@ -1,0 +1,108 @@
+#!/usr/bin/env bash
+#BSUB -J sd-phaseL-align
+#BSUB -G s10396
+#BSUB -q training-parallel
+#BSUB -n 16
+#BSUB -W 36:00
+#BSUB -R "span[hosts=1]"
+#BSUB -R "select[mem>256000 && hname!='farm-gpu0504']"
+#BSUB -R "rusage[mem=256000]"
+#BSUB -M 256000
+#BSUB -gpu "num=4:mode=exclusive_process:gmodel=NVIDIAH200"
+#BSUB -cwd /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM
+#BSUB -o /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-phaseL-align-%J.out
+#BSUB -e /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-phaseL-align-%J.err
+
+set -euo pipefail
+export PATH="/software/cellgen/team361/ha11/envs/nichejepa/bin:$PATH"
+export HF_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/huggingface
+export TORCH_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/torch
+export XDG_CACHE_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/xdg
+export TOKENIZERS_PARALLELISM=false
+export NCCL_NVLS_ENABLE=0
+export WANDB_MODE=online
+source ~/.secrets/hf_token
+
+: "${PHASEL_GROUP:?missing Phase-L W&B group}"
+: "${PHASEL_TRAIN_JOBS:?expected semicolon-delimited seed=job list}"
+PHASEL_PILOT_REPA_JOB=${PHASEL_PILOT_REPA_JOB:-99954}
+
+JOB=${LSB_JOBID:-local}
+ROOT="phaseL/alignment_eval_${JOB}"
+if [[ -e "$ROOT" ]]; then
+  echo "Refusing to overwrite $ROOT" >&2
+  exit 2
+fi
+
+SPECS=(
+  "M1:checkpoints/method/M1_pure_consistency_20260624_065127_55187/checkpoint_final.pt"
+  "PilotPreferenceREPA:checkpoints/phaseI/phaseI_preference_repa_${PHASEL_PILOT_REPA_JOB}/checkpoint_final.pt"
+)
+TREATMENTS=()
+IFS=';' read -ra TRAIN_ITEMS <<< "$PHASEL_TRAIN_JOBS"
+for item in "${TRAIN_ITEMS[@]}"; do
+  seed=${item%%=*}
+  train_job=${item#*=}
+  label="L${seed}"
+  checkpoint="checkpoints/phaseL/phaseL_preference_repa_seed${seed}_${train_job}/checkpoint_final.pt"
+  if [[ ! -s "$checkpoint" ]]; then
+    mkdir -p phaseL
+    jq -n --arg job "$JOB" --arg missing "$checkpoint" \
+      '{skipped:true,job:$job,reason:"publication training did not produce a checkpoint",missing:$missing}' \
+      > "phaseL/skipped_alignment_${JOB}.json"
+    echo "Skipping alignment evaluation because $checkpoint is absent"
+    exit 0
+  fi
+  SPECS+=("${label}:${checkpoint}")
+  TREATMENTS+=("$label")
+done
+mkdir -p "$ROOT"
+
+python3 phaseC/build_eval_pool.py geneval2 --out "$ROOT/geneval2/prompts.json"
+for spec in "${SPECS[@]}"; do
+  label=${spec%%:*}
+  checkpoint=${spec#*:}
+  torchrun --standalone --nproc-per-node=4 exp0/phaseA_generate.py \
+    --out_root "$ROOT/compbench" --label "$label" --checkpoint "$checkpoint" --cfg 1 \
+    --split val --steps_list 4 --per_category 1000
+  torchrun --standalone --nproc-per-node=4 exp0/phaseA_generate.py \
+    --out_root "$ROOT/geneval2" --label "$label" --checkpoint "$checkpoint" --cfg 1 \
+    --prompts_json "$ROOT/geneval2/prompts.json" --steps_list 4
+done
+
+for spec in "${SPECS[@]}"; do
+  model=${spec%%:*}
+  for category in color shape texture spatial 3d_spatial numeracy non_spatial complex; do
+    score_dir="$ROOT/compbench_scores/${model}_s4_${category}"
+    python3 phaseC/compbench_eval.py stage \
+      --images "$ROOT/compbench/images/${model}" --prompts "$ROOT/compbench/prompts.json" \
+      --steps 4 --categories "$category" --out "$score_dir"
+    python3 phaseC/compbench_eval.py run --dir "$score_dir" --skip_done
+    python3 phaseC/compbench_eval.py collect --dir "$score_dir" --routing_split val
+  done
+  score_dir="$ROOT/geneval2_scores/${model}_s4"
+  python3 phaseC/geneval2_eval.py stage \
+    --images "$ROOT/geneval2/images/${model}" --pool "$ROOT/geneval2/prompts.json" \
+    --steps 4 --out "$score_dir"
+  python3 phaseC/geneval2_eval.py run --dir "$score_dir" --method soft_tifa_gm --skip_done
+  python3 phaseC/geneval2_eval.py collect --dir "$score_dir" --method soft_tifa_gm
+done
+
+for model in "${TREATMENTS[@]}"; do
+  for control in PilotPreferenceREPA M1; do
+    python3 phaseC/eval_analyze.py --scores_dir "$ROOT/compbench_scores" --step 4 \
+      --models "${model},${control}" --geneval2_dir "$ROOT/geneval2_scores" \
+      --fidelity "$ROOT/not_available.json" --diversity "$ROOT/not_available.json" \
+      --title "Phase L ${model} versus ${control}" \
+      --out "$ROOT/${model}_vs_${control}.md"
+  done
+done
+
+MODELS="M1,PilotPreferenceREPA,$(IFS=,; echo "${TREATMENTS[*]}")"
+TREATMENT_CSV=$(IFS=,; echo "${TREATMENTS[*]}")
+python3 phaseL/log_publication_alignment.py \
+  --root "$ROOT" --models "$MODELS" --treatments "$TREATMENT_CSV" \
+  --project sd-pref-repa-publication-v1 --group "$PHASEL_GROUP" \
+  --run_name "phaseL_alignment_eval_${JOB}" --train_jobs "$PHASEL_TRAIN_JOBS"
+
+echo "[$(date --iso-8601=seconds)] Phase-L alignment evaluation complete: $ROOT"
