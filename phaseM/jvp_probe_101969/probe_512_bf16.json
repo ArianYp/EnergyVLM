@@ -1,0 +1,23 @@
+{
+  "config": {
+    "model_id": "stabilityai/stable-diffusion-3.5-medium",
+    "height": 512,
+    "batch": 1,
+    "text_len": 333,
+    "dtype": "bfloat16",
+    "out": "phaseM/jvp_probe_101969/probe_512_bf16.json"
+  },
+  "tests": {
+    "default_backend": {
+      "ok": false,
+      "error": "NotImplementedError: Trying to use forward AD with _scaled_dot_product_flash_attention that does not support it because it has not been implemented yet.\nPlease file an issue to PyTorch at https://github.com/pytorch/pytorch/issues/new?template=feature-request.yml so that we can prioritize its implementation or submit a P"
+    },
+    "math_backend": {
+      "ok": false,
+      "error": "RuntimeError: expected mat1 and mat2 to have the same dtype, but got: float != c10::BFloat16",
+      "trace": "nichejepa/lib/python3.10/site-packages/torch/nn/modules/module.py\", line 1751, in _wrapped_call_impl\n    return self._call_impl(*args, **kwargs)\n  File \"/software/cellgen/team361/ha11/envs/nichejepa/lib/python3.10/site-packages/torch/nn/modules/module.py\", line 1762, in _call_impl\n    return forward_call(*args, **kwargs)\n  File \"/software/cellgen/team361/ha11/envs/nichejepa/lib/python3.10/site-packages/torch/nn/modules/linear.py\", line 125, in forward\n    return F.linear(input, self.weight, self.bias)\nRuntimeError: expected mat1 and mat2 to have the same dtype, but got: float != c10::BFloat16\n"
+    }
+  },
+  "approx_seq_len": 1357,
+  "FEASIBLE": false
+}

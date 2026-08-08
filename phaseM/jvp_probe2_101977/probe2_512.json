@@ -1,0 +1,81 @@
+{
+  "config": {
+    "model_id": "stabilityai/stable-diffusion-3.5-medium",
+    "height": 512,
+    "text_len": 333,
+    "num_train_ts": 1000.0,
+    "sigma": 0.5,
+    "out": "phaseM/jvp_probe2_101977/probe2_512.json"
+  },
+  "seq_len": 1357,
+  "directions": {
+    "x_only": {
+      "jvp_norm": 48.73588943481445,
+      "jvp_seconds": 1.0301036834716797,
+      "eps_sweep": {
+        "0.1": {
+          "rel_error": 0.032137561589479446,
+          "fd_norm": 48.63531494140625
+        },
+        "0.01": {
+          "rel_error": 0.01701212301850319,
+          "fd_norm": 48.71657180786133
+        },
+        "0.001": {
+          "rel_error": 0.1570204198360443,
+          "fd_norm": 49.25297546386719
+        }
+      },
+      "converges": true,
+      "best_rel_error": 0.01701212301850319
+    },
+    "sigma_only": {
+      "jvp_norm": 8420.1474609375,
+      "jvp_seconds": 0.3397707939147949,
+      "eps_sweep": {
+        "0.1": {
+          "rel_error": 5.7168145179748535,
+          "fd_norm": 1256.1444091796875
+        },
+        "0.01": {
+          "rel_error": 4.107062816619873,
+          "fd_norm": 2704.148681640625
+        },
+        "0.001": {
+          "rel_error": 0.14465206861495972,
+          "fd_norm": 7358.12109375
+        }
+      },
+      "converges": true,
+      "best_rel_error": 0.14465206861495972
+    },
+    "combined": {
+      "jvp_norm": 8421.46875,
+      "jvp_seconds": 0.33231639862060547,
+      "eps_sweep": {
+        "0.1": {
+          "rel_error": 5.707398414611816,
+          "fd_norm": 1258.2161865234375
+        },
+        "0.01": {
+          "rel_error": 4.1086554527282715,
+          "fd_norm": 2703.091796875
+        },
+        "0.001": {
+          "rel_error": 0.14462251961231232,
+          "fd_norm": 7359.515625
+        }
+      },
+      "converges": true,
+      "best_rel_error": 0.14462251961231232
+    }
+  },
+  "rcm_step": {
+    "seconds": 0.646620512008667,
+    "peak_gb": 17.673397064208984,
+    "loss": 0.9999903440475464,
+    "grad_norm": 693461.625,
+    "finite": true
+  },
+  "FEASIBLE": false
+}

@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+#BSUB -J sd-M-probe-jvp
+#BSUB -G s10396
+#BSUB -q training-parallel
+#BSUB -n 8
+#BSUB -W 2:00
+#BSUB -R "span[hosts=1]"
+#BSUB -R "select[mem>128000 && hname!='farm-gpu0504']"
+#BSUB -R "rusage[mem=128000]"
+#BSUB -M 128000
+#BSUB -gpu "num=1:mode=exclusive_process:gmem=78G"
+#BSUB -cwd /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM
+#BSUB -o /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-M-probe-jvp-%J.out
+#BSUB -e /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-M-probe-jvp-%J.err
+set -euo pipefail
+export PATH="/software/cellgen/team361/ha11/envs/nichejepa/bin:$PATH"
+export HF_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/huggingface
+export TORCH_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/torch
+export XDG_CACHE_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/xdg
+export TOKENIZERS_PARALLELISM=false
+source ~/.secrets/hf_token
+JOB=${LSB_JOBID:-local}; OUT="phaseM/jvp_probe_${JOB}"; mkdir -p "$OUT"
+nvidia-smi --query-gpu=name,memory.total --format=csv
+# Full training resolution first; then a smaller one to reveal how cost scales with sequence length.
+python3 phaseM/probe_jvp_sd3.py --height 512 --dtype float32 --out "$OUT/probe_512_fp32.json" || true
+python3 phaseM/probe_jvp_sd3.py --height 256 --dtype float32 --out "$OUT/probe_256_fp32.json" || true
+python3 phaseM/probe_jvp_sd3.py --height 512 --dtype bfloat16 --out "$OUT/probe_512_bf16.json" || true
+echo "=== verdicts ==="; for f in "$OUT"/*.json; do echo "$f: $(jq -r '.FEASIBLE' "$f" 2>/dev/null)"; done

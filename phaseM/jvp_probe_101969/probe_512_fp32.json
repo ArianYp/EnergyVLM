@@ -1,0 +1,37 @@
+{
+  "config": {
+    "model_id": "stabilityai/stable-diffusion-3.5-medium",
+    "height": 512,
+    "batch": 1,
+    "text_len": 333,
+    "dtype": "float32",
+    "out": "phaseM/jvp_probe_101969/probe_512_fp32.json"
+  },
+  "tests": {
+    "default_backend": {
+      "ok": false,
+      "error": "NotImplementedError: Trying to use forward AD with _scaled_dot_product_efficient_attention that does not support it because it has not been implemented yet.\nPlease file an issue to PyTorch at https://github.com/pytorch/pytorch/issues/new?template=feature-request.yml so that we can prioritize its implementation or submit"
+    },
+    "math_backend": {
+      "ok": true,
+      "tangent_finite": true,
+      "tangent_absmean": 0.006237092427909374,
+      "seconds": 0.4135618209838867,
+      "peak_gb": 10.190776348114014
+    },
+    "finite_difference": {
+      "rel_error": 0.27925522949759035,
+      "fd_norm": 2.10064435005288,
+      "jvp_norm": 2.017176628112793
+    },
+    "jvp_backward": {
+      "ok": true,
+      "seconds": 2.640472173690796,
+      "peak_gb": 52.54893970489502,
+      "grad_norm_finite": true,
+      "grad_norm": 3310.35595703125
+    }
+  },
+  "approx_seq_len": 1357,
+  "FEASIBLE": false
+}
