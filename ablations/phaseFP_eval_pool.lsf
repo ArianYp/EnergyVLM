@@ -1,0 +1,42 @@
+#!/usr/bin/env bash
+#BSUB -J sd-phaseFP-pool
+#BSUB -G s10396
+#BSUB -q training-normal
+#BSUB -n 2
+#BSUB -W 2:00
+#BSUB -R "span[hosts=1]"
+#BSUB -R "select[mem>32000]"
+#BSUB -R "rusage[mem=32000]"
+#BSUB -M 32000
+#BSUB -gpu "num=1:mode=exclusive_process"
+#BSUB -cwd /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM
+#BSUB -o /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-phaseFP-pool-%J.out
+#BSUB -e /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-phaseFP-pool-%J.err
+
+# Builds every Phase-FP evaluation prompt manifest once and hashes it. Each per-model job asserts
+# the hash before generating, so "identical evaluation conditions" is a checked precondition
+# instead of a convention. These manifests are byte-identical to the ones used by Phase-I jobs
+# 99955 and 100593, so the new arms are directly comparable with the completed results.
+set -euo pipefail
+
+export PATH="/software/cellgen/team361/ha11/envs/nichejepa/bin:$PATH"
+export HF_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/huggingface
+export XDG_CACHE_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/xdg
+source ~/.secrets/hf_token
+
+JOB=${LSB_JOBID:-local}
+POOL="phaseFP/eval_pool_${JOB}"
+if [[ -e "$POOL" ]]; then echo "Refusing to overwrite $POOL" >&2; exit 2; fi
+
+echo "[$(date --iso-8601=seconds)] Phase-FP evaluation pool | job=$JOB"
+python3 phaseFP/build_eval_pool.py --out_root "$POOL" \
+  --split val --per_category 1000 --seed 0 \
+  --fidelity_n 2398 --diversity_per_category 50
+
+for f in compbench_prompts.json geneval2_prompts.json fidelity_prompts.json diversity_prompts.json; do
+  test -s "$POOL/$f"
+done
+jq -e '.counts.compbench_prompts_json // .counts["compbench_prompts.json"] == 2398' \
+  "$POOL/manifest.json" >/dev/null
+echo "[$(date --iso-8601=seconds)] Phase-FP evaluation pool complete: $POOL"
+cat "$POOL/manifest.json"

@@ -16,3 +16,34 @@ generated_images/
 *.pyzwz
 virtualenv/
 wandb/
+# --- results data: large, regenerable, or external -------------------------------------------
+# Vendored upstream clones (each has its own history / license)
+GenEval2/
+T2I-CompBench/
+SoftREPA/
+SenseFlow/
+SiT/
+SiT-collections/
+REPA/
+RTDMD/
+OCTA/
+octa/
+Arshia/
+t2v_metrics/
+third_party/
+# Generated evaluation pools, candidate banks and image trees
+phaseFP/eval_*/
+phaseFP/teacher_ceiling_*/gen/
+phaseFP/exact_headroom_*/cands/
+phaseFP/aggregate_*/
+phaseFP/smoke_*/
+phaseFP/edit_audit/pairs_*/
+phaseFP/edit_audit/packet_*/
+# Selection caches: ~20 MB of shards, regenerable via phaseFP/build_fixed_pair_selection.py
+phaseFP/fixedpair_*/*/selection_rank*.jsonl
+# Symlink farms built by the analysis scripts
+reports/phaseFP_results/merged_*_scores/
+# W&B history dumps and the packaged bundle
+reports/audit_2026-08-07/history/
+_results_bundle/
+training_checkpoints/

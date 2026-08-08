@@ -1,0 +1,96 @@
+#!/usr/bin/env bash
+#BSUB -J sd-phaseFP-agg
+#BSUB -G s10396
+#BSUB -q training-parallel
+#BSUB -n 8
+#BSUB -W 12:00
+#BSUB -R "span[hosts=1]"
+#BSUB -R "select[mem>128000]"
+#BSUB -R "rusage[mem=128000]"
+#BSUB -M 128000
+#BSUB -gpu "num=1:mode=exclusive_process:gmem=40G"
+#BSUB -cwd /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM
+#BSUB -o /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-phaseFP-agg-%J.out
+#BSUB -e /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-phaseFP-agg-%J.err
+
+# Cross-model fidelity and diversity for the whole Phase-FP arm set.
+#
+# `phaseC/fidelity_eval.py` and `phaseC/diversity_eval.py` both take a two-model non-inferiority
+# gate and report contrasts, so they cannot run per model. Running them once here also means every
+# arm is scored against ONE COCO reference sample drawn inside a single process — the strongest
+# available form of the "same-job M1" requirement, and the thing whose absence made the two
+# Phase-I fidelity jobs incomparable.
+#
+#   bsub -env "all,PHASEFP_GATE=CorrectFixed,CounterfactualFixed" < this_file
+set -euo pipefail
+
+export PATH="/software/cellgen/team361/ha11/envs/nichejepa/bin:$PATH"
+export HF_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/huggingface
+export TORCH_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/torch
+export XDG_CACHE_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/xdg
+export TOKENIZERS_PARALLELISM=false
+source ~/.secrets/hf_token
+
+: "${PHASEFP_POOL_JOB:?missing evaluation pool job id}"
+# Treatment,control pair for the preregistered non-inferiority gate.
+PHASEFP_GATE=${PHASEFP_GATE:-CorrectFixed,CounterfactualFixed}
+PHASEFP_DIVERSITY_SEEDS=${PHASEFP_DIVERSITY_SEEDS:-4}
+
+JOB=${LSB_JOBID:-local}
+POOL="phaseFP/eval_pool_${PHASEFP_POOL_JOB}"
+ROOT="phaseFP/aggregate_${JOB}"
+if [[ -e "$ROOT" ]]; then echo "Refusing to overwrite $ROOT" >&2; exit 2; fi
+mkdir -p "$ROOT/fidelity_images" "$ROOT/diversity_images"
+
+test -s "$POOL/diversity_prompts.json"
+
+# Collect every completed per-model evaluation root into one merged image tree, one symlink per
+# model label. Labels are discovered rather than hard-coded so the job works with whatever finished.
+MODELS=()
+for d in phaseFP/eval_*_*/; do
+  [[ -d "$d/fidelity/images" ]] || continue
+  for m in "$d"fidelity/images/*/; do
+    [[ -d "$m" ]] || continue
+    LABEL=$(basename "$m")
+    [[ -e "$ROOT/fidelity_images/$LABEL" ]] && continue
+    ln -s "$(readlink -f "$m")" "$ROOT/fidelity_images/$LABEL"
+    if [[ -d "${d}diversity/images/$LABEL" ]]; then
+      ln -s "$(readlink -f "${d}diversity/images/$LABEL")" "$ROOT/diversity_images/$LABEL"
+    fi
+    MODELS+=("$LABEL")
+  done
+done
+
+if [[ ${#MODELS[@]} -eq 0 ]]; then echo "no evaluated models found" >&2; exit 2; fi
+MODEL_LIST=$(IFS=,; echo "${MODELS[*]}")
+echo "[$(date --iso-8601=seconds)] Phase-FP aggregate | job=$JOB"
+echo "  models: $MODEL_LIST"
+echo "  gate:   $PHASEFP_GATE"
+
+# The gate pair must be present, otherwise the scripts fail late after hours of feature extraction.
+for g in ${PHASEFP_GATE//,/ }; do
+  if [[ ! -e "$ROOT/fidelity_images/$g" ]]; then
+    echo "gate model $g has no generated fidelity images" >&2; exit 2
+  fi
+done
+
+nvidia-smi --query-gpu=index,name,memory.total --format=csv
+
+echo "=== Fidelity: FID / CMMD / precision / recall vs COCO val2017 ==="
+python3 phaseC/fidelity_eval.py --gen_root "$ROOT/fidelity_images" \
+  --models "$MODEL_LIST" --gate_models "$PHASEFP_GATE" \
+  --title "Phase-FP fixed-pair arms" --steps 4 \
+  --n_ref 2398 --min_gen 2000 --boot 1000 --out "$ROOT/fidelity.md"
+
+echo "=== Diversity: within-prompt DINO and LPIPS over $PHASEFP_DIVERSITY_SEEDS seeds ==="
+python3 phaseC/diversity_eval.py --gen_root "$ROOT/diversity_images" \
+  --models "$MODEL_LIST" --gate_models "$PHASEFP_GATE" \
+  --title "Phase-FP fixed-pair arms" --steps 4 \
+  --n_seeds "$PHASEFP_DIVERSITY_SEEDS" --prompts "$POOL/diversity_prompts.json" \
+  --boot 10000 --out "$ROOT/diversity.md"
+
+test -s "$ROOT/fidelity.json"
+test -s "$ROOT/diversity.json"
+echo "[$(date --iso-8601=seconds)] Phase-FP aggregate complete: $ROOT"
+echo "Compare diversity against BOTH M1Fixed and the teacher best-of-4 price in"
+echo "reports/audit_2026-08-07/oracle_diversity_101231/best_of_4.md (DINO -0.12672, LPIPS -0.15998)."

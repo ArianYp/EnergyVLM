@@ -1,0 +1,101 @@
+#!/usr/bin/env bash
+#BSUB -J sd-phaseFP-smoke
+#BSUB -G s10396
+#BSUB -q training-parallel
+#BSUB -n 16
+#BSUB -W 6:00
+#BSUB -R "span[hosts=1]"
+# Matched to the training arms: measured peak host RAM is 81.6 GB, and the GPU is selected by
+# memory rather than model so H200 / H100-80 / A100-80 all qualify.
+#
+# farm-gpu0504 STAYS EXCLUDED. A 2-GPU probe (101250) passed there, but the 4-GPU probe (101241)
+# FAILED: ranks 0 and 2 ran 11x slow (58.7 vs 645.6 TFLOP/s) and reported bad_allreduce=1 — a
+# numerically WRONG collective — before rank 1 died on SIGABRT. The fault only appears at 4-GPU
+# scale, which is exactly what training uses, and a silently corrupted all-reduce would poison
+# gradients without crashing. Do not re-enable on the strength of a small-scale probe.
+#BSUB -R "select[mem>128000 && hname!='farm-gpu0504']"
+#BSUB -R "rusage[mem=128000]"
+#BSUB -M 128000
+#BSUB -gpu "num=4:mode=exclusive_process:gmem=78G"
+#BSUB -cwd /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM
+#BSUB -o /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-phaseFP-smoke-%J.out
+#BSUB -e /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-phaseFP-smoke-%J.err
+
+# Task F. Runs all four fixed-pair arms end to end for a handful of steps in ONE job, then proves
+# from their telemetry that they trained on bit-identical teacher endpoints and differed only in
+# the label sign. The publication-scale arms are gated on this passing.
+set -euo pipefail
+
+export PATH="/software/cellgen/team361/ha11/envs/nichejepa/bin:$PATH"
+export HF_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/huggingface
+export TORCH_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/torch
+export XDG_CACHE_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/xdg
+export TOKENIZERS_PARALLELISM=false
+export NCCL_NVLS_ENABLE=0
+export WANDB_MODE=online
+source ~/.secrets/hf_token
+
+: "${PHASEFP_CACHE_JOB:?missing fixed-pair cache job id}"
+: "${PHASEFP_GROUP:?missing campaign group id}"
+PHASEFP_SMOKE_STEPS=${PHASEFP_SMOKE_STEPS:-24}
+
+JOB=${LSB_JOBID:-local}
+CACHE="phaseFP/fixedpair_${PHASEFP_CACHE_JOB}"
+MANIFEST="${CACHE}/pair_manifest.json"
+ROOT="phaseFP/smoke_${JOB}"
+if [[ -e "$ROOT" ]]; then
+  echo "Refusing to overwrite $ROOT" >&2
+  exit 2
+fi
+mkdir -p "$ROOT"
+
+test -s "$CACHE/summary.json"
+test -s "$MANIFEST"
+jq -e '.pass == true and .cross_arm_pair_identity == true' "$CACHE/summary.json" >/dev/null
+
+echo "[$(date --iso-8601=seconds)] Phase-FP smoke | job=$JOB cache=$CACHE steps=$PHASEFP_SMOKE_STEPS"
+nvidia-smi --query-gpu=index,name,memory.total --format=csv
+python3 phaseFP/test_fixed_pair.py --cache_root "$CACHE"
+
+ARM_ARGS=()
+for ARM in correct counterfactual random inverted; do
+  case "$ARM" in
+    correct)        LABEL_SOURCE=correct_prompt ;;
+    counterfactual) LABEL_SOURCE=counterfactual_prompt ;;
+    random)         LABEL_SOURCE=randomized ;;
+    inverted)       LABEL_SOURCE=inverted_prompt ;;
+  esac
+  RUN="phaseFP_smoke_${ARM}_${JOB}"
+  OUT="${ROOT}/${ARM}"
+  echo "--- smoke arm $ARM -> $OUT ---"
+  torchrun --standalone --nproc-per-node=4 phaseI/train_preference.py \
+    --labels fixed --pair_source fixed_indices \
+    --label_source "$LABEL_SOURCE" \
+    --selection_dir "${CACHE}/${ARM}" \
+    --pair_manifest "$MANIFEST" \
+    --output_dir "$OUT" \
+    --m1_checkpoint checkpoints/method/M1_pure_consistency_20260624_065127_55187/checkpoint_final.pt \
+    --num_steps "$PHASEFP_SMOKE_STEPS" --num_warmup_steps 5 \
+    --lr 1e-6 --weight_decay 0 --grad_clip 1.0 \
+    --beta 100 --lambda_anchor 1.0 --preference_timesteps 4 \
+    --noise_coupling shared --sigma_band all --telemetry_every 1 \
+    --K 8 --cfg 7.0 --sched_shift 3.0 --height 512 --gradient_checkpointing \
+    --seed 20260806 --label_seed 20260806 \
+    --lambda_repa 0.0 \
+    --save_every "$PHASEFP_SMOKE_STEPS" --sample_every "$PHASEFP_SMOKE_STEPS" --log_every 1 \
+    --wandb_project sd-pref-repa-fixedpair-v1 --wandb_run_name "$RUN" \
+    --wandb_group "$PHASEFP_GROUP" --wandb_tags phaseFP,smoke,fixed-pair
+  test -s "$OUT/checkpoint_final.pt"
+  test -s "$OUT/telemetry.jsonl"
+  ARM_ARGS+=(--arm "${ARM}=${OUT}")
+done
+
+echo "=== Fixed-pair identity and orientation gate ==="
+python3 phaseFP/verify_smoke.py "${ARM_ARGS[@]}" \
+  --min_steps "$PHASEFP_SMOKE_STEPS" --out "$ROOT/smoke_verdict.json"
+
+jq -e '.pass == true' "$ROOT/smoke_verdict.json" >/dev/null
+echo "[$(date --iso-8601=seconds)] Phase-FP smoke PASSED: $ROOT/smoke_verdict.json"
+if command -v my-job-stats >/dev/null 2>&1; then
+  my-job-stats -a -n -s
+fi

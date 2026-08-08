@@ -1,0 +1,125 @@
+#!/usr/bin/env bash
+#BSUB -J sd-phaseFP-train
+#BSUB -G s10396
+#BSUB -q training-parallel
+#BSUB -n 16
+#BSUB -W 24:00
+#BSUB -R "span[hosts=1]"
+# Measured peak host RAM for this job is 81.6 GB (LSF 101190). The old 256 GB request was a ~3x
+# over-ask that excluded most hosts and was the real cause of long queue waits, not GPU scarcity.
+#BSUB -R "select[mem>128000 && hname!='farm-gpu0504']"
+#BSUB -R "rusage[mem=128000]"
+#BSUB -M 128000
+# Select by GPU memory, not model: peak is ~74 GB, so H200 / H100-80 / A100-80 all qualify and the
+# eligible pool is far larger than an H200 pin.
+#
+# farm-gpu0504 STAYS EXCLUDED, and the exclusion is now justified rather than inherited. The 2-GPU
+# probe 101250 passed (646 TFLOP/s, exact all-reduce, no ECC errors), but the 4-GPU probe 101241
+# FAILED on the same node: ranks 0 and 2 ran 11x slower than ranks 1 and 3 (58.7 vs 645.6 TFLOP/s)
+# and reported bad_allreduce=1 — a numerically incorrect collective — before rank 1 aborted with
+# SIGABRT. The fault is specific to 4-GPU scale, which is the configuration training uses, and a
+# silently wrong all-reduce corrupts gradients without crashing the job. A small-scale probe is NOT
+# sufficient evidence to re-enable this node.
+#BSUB -gpu "num=4:mode=exclusive_process:gmem=78G"
+#BSUB -cwd /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM
+#BSUB -o /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-phaseFP-train-%J.out
+#BSUB -e /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-phaseFP-train-%J.err
+
+# Fixed-unordered-pair causal pilot. Every arm reads the SAME serialized candidate indices from the
+# same cache root and differs only in the orientation of the label. The trainer asserts pair
+# identity against a manifest and never recomputes an extremum.
+#
+# Submit one job per arm:
+#   bsub -env "all,PHASEFP_ARM=correct,PHASEFP_CACHE_JOB=<id>,PHASEFP_GROUP=<group>" < this_file
+set -euo pipefail
+
+export PATH="/software/cellgen/team361/ha11/envs/nichejepa/bin:$PATH"
+export HF_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/huggingface
+export TORCH_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/torch
+export XDG_CACHE_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/xdg
+export TOKENIZERS_PARALLELISM=false
+export NCCL_NVLS_ENABLE=0
+export WANDB_MODE=online
+source ~/.secrets/hf_token
+
+: "${PHASEFP_ARM:?submit with PHASEFP_ARM=correct|counterfactual|random|inverted}"
+: "${PHASEFP_CACHE_JOB:?submit with the fixed-pair cache job id}"
+: "${PHASEFP_GROUP:?submit with a unique campaign group id}"
+PHASEFP_STEPS=${PHASEFP_STEPS:-3000}
+PHASEFP_BETA=${PHASEFP_BETA:-100}
+PHASEFP_ANCHOR=${PHASEFP_ANCHOR:-1.0}
+PHASEFP_LR=${PHASEFP_LR:-1e-6}
+PHASEFP_SEED=${PHASEFP_SEED:-20260806}
+PHASEFP_LAMBDA_REPA=${PHASEFP_LAMBDA_REPA:-0.0}
+PHASEFP_NOISE_COUPLING=${PHASEFP_NOISE_COUPLING:-shared}
+PHASEFP_SIGMA_BAND=${PHASEFP_SIGMA_BAND:-all}
+PHASEFP_RATIO_CLIP=${PHASEFP_RATIO_CLIP:-0.0}
+PHASEFP_SAMPLE_EVERY=${PHASEFP_SAMPLE_EVERY:-250}
+PHASEFP_SAVE_EVERY=${PHASEFP_SAVE_EVERY:-750}
+PHASEFP_TELEMETRY_EVERY=${PHASEFP_TELEMETRY_EVERY:-1}
+PHASEFP_EXPECTED_RECORDS=${PHASEFP_EXPECTED_RECORDS:-5042}
+PHASEFP_TAGS=${PHASEFP_TAGS:-phaseFP,fixed-pair,orientation-only,pilot}
+PHASEFP_SUFFIX=${PHASEFP_SUFFIX:-}
+
+case "$PHASEFP_ARM" in
+  correct)        LABEL_SOURCE=correct_prompt ;;
+  counterfactual) LABEL_SOURCE=counterfactual_prompt ;;
+  random)         LABEL_SOURCE=randomized ;;
+  inverted)       LABEL_SOURCE=inverted_prompt ;;
+  *) echo "Invalid PHASEFP_ARM=$PHASEFP_ARM" >&2; exit 2 ;;
+esac
+
+JOB=${LSB_JOBID:-local}
+CACHE="phaseFP/fixedpair_${PHASEFP_CACHE_JOB}"
+SELECTION="${CACHE}/${PHASEFP_ARM}"
+MANIFEST="${CACHE}/pair_manifest.json"
+RUN="phaseFP_${PHASEFP_ARM}${PHASEFP_SUFFIX}_${JOB}"
+OUT="checkpoints/phaseFP/${RUN}"
+if [[ -e "$OUT" ]]; then
+  echo "Refusing to overwrite $OUT" >&2
+  exit 2
+fi
+
+test -s "$CACHE/summary.json"
+test -s "$MANIFEST"
+test -d "$SELECTION"
+jq -e '.pass == true and .cross_arm_pair_identity == true' "$CACHE/summary.json" >/dev/null
+
+echo "[$(date --iso-8601=seconds)] Phase-FP train start"
+echo "  host=$(hostname) job=$JOB arm=$PHASEFP_ARM label_source=$LABEL_SOURCE seed=$PHASEFP_SEED"
+echo "  cache=$CACHE steps=$PHASEFP_STEPS beta=$PHASEFP_BETA repa=$PHASEFP_LAMBDA_REPA"
+echo "  noise_coupling=$PHASEFP_NOISE_COUPLING sigma_band=$PHASEFP_SIGMA_BAND output=$OUT"
+nvidia-smi --query-gpu=index,name,memory.total --format=csv
+
+python3 phaseFP/test_fixed_pair.py --cache_root "$CACHE" \
+  --expected_records "$PHASEFP_EXPECTED_RECORDS" --expected_reversals 1373
+
+torchrun --standalone --nproc-per-node=4 phaseI/train_preference.py \
+  --labels fixed --pair_source fixed_indices \
+  --label_source "$LABEL_SOURCE" \
+  --selection_dir "$SELECTION" \
+  --pair_manifest "$MANIFEST" \
+  --output_dir "$OUT" \
+  --m1_checkpoint checkpoints/method/M1_pure_consistency_20260624_065127_55187/checkpoint_final.pt \
+  --num_steps "$PHASEFP_STEPS" --num_warmup_steps 100 \
+  --lr "$PHASEFP_LR" --weight_decay 0 --grad_clip 1.0 \
+  --beta "$PHASEFP_BETA" --lambda_anchor "$PHASEFP_ANCHOR" --preference_timesteps 4 \
+  --noise_coupling "$PHASEFP_NOISE_COUPLING" --sigma_band "$PHASEFP_SIGMA_BAND" \
+  --ratio_clip "$PHASEFP_RATIO_CLIP" \
+  --telemetry_every "$PHASEFP_TELEMETRY_EVERY" \
+  --K 8 --cfg 7.0 --sched_shift 3.0 --height 512 \
+  --gradient_checkpointing \
+  --seed "$PHASEFP_SEED" --label_seed 20260806 \
+  --lambda_repa "$PHASEFP_LAMBDA_REPA" --repa_layer 8 --repa_projector_lr 1e-4 \
+  --save_every "$PHASEFP_SAVE_EVERY" --sample_every "$PHASEFP_SAMPLE_EVERY" --log_every 10 \
+  --wandb_project sd-pref-repa-fixedpair-v1 --wandb_run_name "$RUN" \
+  --wandb_group "$PHASEFP_GROUP" --wandb_tags "$PHASEFP_TAGS"
+
+test -s "$OUT/checkpoint_final.pt"
+test -s "$OUT/args.json"
+jq -e --arg arm "$LABEL_SOURCE" '.label_source == $arm and .pair_source == "fixed_indices"' \
+  "$OUT/args.json" >/dev/null
+echo "[$(date --iso-8601=seconds)] Phase-FP train complete: $OUT/checkpoint_final.pt"
+if command -v my-job-stats >/dev/null 2>&1; then
+  my-job-stats -a -n -s
+fi

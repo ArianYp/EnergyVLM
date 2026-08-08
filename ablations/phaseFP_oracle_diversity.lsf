@@ -1,0 +1,50 @@
+#!/usr/bin/env bash
+#BSUB -J sd-phaseFP-oracle-div
+#BSUB -G s10396
+#BSUB -q training-parallel
+#BSUB -n 4
+#BSUB -W 6:00
+#BSUB -R "span[hosts=1]"
+#BSUB -R "select[mem>64000]"
+#BSUB -R "rusage[mem=64000]"
+#BSUB -M 64000
+#BSUB -gpu "num=1:mode=exclusive_process"
+#BSUB -cwd /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM
+#BSUB -o /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-phaseFP-oracle-div-%J.out
+#BSUB -e /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-phaseFP-oracle-div-%J.err
+
+# Measures what best-of-K teacher selection costs in the same DINO/LPIPS units as the student
+# diversity gate, so the student's diversity loss can be compared against the policy it amortizes
+# rather than against M1 alone.
+set -euo pipefail
+
+export PATH="/software/cellgen/team361/ha11/envs/nichejepa/bin:$PATH"
+export HF_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/huggingface
+export TORCH_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/torch
+export XDG_CACHE_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/xdg
+export TOKENIZERS_PARALLELISM=false
+source ~/.secrets/hf_token
+
+JOB=${LSB_JOBID:-local}
+OUT="reports/audit_2026-08-07/oracle_diversity_${JOB}"
+if [[ -e "$OUT" ]]; then echo "Refusing to overwrite $OUT" >&2; exit 2; fi
+mkdir -p "$OUT"
+
+echo "[$(date --iso-8601=seconds)] Oracle diversity price | job=$JOB"
+nvidia-smi --query-gpu=index,name,memory.total --format=csv
+
+# n_sets=4 matches the four-seed student diversity protocol exactly.
+python3 audit/oracle_diversity_price.py \
+  --images_root exp0/images --scores_dir exp0/scores --config cfg7_s8 \
+  --K 4 --n_sets 4 --seed 20260807 \
+  --out "$OUT/best_of_4.json" --md "$OUT/best_of_4.md"
+
+# Best-of-8 uses the whole bank, bounding the price at the largest K the bank supports.
+python3 audit/oracle_diversity_price.py \
+  --images_root exp0/images --scores_dir exp0/scores --config cfg7_s8 \
+  --K 8 --n_sets 4 --seed 20260807 \
+  --out "$OUT/best_of_8.json" --md "$OUT/best_of_8.md"
+
+test -s "$OUT/best_of_4.json"
+test -s "$OUT/best_of_8.json"
+echo "[$(date --iso-8601=seconds)] Oracle diversity price complete: $OUT"

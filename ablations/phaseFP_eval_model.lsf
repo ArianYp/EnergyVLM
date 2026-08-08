@@ -1,0 +1,104 @@
+#!/usr/bin/env bash
+#BSUB -J sd-phaseFP-eval
+#BSUB -G s10396
+#BSUB -q training-parallel
+#BSUB -n 16
+#BSUB -W 24:00
+#BSUB -R "span[hosts=1]"
+#BSUB -R "select[mem>128000]"
+#BSUB -R "rusage[mem=128000]"
+#BSUB -M 128000
+# Evaluation is inference-only (~20 GB per GPU), so gmem=40G admits the L40S pool, which is
+# normally near-idle. That keeps the 80 GB+ cards free for training and lets the per-model eval
+# jobs run concurrently instead of serialising.
+#BSUB -gpu "num=4:mode=exclusive_process:gmem=40G"
+#BSUB -cwd /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM
+#BSUB -o /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-phaseFP-eval-%J.out
+#BSUB -e /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-phaseFP-eval-%J.err
+
+# Generates and scores ONE model against the frozen Phase-FP prompt manifests. One job per model
+# keeps each run inside the 24h wall limit and lets the arms evaluate in parallel; the shared,
+# hash-asserted manifests are what make the results comparable, not co-location in one job.
+#
+#   bsub -env "all,PHASEFP_LABEL=CorrectFixed,PHASEFP_CKPT=<path>,PHASEFP_POOL_JOB=<id>,..." < this
+set -euo pipefail
+
+export PATH="/software/cellgen/team361/ha11/envs/nichejepa/bin:$PATH"
+export HF_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/huggingface
+export TORCH_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/torch
+export XDG_CACHE_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/xdg
+export TOKENIZERS_PARALLELISM=false
+export NCCL_NVLS_ENABLE=0
+export WANDB_MODE=online
+source ~/.secrets/hf_token
+
+: "${PHASEFP_LABEL:?missing model label}"
+: "${PHASEFP_CKPT:?missing checkpoint path}"
+: "${PHASEFP_POOL_JOB:?missing evaluation pool job id}"
+: "${PHASEFP_GROUP:?missing campaign group id}"
+PHASEFP_DIVERSITY_SEEDS=${PHASEFP_DIVERSITY_SEEDS:-4}
+
+JOB=${LSB_JOBID:-local}
+POOL="phaseFP/eval_pool_${PHASEFP_POOL_JOB}"
+ROOT="phaseFP/eval_${PHASEFP_LABEL}_${JOB}"
+if [[ -e "$ROOT" ]]; then echo "Refusing to overwrite $ROOT" >&2; exit 2; fi
+
+test -s "$POOL/manifest.json"
+if [[ "$PHASEFP_CKPT" != "base" ]]; then test -s "$PHASEFP_CKPT"; fi
+# The manifests are immutable inputs: re-verify their hashes before spending GPU hours.
+( cd "$POOL" && jq -r '.sha256 | to_entries[] | "\(.value)  \(.key)"' manifest.json | sha256sum -c - )
+
+mkdir -p "$ROOT"
+cp "$POOL/manifest.json" "$ROOT/pool_manifest.json"
+
+echo "[$(date --iso-8601=seconds)] Phase-FP eval | job=$JOB label=$PHASEFP_LABEL ckpt=$PHASEFP_CKPT"
+nvidia-smi --query-gpu=index,name,memory.total --format=csv
+
+echo "=== Generation (CompBench / GenEval2 / fidelity / diversity) ==="
+torchrun --standalone --nproc-per-node=4 exp0/phaseA_generate.py \
+  --out_root "$ROOT/compbench" --label "$PHASEFP_LABEL" --checkpoint "$PHASEFP_CKPT" --cfg 1 \
+  --prompts_json "$POOL/compbench_prompts.json" --steps_list 4
+torchrun --standalone --nproc-per-node=4 exp0/phaseA_generate.py \
+  --out_root "$ROOT/geneval2" --label "$PHASEFP_LABEL" --checkpoint "$PHASEFP_CKPT" --cfg 1 \
+  --prompts_json "$POOL/geneval2_prompts.json" --steps_list 4
+torchrun --standalone --nproc-per-node=4 exp0/phaseA_generate.py \
+  --out_root "$ROOT/fidelity" --label "$PHASEFP_LABEL" --checkpoint "$PHASEFP_CKPT" --cfg 1 \
+  --prompts_json "$POOL/fidelity_prompts.json" --steps_list 4
+torchrun --standalone --nproc-per-node=4 exp0/phaseA_generate.py \
+  --out_root "$ROOT/diversity" --label "$PHASEFP_LABEL" --checkpoint "$PHASEFP_CKPT" --cfg 1 \
+  --prompts_json "$POOL/diversity_prompts.json" --steps_list 4 --n_seeds "$PHASEFP_DIVERSITY_SEEDS"
+
+echo "=== Official T2I-CompBench evaluators ==="
+for CAT in color shape texture spatial 3d_spatial numeracy non_spatial complex; do
+  D="$ROOT/compbench_scores/${PHASEFP_LABEL}_s4_${CAT}"
+  python3 phaseC/compbench_eval.py stage \
+    --images "$ROOT/compbench/images/${PHASEFP_LABEL}" --prompts "$POOL/compbench_prompts.json" \
+    --steps 4 --categories "$CAT" --out "$D"
+  python3 phaseC/compbench_eval.py run --dir "$D" --skip_done
+  python3 phaseC/compbench_eval.py collect --dir "$D" --routing_split val
+done
+
+echo "=== Official GenEval2 Soft-TIFA ==="
+D="$ROOT/geneval2_scores/${PHASEFP_LABEL}_s4"
+python3 phaseC/geneval2_eval.py stage --images "$ROOT/geneval2/images/${PHASEFP_LABEL}" \
+  --pool "$POOL/geneval2_prompts.json" --steps 4 --out "$D"
+python3 phaseC/geneval2_eval.py run --dir "$D" --method soft_tifa_gm --skip_done
+python3 phaseC/geneval2_eval.py collect --dir "$D" --method soft_tifa_gm
+
+# Fidelity and diversity are deliberately NOT run here. Both `phaseC/fidelity_eval.py` and
+# `phaseC/diversity_eval.py` require a two-model `--gate_models treatment,control` pair, because the
+# quantities they report are cross-model contrasts, not per-model measurements. Running them once
+# across every arm in `ablations/phaseFP_eval_aggregate.lsf` also guarantees a single COCO reference
+# sample drawn inside one process, which is exactly the "same-job M1" requirement. This job's
+# contribution to those metrics is the generated images under $ROOT/fidelity and $ROOT/diversity.
+
+for CAT in color shape texture spatial 3d_spatial numeracy non_spatial complex; do
+  test -s "$ROOT/compbench_scores/${PHASEFP_LABEL}_s4_${CAT}/scores.json"
+done
+test -s "$ROOT/geneval2_scores/${PHASEFP_LABEL}_s4/scores.json"
+test "$(find "$ROOT/fidelity/images" -name '*.png' | wc -l)" -ge 2000
+test "$(find "$ROOT/diversity/images" -name '*.png' | wc -l)" -ge 1500
+echo "[$(date --iso-8601=seconds)] Phase-FP eval complete: $ROOT"
+if command -v my-job-stats >/dev/null 2>&1; then
+  my-job-stats -a -n -s
+fi

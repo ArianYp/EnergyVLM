@@ -1,0 +1,63 @@
+#!/usr/bin/env bash
+#BSUB -J sd-phaseFP-cache
+#BSUB -G s10396
+#BSUB -q training-normal
+#BSUB -n 2
+#BSUB -W 1:00
+#BSUB -R "span[hosts=1]"
+#BSUB -R "select[mem>16000]"
+#BSUB -R "rusage[mem=16000]"
+#BSUB -M 16000
+#BSUB -gpu "num=1:mode=exclusive_process"
+#BSUB -cwd /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM
+#BSUB -o /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-phaseFP-cache-%J.out
+#BSUB -e /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-phaseFP-cache-%J.err
+
+set -euo pipefail
+
+export PATH="/software/cellgen/team361/ha11/envs/nichejepa/bin:$PATH"
+export XDG_CACHE_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/xdg
+export WANDB_MODE=online
+
+: "${PHASEFP_GROUP:?missing Phase-FP W&B group}"
+PHASEFP_SOURCE=${PHASEFP_SOURCE:-phaseI/counterfactual_data_100590}
+
+JOB=${LSB_JOBID:-local}
+OUT="phaseFP/fixedpair_${JOB}"
+if [[ -e "$OUT" ]]; then
+  echo "Refusing to overwrite $OUT" >&2
+  exit 2
+fi
+
+echo "[$(date --iso-8601=seconds)] Phase-FP fixed-pair cache build | job=$JOB source=$PHASEFP_SOURCE"
+
+python3 phaseFP/build_fixed_pair_selection.py \
+  --out_root "$OUT" \
+  --source_root "$PHASEFP_SOURCE" \
+  --label_seed 20260806 \
+  --shards 4 \
+  --expected_records 5042 \
+  --min_reversal_fraction 0.20 \
+  --min_original_margin 0.20 \
+  --tie_policy keep \
+  --wandb_project sd-pref-repa-fixedpair-v1 \
+  --wandb_run_name "phaseFP_cache_${JOB}" \
+  --wandb_group "$PHASEFP_GROUP"
+
+python3 phaseFP/test_fixed_pair.py \
+  --cache_root "$OUT" \
+  --expected_records 5042 \
+  --expected_reversals 1373 \
+  --min_original_margin 0.20
+
+python3 phaseFP/dose_audit.py \
+  --cache_root "$OUT" \
+  --out "$OUT/dose_audit.json" \
+  --md "$OUT/dose_audit.md"
+
+test -s "$OUT/summary.json"
+test -s "$OUT/pair_manifest.json"
+test -s "$OUT/reversal_subset.json"
+test -s "$OUT/dose_audit.json"
+jq -e '.pass == true and .cross_arm_pair_identity == true and .records == 5042' "$OUT/summary.json" >/dev/null
+echo "[$(date --iso-8601=seconds)] Phase-FP cache complete: $OUT"

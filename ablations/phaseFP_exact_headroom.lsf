@@ -1,0 +1,50 @@
+#!/usr/bin/env bash
+#BSUB -J sd-FP-exact-headroom
+#BSUB -G s10396
+#BSUB -q training-parallel
+#BSUB -n 8
+#BSUB -W 20:00
+#BSUB -R "span[hosts=1]"
+#BSUB -R "select[mem>128000 && hname!='farm-gpu0504']"
+#BSUB -R "rusage[mem=128000]"
+#BSUB -M 128000
+#BSUB -gpu "num=1:mode=exclusive_process:gmem=40G"
+#BSUB -cwd /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM
+#BSUB -o /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-FP-exact-headroom-%J.out
+#BSUB -e /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-FP-exact-headroom-%J.err
+
+# Score EVERY teacher candidate slot, so the selection policies become exact per-prompt
+# expectations. Fixes the reported ~42% control bias, which is exactly N/(N-1) = 33.3% by algebra;
+# the excess came from estimating each policy with a single random draw per prompt.
+set -euo pipefail
+export PATH="/software/cellgen/team361/ha11/envs/nichejepa/bin:$PATH"
+export HF_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/huggingface
+export TORCH_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/torch
+export XDG_CACHE_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/xdg
+export TOKENIZERS_PARALLELISM=false
+source ~/.secrets/hf_token
+
+: "${PHASEFP_CEILING_JOB:?missing teacher-ceiling job id}"
+JOB=${LSB_JOBID:-local}
+SRC="phaseFP/teacher_ceiling_${PHASEFP_CEILING_JOB}"
+ROOT="phaseFP/exact_headroom_${JOB}"
+test -s "$SRC/selected/selection.json"
+
+python3 phaseFP/build_candidate_models.py \
+  --images_root "$SRC/gen/images/Teacher" --prompts "$SRC/selected/prompts.json" \
+  --out "$ROOT/cands" --steps 8 --N 4
+
+for J in 0 1 2 3; do
+  for CAT in color shape texture spatial 3d_spatial numeracy complex; do
+    D="$ROOT/cand_scores/Cand${J}_s8_${CAT}"
+    python3 phaseC/compbench_eval.py stage --images "$ROOT/cands/images/Cand${J}" \
+      --prompts "$ROOT/cands/prompts.json" --steps 8 --categories "$CAT" --out "$D"
+    python3 phaseC/compbench_eval.py run --dir "$D" --skip_done
+    python3 phaseC/compbench_eval.py collect --dir "$D" --routing_split val
+  done
+done
+
+python3 phaseFP/exact_policy_expectations.py \
+  --cand_scores_dir "$ROOT/cand_scores" --selection "$SRC/selected/selection.json" \
+  --steps 8 --N 4 --out "$ROOT/exact_headroom.json" --md "$ROOT/exact_headroom.md"
+echo "[$(date --iso-8601=seconds)] exact headroom complete: $ROOT"

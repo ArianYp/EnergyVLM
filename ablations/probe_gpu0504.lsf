@@ -1,0 +1,105 @@
+#!/usr/bin/env bash
+#BSUB -J probe-gpu0504
+#BSUB -G s10396
+#BSUB -q training-parallel
+#BSUB -n 16
+#BSUB -W 1:00
+#BSUB -R "span[hosts=1]"
+#BSUB -R "select[mem>128000 && hname=='farm-gpu0504']"
+#BSUB -R "rusage[mem=128000]"
+#BSUB -M 128000
+#BSUB -gpu "num=4:mode=exclusive_process"
+#BSUB -cwd /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM
+#BSUB -o /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-probe-gpu0504-%J.out
+#BSUB -e /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-probe-gpu0504-%J.err
+
+# Health probe for farm-gpu0504, which every ablations/*.lsf currently excludes with
+# hname!='farm-gpu0504'. The original symptom (jobs 48213/48214, 2026-06-16) was that
+# nvidia-smi printed "No devices were found" -- the GPUs were simply not visible to the
+# job. This re-tests visibility, per-GPU memory, NCCL correctness and sustained throughput.
+#
+# Deliberately does NOT use `set -e`: we want to reach the PROBE_RESULT line even on failure.
+set -uo pipefail
+
+export PATH="/software/cellgen/team361/ha11/envs/nichejepa/bin:$PATH"
+export HF_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/huggingface
+export TORCH_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/torch
+export XDG_CACHE_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/xdg
+export TOKENIZERS_PARALLELISM=false
+export NCCL_NVLS_ENABLE=0
+
+# Number of GPUs this probe expects. Defaults to 4 (matches the #BSUB -gpu line above).
+# Override at submit time together with -gpu, e.g. when the node is busy:
+#   PROBE_NGPU=2 bsub -gpu "num=2:mode=exclusive_process" -J probe-gpu0504-2gpu \
+#     -o logs/lsf-probe-gpu0504-2gpu-%J.out -e logs/lsf-probe-gpu0504-2gpu-%J.err \
+#     < ablations/probe_gpu0504.lsf
+PROBE_NGPU=${PROBE_NGPU:-4}
+
+echo "[$(date --iso-8601=seconds)] probe host=$(hostname) job=${LSB_JOBID:-local} expect_ngpu=${PROBE_NGPU}"
+echo "CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-<unset>}"
+
+FAIL_REASONS=()
+
+# ---------------------------------------------------------------- 1. visibility + ECC
+echo "=== nvidia-smi ==="
+SMI_OUT=$(nvidia-smi --query-gpu=index,name,memory.total,ecc.errors.uncorrected.volatile.total \
+          --format=csv 2>&1)
+SMI_RC=$?
+printf '%s\n' "${SMI_OUT}"
+if [[ ${SMI_RC} -ne 0 ]] || ! printf '%s' "${SMI_OUT}" | grep -qi "H200"; then
+  FAIL_REASONS+=("nvidia-smi_reported_no_H200_GPUs(rc=${SMI_RC})")
+fi
+
+echo "=== nvidia-smi (aggregate ECC / retired pages, informational) ==="
+nvidia-smi --query-gpu=index,ecc.errors.corrected.volatile.total,ecc.errors.uncorrected.aggregate.total,retired_pages.pending \
+  --format=csv 2>&1 || true
+
+NGPU=$(nvidia-smi --query-gpu=index --format=csv,noheader 2>/dev/null | wc -l)
+echo "visible GPU count: ${NGPU}"
+if [[ "${NGPU}" -lt "${PROBE_NGPU}" ]]; then
+  FAIL_REASONS+=("only_${NGPU}_GPUs_visible_need_${PROBE_NGPU}")
+fi
+
+# Uncorrected volatile ECC errors on any visible GPU are disqualifying.
+ECC_BAD=$(nvidia-smi --query-gpu=index,ecc.errors.uncorrected.volatile.total --format=csv,noheader 2>/dev/null \
+          | awk -F', *' '$2 ~ /^[0-9]+$/ && $2+0 > 0 {print $1":"$2}' | paste -sd, -)
+if [[ -n "${ECC_BAD}" ]]; then
+  FAIL_REASONS+=("uncorrected_volatile_ECC_errors[${ECC_BAD}]")
+fi
+
+echo "=== nvidia-smi topo -m (NVLink fabric) ==="
+nvidia-smi topo -m 2>&1 || true
+
+# ---------------------------------------------------- 2. NCCL all-reduce + 60s burn
+if [[ "${NGPU}" -ge "${PROBE_NGPU}" ]]; then
+  echo "=== torchrun ${PROBE_NGPU}-GPU NCCL + burn ==="
+  torchrun --standalone --nproc-per-node="${PROBE_NGPU}" \
+    /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/ablations/probe_gpu0504.py \
+    --ballast_gib 60 --headroom_gib 78 --burn_seconds 60
+  TORCH_RC=$?
+  echo "torchrun exit code: ${TORCH_RC}"
+  if [[ "${TORCH_RC}" -ne 0 ]]; then
+    FAIL_REASONS+=("torchrun_exit_${TORCH_RC}")
+  fi
+else
+  FAIL_REASONS+=("skipped_torchrun_insufficient_GPUs")
+fi
+
+echo "=== post-burn ECC re-check ==="
+nvidia-smi --query-gpu=index,name,ecc.errors.uncorrected.volatile.total,temperature.gpu,clocks_throttle_reasons.active \
+  --format=csv 2>&1 || true
+
+# ------------------------------------------------------------------ 3. verdict
+echo
+if [[ ${#FAIL_REASONS[@]} -eq 0 ]]; then
+  echo "PROBE_RESULT: PASS"
+  RC=0
+else
+  echo "PROBE_RESULT: FAIL $(IFS=';'; echo "${FAIL_REASONS[*]}")"
+  RC=1
+fi
+
+if command -v my-job-stats >/dev/null 2>&1; then
+  my-job-stats -a -n -s || true
+fi
+exit ${RC}

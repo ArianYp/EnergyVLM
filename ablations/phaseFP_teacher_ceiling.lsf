@@ -1,0 +1,111 @@
+#!/usr/bin/env bash
+#BSUB -J sd-FP-teacher-ceiling
+#BSUB -G s10396
+#BSUB -q training-parallel
+#BSUB -n 16
+#BSUB -W 24:00
+#BSUB -R "span[hosts=1]"
+# 256 GB, NOT the 128 GB the training jobs use. Stage 2 loads clip-flant5-xxl (~11B params) into
+# host RAM on all four ranks at once; job 101377 peaked at 138 GB and was killed by TERM_MEMLIMIT
+# at 128 GB. The audited exp0 scoring job requests 256 GB for the same reason. Training's 81.6 GB
+# peak does not generalise to this job.
+#BSUB -R "select[mem>256000 && hname!='farm-gpu0504']"
+#BSUB -R "rusage[mem=256000]"
+#BSUB -M 256000
+#BSUB -gpu "num=4:mode=exclusive_process:gmem=78G"
+#BSUB -cwd /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM
+#BSUB -o /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-FP-teacher-ceiling-%J.out
+#BSUB -e /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-FP-teacher-ceiling-%J.err
+
+# Roadmap task T — the teacher ceiling on the SAME held-out prompts the students are scored on.
+#
+# The existing +0.0717 oracle was measured on the exp0 pool, which is the TRAIN split and shares
+# zero prompts with the val split used for every student result. That is why the amortization ratio
+# has no matched denominator (only an independent-bootstrap one) and why the oracle diversity price
+# is an order-of-magnitude reference rather than a matched contrast. This job fixes both.
+#
+# Frozen base SD3.5-M, 8 steps, CFG 7, 4 candidates per prompt — the same teacher configuration the
+# preference cache was built from.
+set -euo pipefail
+
+export PATH="/software/cellgen/team361/ha11/envs/nichejepa/bin:$PATH"
+export HF_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/huggingface
+export TORCH_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/torch
+export XDG_CACHE_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/xdg
+export TOKENIZERS_PARALLELISM=false
+export NCCL_NVLS_ENABLE=0
+source ~/.secrets/hf_token
+
+: "${PHASEFP_POOL_JOB:?missing evaluation pool job id}"
+PHASEFP_N=${PHASEFP_N:-4}
+PHASEFP_TEACHER_STEPS=${PHASEFP_TEACHER_STEPS:-8}
+PHASEFP_TEACHER_CFG=${PHASEFP_TEACHER_CFG:-7}
+
+JOB=${LSB_JOBID:-local}
+POOL="phaseFP/eval_pool_${PHASEFP_POOL_JOB}"
+ROOT="phaseFP/teacher_ceiling_${JOB}"
+if [[ -e "$ROOT" ]]; then echo "Refusing to overwrite $ROOT" >&2; exit 2; fi
+mkdir -p "$ROOT"
+
+test -s "$POOL/compbench_prompts.json"
+( cd "$POOL" && jq -r '.sha256 | to_entries[] | "\(.value)  \(.key)"' manifest.json | sha256sum -c - )
+cp "$POOL/manifest.json" "$ROOT/pool_manifest.json"
+
+echo "[$(date --iso-8601=seconds)] Task T teacher ceiling | job=$JOB N=$PHASEFP_N"
+nvidia-smi --query-gpu=index,name,memory.total --format=csv
+
+echo "=== 1. Generate $PHASEFP_N frozen-teacher candidates per held-out prompt ==="
+# Generation is the expensive stage (~9.6k images). If a previous attempt already produced them,
+# reuse that tree rather than paying for it again — the images are a deterministic function of the
+# frozen base model, the prompt manifest and the seed, so they are identical either way.
+if [[ -n "${PHASEFP_REUSE_GEN:-}" ]]; then
+  test -d "$PHASEFP_REUSE_GEN/images/Teacher"
+  n_existing=$(find "$PHASEFP_REUSE_GEN/images/Teacher" -name '*.png' | wc -l)
+  echo "  reusing $n_existing existing images from $PHASEFP_REUSE_GEN"
+  test "$n_existing" -ge 9000
+  ln -s "$(readlink -f "$PHASEFP_REUSE_GEN")" "$ROOT/gen"
+else
+  torchrun --standalone --nproc-per-node=4 exp0/phaseA_generate.py \
+    --out_root "$ROOT/gen" --label Teacher --checkpoint base \
+    --cfg "$PHASEFP_TEACHER_CFG" --steps_list "$PHASEFP_TEACHER_STEPS" \
+    --prompts_json "$POOL/compbench_prompts.json" --n_seeds "$PHASEFP_N"
+fi
+
+echo "=== 2. VQAScore every candidate ==="
+torchrun --standalone --nproc-per-node=4 phaseFP/score_teacher_candidates.py \
+  --images_root "$ROOT/gen/images/Teacher" \
+  --prompts "$POOL/compbench_prompts.json" \
+  --out_dir "$ROOT/scores" --steps "$PHASEFP_TEACHER_STEPS" --pool_size "$PHASEFP_N"
+
+echo "=== 3. Lay out best-of-K and both controls ==="
+python3 phaseFP/build_teacher_ceiling.py \
+  --images_root "$ROOT/gen/images/Teacher" --scores_dir "$ROOT/scores" \
+  --prompts "$POOL/compbench_prompts.json" --out "$ROOT/selected" \
+  --steps "$PHASEFP_TEACHER_STEPS" --N "$PHASEFP_N" --seed 0
+
+echo "=== 4. Official T2I-CompBench on all three selections ==="
+# routing_split val: these are held-out val prompts, unlike the exp0 train-split measurement.
+for MODEL in TeacherBest TeacherRandom TeacherUniform; do
+  for CAT in color shape texture spatial 3d_spatial numeracy non_spatial complex; do
+    D="$ROOT/compbench_scores/${MODEL}_s${PHASEFP_TEACHER_STEPS}_${CAT}"
+    python3 phaseC/compbench_eval.py stage \
+      --images "$ROOT/selected/images/${MODEL}" --prompts "$ROOT/selected/prompts.json" \
+      --steps "$PHASEFP_TEACHER_STEPS" --categories "$CAT" --out "$D"
+    python3 phaseC/compbench_eval.py run --dir "$D" --skip_done
+    python3 phaseC/compbench_eval.py collect --dir "$D" --routing_split val
+  done
+done
+
+echo "=== 5. Matched diversity price: best-of-K versus random over the SAME candidates ==="
+python3 audit/oracle_diversity_price.py \
+  --images_root "$ROOT/gen/images/Teacher" --scores_dir "$ROOT/scores" \
+  --config "s${PHASEFP_TEACHER_STEPS}" --K "$PHASEFP_N" --n_sets 4 --seed 20260807 \
+  --out "$ROOT/diversity_price.json" --md "$ROOT/diversity_price.md" \
+  || echo "NOTE: diversity price needs --config/layout matching; run separately if it failed"
+
+for MODEL in TeacherBest TeacherRandom TeacherUniform; do
+  for CAT in color shape texture spatial 3d_spatial numeracy non_spatial complex; do
+    test -s "$ROOT/compbench_scores/${MODEL}_s${PHASEFP_TEACHER_STEPS}_${CAT}/scores.json"
+  done
+done
+echo "[$(date --iso-8601=seconds)] Task T complete: $ROOT"

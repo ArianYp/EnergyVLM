@@ -1,0 +1,49 @@
+#!/usr/bin/env bash
+#BSUB -J sd-FP-audit-pairs
+#BSUB -G s10396
+#BSUB -q training-parallel
+#BSUB -n 16
+#BSUB -W 4:00
+#BSUB -R "span[hosts=1]"
+#BSUB -R "select[mem>128000 && hname!='farm-gpu0504']"
+#BSUB -R "rusage[mem=128000]"
+#BSUB -M 128000
+#BSUB -gpu "num=4:mode=exclusive_process:gmem=40G"
+#BSUB -cwd /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM
+#BSUB -o /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-FP-audit-pairs-%J.out
+#BSUB -e /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-FP-audit-pairs-%J.err
+
+# Task H, stage 2: render the frozen training pair for each sampled edit-audit record, so the human
+# reviewer can judge whether the pair visibly differs in the edited concept — not just whether the
+# prompt edit is well formed. Inference only, 4 candidates' worth of teacher rollouts per record.
+set -euo pipefail
+
+export PATH="/software/cellgen/team361/ha11/envs/nichejepa/bin:$PATH"
+export HF_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/huggingface
+export TORCH_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/torch
+export XDG_CACHE_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/xdg
+export TOKENIZERS_PARALLELISM=false
+export NCCL_NVLS_ENABLE=0
+source ~/.secrets/hf_token
+
+JOB=${LSB_JOBID:-local}
+OUT="phaseFP/edit_audit/pairs_${JOB}"
+test -s phaseFP/edit_audit/answer_key.json
+
+echo "[$(date --iso-8601=seconds)] Task H pair rendering | job=$JOB out=$OUT"
+nvidia-smi --query-gpu=index,name,memory.total --format=csv
+
+torchrun --standalone --nproc-per-node=4 phaseFP/render_audit_pairs.py \
+  --cache_root phaseFP/fixedpair_101185 \
+  --answer_key phaseFP/edit_audit/answer_key.json \
+  --out "$OUT" --K 8 --cfg 7.0 --height 512
+
+n=$(find "$OUT" -name 'pair_a.png' | wc -l)
+echo "  rendered $n pairs"
+test "$n" -ge 200
+
+python3 phaseFP/build_edit_audit_packet.py \
+  --pairs_root "$OUT" --answer_key phaseFP/edit_audit/answer_key.json \
+  --review_sheet phaseFP/edit_audit/review_sheet.json \
+  --out "phaseFP/edit_audit/packet_${JOB}"
+echo "[$(date --iso-8601=seconds)] Task H packet complete: phaseFP/edit_audit/packet_${JOB}"
