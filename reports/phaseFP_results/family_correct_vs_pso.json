@@ -1,0 +1,154 @@
+{
+  "blip_minus_unidet": {
+    "ci95": [
+      -0.041191581629747294,
+      -0.006118766334975137
+    ],
+    "delta": -0.023592783405516005,
+    "families_disagree_in_sign": true
+  },
+  "bootstrap_draws": 10000,
+  "categories": {
+    "3d_spatial": {
+      "ci95": [
+        -0.011169503196223373,
+        0.026676096638807233
+      ],
+      "delta": 0.007603570731623168,
+      "n": 300
+    },
+    "color": {
+      "ci95": [
+        -0.018801583333333333,
+        0.002448183333333337
+      ],
+      "delta": -0.008464333333333332,
+      "n": 300
+    },
+    "complex": {
+      "ci95": [
+        -0.01905810466579861,
+        -0.00414927652313061
+      ],
+      "delta": -0.011352700356647955,
+      "n": 300
+    },
+    "non_spatial": {
+      "ci95": [
+        0.0012344767252604168,
+        0.004186228434244791
+      ],
+      "delta": 0.0027107747395833334,
+      "n": 300
+    },
+    "numeracy": {
+      "ci95": [
+        0.008833333333333332,
+        0.057944444444444444
+      ],
+      "delta": 0.03375,
+      "n": 300
+    },
+    "shape": {
+      "ci95": [
+        -0.044495683333333334,
+        -0.011079466666666678
+      ],
+      "delta": -0.027480666666666664,
+      "n": 300
+    },
+    "spatial": {
+      "ci95": [
+        -0.05968711585608898,
+        0.008637789604033797
+      ],
+      "delta": -0.025523887181741825,
+      "n": 298
+    },
+    "texture": {
+      "ci95": [
+        -0.03343645833333333,
+        -0.005040524999999997
+      ],
+      "delta": -0.01900366666666667,
+      "n": 300
+    }
+  },
+  "control": "PSOBaseline",
+  "estimand": "equal-category-weighted mean paired difference; prompts resampled within category",
+  "families": {
+    "3-in-1": {
+      "categories": [
+        "complex"
+      ],
+      "ci95": [
+        -0.01905810466579861,
+        -0.00414927652313061
+      ],
+      "delta": -0.011352700356647955,
+      "n_prompts": 300,
+      "p_gt_zero": 0.0007
+    },
+    "BLIP-VQA": {
+      "categories": [
+        "color",
+        "shape",
+        "texture"
+      ],
+      "ci95": [
+        -0.02653025277777778,
+        -0.010382855555555558
+      ],
+      "delta": -0.018316222222222223,
+      "n_prompts": 900,
+      "p_gt_zero": 0.0
+    },
+    "CLIPScore": {
+      "categories": [
+        "non_spatial"
+      ],
+      "ci95": [
+        0.0012344767252604168,
+        0.004186228434244791
+      ],
+      "delta": 0.0027107747395833334,
+      "n_prompts": 300,
+      "p_gt_zero": 0.9998
+    },
+    "UniDet": {
+      "categories": [
+        "spatial",
+        "3d_spatial",
+        "numeracy"
+      ],
+      "ci95": [
+        -0.010527148947627631,
+        0.02057156859270937
+      ],
+      "delta": 0.005276561183293782,
+      "n_prompts": 898,
+      "p_gt_zero": 0.7543
+    }
+  },
+  "pooled_primary": {
+    "categories": [
+      "color",
+      "shape",
+      "texture",
+      "spatial",
+      "3d_spatial",
+      "numeracy",
+      "complex"
+    ],
+    "ci95": [
+      -0.014936939202230418,
+      0.00032988500565958383
+    ],
+    "delta": -0.007210240496204752
+  },
+  "scores_dir": "/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/reports/phaseFP_results/merged_compbench_scores",
+  "seed": 20260807,
+  "step": 4,
+  "title": "our recipe minus offline-PSO configuration",
+  "treatment": "CorrectFixed"
+}

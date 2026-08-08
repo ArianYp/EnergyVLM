@@ -1,5 +1,31 @@
 # Project handoff: evidence, lessons, and implementation plan
 
+> **Execution update, 2026-08-07 (later the same day).** The Tier-0 zero-training audit and the
+> fixed-pair pilot launch described in "Exact next implementation sequence" have been carried out.
+> Read `reports/audit_2026-08-07/README.md` and `phaseFP/PREREGISTRATION.md` alongside this document.
+> Four statements below are now superseded:
+>
+> 1. **The cross-job FID/CMMD shift is no longer unexplained.** Job 99955 generated its fidelity
+>    images from CompBench compositional prompts; job 100593 generated them from COCO captions.
+>    Both scored against the same COCO reference. The gap is a prompt-distribution effect and needs
+>    no reconciliation; only the COCO-caption protocol is used from now on. Blocking correction 3 is
+>    closed.
+> 2. **The amortization ratio now has a real interval:** 0.0062, 95% CI [−0.126, +0.139], one-sided
+>    95% upper bound **0.117**. A joint bootstrap is impossible — the C1 and teacher-oracle
+>    evaluations share **zero** prompts — because the integer `idx` field is assigned per job and is
+>    not a stable prompt key. Cite 11.7%, not the 13.5% shortcut.
+> 3. **The evaluator-family split has paired intervals and survives.** All three primary families
+>    move for every headline contrast, and for correct-minus-counterfactual the detection family
+>    moves *more* than the VQA family (BLIP − UniDet = −0.0284 [−0.0488, −0.0086]). Separately, the
+>    REPA increment is carried entirely by BLIP-VQA and is null on UniDet.
+> 4. **β = 100 is under-driven rather than saturated, and the loss is repulsion-dominated:**
+>    relative to M1 the student gets *worse* on the preferred endpoint (−0.0078) and worse still on
+>    the rejected one (+0.0146), so ~60% of the achieved margin comes from degrading the loser.
+>    Gradient clipping fires on 100% of steps, so β changes the direction mix, not the step size.
+>
+> Live campaign: cache 101185, smoke 101190 (passed), training 101193–101197, eval pool 101203,
+> evaluation 101206–101211, oracle diversity 101198.
+
 **Frozen on:** 2026-08-07
 
 **Purpose:** source-of-truth context for the next implementation session.

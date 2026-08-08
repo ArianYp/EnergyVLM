@@ -1,0 +1,154 @@
+{
+  "blip_minus_unidet": {
+    "ci95": [
+      -0.001442464719494102,
+      0.03848443971726907
+    ],
+    "delta": 0.018590662919025176,
+    "families_disagree_in_sign": false
+  },
+  "bootstrap_draws": 10000,
+  "categories": {
+    "3d_spatial": {
+      "ci95": [
+        0.02313445774586501,
+        0.06302853581945268
+      ],
+      "delta": 0.04250149714654831,
+      "n": 300
+    },
+    "color": {
+      "ci95": [
+        0.044172425,
+        0.0790182
+      ],
+      "delta": 0.06096833333333334,
+      "n": 300
+    },
+    "complex": {
+      "ci95": [
+        0.017287327624648977,
+        0.03589635020216281
+      ],
+      "delta": 0.026499806208022187,
+      "n": 300
+    },
+    "non_spatial": {
+      "ci95": [
+        -0.00047290039062499996,
+        0.0026953226725260414
+      ],
+      "delta": 0.0010909016927083334,
+      "n": 300
+    },
+    "numeracy": {
+      "ci95": [
+        0.02630347222222222,
+        0.07802777777777777
+      ],
+      "delta": 0.05211111111111111,
+      "n": 300
+    },
+    "shape": {
+      "ci95": [
+        0.075140675,
+        0.12112779166666664
+      ],
+      "delta": 0.09778366666666669,
+      "n": 300
+    },
+    "spatial": {
+      "ci95": [
+        0.04578961697185831,
+        0.1182388220997631
+      ],
+      "delta": 0.08177073631859842,
+      "n": 298
+    },
+    "texture": {
+      "ci95": [
+        0.05367522500000001,
+        0.09360870833333332
+      ],
+      "delta": 0.07340333333333333,
+      "n": 300
+    }
+  },
+  "control": "M1Fixed",
+  "estimand": "equal-category-weighted mean paired difference; prompts resampled within category",
+  "families": {
+    "3-in-1": {
+      "categories": [
+        "complex"
+      ],
+      "ci95": [
+        0.017287327624648977,
+        0.03589635020216281
+      ],
+      "delta": 0.026499806208022187,
+      "n_prompts": 300,
+      "p_gt_zero": 1.0
+    },
+    "BLIP-VQA": {
+      "categories": [
+        "color",
+        "shape",
+        "texture"
+      ],
+      "ci95": [
+        0.06565433055555556,
+        0.0891768111111111
+      ],
+      "delta": 0.07738511111111113,
+      "n_prompts": 900,
+      "p_gt_zero": 1.0
+    },
+    "CLIPScore": {
+      "categories": [
+        "non_spatial"
+      ],
+      "ci95": [
+        -0.00047290039062499996,
+        0.0026953226725260414
+      ],
+      "delta": 0.0010909016927083334,
+      "n_prompts": 300,
+      "p_gt_zero": 0.9103
+    },
+    "UniDet": {
+      "categories": [
+        "spatial",
+        "3d_spatial",
+        "numeracy"
+      ],
+      "ci95": [
+        0.0427450323959995,
+        0.07502767926452432
+      ],
+      "delta": 0.05879444819208595,
+      "n_prompts": 898,
+      "p_gt_zero": 1.0
+    }
+  },
+  "pooled_primary": {
+    "categories": [
+      "color",
+      "shape",
+      "texture",
+      "spatial",
+      "3d_spatial",
+      "numeracy",
+      "complex"
+    ],
+    "ci95": [
+      0.05350574379827574,
+      0.07077268793201244
+    ],
+    "delta": 0.062148354873944774
+  },
+  "scores_dir": "/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/reports/phaseFP_results/merged_compbench_scores",
+  "seed": 20260807,
+  "step": 4,
+  "title": "Phase-FP correct fixed-pair arm minus M1 (same prompt manifest)",
+  "treatment": "CorrectFixed"
+}

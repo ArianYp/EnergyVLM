@@ -1,0 +1,154 @@
+{
+  "blip_minus_unidet": {
+    "ci95": [
+      -0.04410115137588303,
+      -0.0080355557417744
+    ],
+    "delta": -0.02621193690066497,
+    "families_disagree_in_sign": false
+  },
+  "bootstrap_draws": 10000,
+  "categories": {
+    "3d_spatial": {
+      "ci95": [
+        -0.04354531492790987,
+        -0.010845641089648337
+      ],
+      "delta": -0.027407575687174345,
+      "n": 300
+    },
+    "color": {
+      "ci95": [
+        -0.074810425,
+        -0.034922383333333334
+      ],
+      "delta": -0.05395133333333334,
+      "n": 300
+    },
+    "complex": {
+      "ci95": [
+        -0.02324826518520779,
+        -0.008860895925564237
+      ],
+      "delta": -0.016036431735568575,
+      "n": 300
+    },
+    "non_spatial": {
+      "ci95": [
+        -0.006254892985026042,
+        -0.0029638570149739586
+      ],
+      "delta": -0.004599609375,
+      "n": 300
+    },
+    "numeracy": {
+      "ci95": [
+        -0.02252847222222222,
+        0.024194444444444446
+      ],
+      "delta": 0.0008333333333333348,
+      "n": 300
+    },
+    "shape": {
+      "ci95": [
+        -0.05198116666666667,
+        -0.011420000000000003
+      ],
+      "delta": -0.03189366666666667,
+      "n": 300
+    },
+    "spatial": {
+      "ci95": [
+        -0.05831050215789309,
+        0.0010851459265042134
+      ],
+      "delta": -0.02850961361083076,
+      "n": 298
+    },
+    "texture": {
+      "ci95": [
+        -0.06764949166666667,
+        -0.029591616666666674
+      ],
+      "delta": -0.04787466666666666,
+      "n": 300
+    }
+  },
+  "control": "M1Fixed",
+  "estimand": "equal-category-weighted mean paired difference; prompts resampled within category",
+  "families": {
+    "3-in-1": {
+      "categories": [
+        "complex"
+      ],
+      "ci95": [
+        -0.02324826518520779,
+        -0.008860895925564237
+      ],
+      "delta": -0.016036431735568575,
+      "n_prompts": 300,
+      "p_gt_zero": 0.0
+    },
+    "BLIP-VQA": {
+      "categories": [
+        "color",
+        "shape",
+        "texture"
+      ],
+      "ci95": [
+        -0.056050613888888885,
+        -0.03305117777777778
+      ],
+      "delta": -0.04457322222222223,
+      "n_prompts": 900,
+      "p_gt_zero": 0.0
+    },
+    "CLIPScore": {
+      "categories": [
+        "non_spatial"
+      ],
+      "ci95": [
+        -0.006254892985026042,
+        -0.0029638570149739586
+      ],
+      "delta": -0.004599609375,
+      "n_prompts": 300,
+      "p_gt_zero": 0.0
+    },
+    "UniDet": {
+      "categories": [
+        "spatial",
+        "3d_spatial",
+        "numeracy"
+      ],
+      "ci95": [
+        -0.032122944970936304,
+        -0.004721784522800294
+      ],
+      "delta": -0.018361285321557258,
+      "n_prompts": 898,
+      "p_gt_zero": 0.0046
+    }
+  },
+  "pooled_primary": {
+    "categories": [
+      "color",
+      "shape",
+      "texture",
+      "spatial",
+      "3d_spatial",
+      "numeracy",
+      "complex"
+    ],
+    "ci95": [
+      -0.03699974550013548,
+      -0.021770068856093543
+    ],
+    "delta": -0.029262850623843862
+  },
+  "scores_dir": "/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/reports/phaseFP_results/merged_compbench_scores",
+  "seed": 20260807,
+  "step": 4,
+  "title": "InvertedFixed minus M1Fixed (Phase-FP)",
+  "treatment": "InvertedFixed"
+}

@@ -1,0 +1,154 @@
+{
+  "blip_minus_unidet": {
+    "ci95": [
+      -0.014853018403112832,
+      0.021355241711076833
+    ],
+    "delta": 0.0030617044476815847,
+    "families_disagree_in_sign": false
+  },
+  "bootstrap_draws": 10000,
+  "categories": {
+    "3d_spatial": {
+      "ci95": [
+        -0.00405688547093508,
+        0.03476827106440947
+      ],
+      "delta": 0.015616701523465287,
+      "n": 300
+    },
+    "color": {
+      "ci95": [
+        0.008117708333333334,
+        0.03589683333333332
+      ],
+      "delta": 0.021448000000000002,
+      "n": 300
+    },
+    "complex": {
+      "ci95": [
+        -0.0067323278089048985,
+        0.006625285127931929
+      ],
+      "delta": 0.00014944173319579728,
+      "n": 300
+    },
+    "non_spatial": {
+      "ci95": [
+        -0.0020686950683593748,
+        0.0005175984700520831
+      ],
+      "delta": -0.0007808430989583333,
+      "n": 300
+    },
+    "numeracy": {
+      "ci95": [
+        -0.010111805555555553,
+        0.04083402777777777
+      ],
+      "delta": 0.01486111111111111,
+      "n": 300
+    },
+    "shape": {
+      "ci95": [
+        -0.0038889333333333334,
+        0.032001491666666666
+      ],
+      "delta": 0.01382733333333333,
+      "n": 300
+    },
+    "spatial": {
+      "ci95": [
+        -0.019446953410053834,
+        0.04889900067077289
+      ],
+      "delta": 0.014311074022378842,
+      "n": 298
+    },
+    "texture": {
+      "ci95": [
+        0.005410991666666662,
+        0.03222749166666667
+      ],
+      "delta": 0.018698666666666666,
+      "n": 300
+    }
+  },
+  "control": "CorrectIndepNoise",
+  "estimand": "equal-category-weighted mean paired difference; prompts resampled within category",
+  "families": {
+    "3-in-1": {
+      "categories": [
+        "complex"
+      ],
+      "ci95": [
+        -0.0067323278089048985,
+        0.006625285127931929
+      ],
+      "delta": 0.00014944173319579728,
+      "n_prompts": 300,
+      "p_gt_zero": 0.5167
+    },
+    "BLIP-VQA": {
+      "categories": [
+        "color",
+        "shape",
+        "texture"
+      ],
+      "ci95": [
+        0.009386486111111111,
+        0.026854519444444443
+      ],
+      "delta": 0.01799133333333333,
+      "n_prompts": 900,
+      "p_gt_zero": 1.0
+    },
+    "CLIPScore": {
+      "categories": [
+        "non_spatial"
+      ],
+      "ci95": [
+        -0.0020686950683593748,
+        0.0005175984700520831
+      ],
+      "delta": -0.0007808430989583333,
+      "n_prompts": 300,
+      "p_gt_zero": 0.1184
+    },
+    "UniDet": {
+      "categories": [
+        "spatial",
+        "3d_spatial",
+        "numeracy"
+      ],
+      "ci95": [
+        -0.0006384734915938792,
+        0.03049867459756689
+      ],
+      "delta": 0.014929628885651747,
+      "n_prompts": 898,
+      "p_gt_zero": 0.97
+    }
+  },
+  "pooled_primary": {
+    "categories": [
+      "color",
+      "shape",
+      "texture",
+      "spatial",
+      "3d_spatial",
+      "numeracy",
+      "complex"
+    ],
+    "ci95": [
+      0.006559304023346076,
+      0.02183587443317054
+    ],
+    "delta": 0.014130332627164432
+  },
+  "scores_dir": "/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/reports/phaseFP_results/merged_compbench_scores",
+  "seed": 20260807,
+  "step": 4,
+  "title": "Shared minus independent pair noise (task N endpoint half)",
+  "treatment": "CorrectFixed"
+}

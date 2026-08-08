@@ -1,0 +1,68 @@
+{
+  "draws": 100000,
+  "joint_bootstrap_possible": true,
+  "method": "joint bootstrap on shared prompts",
+  "oracle": {
+    "ci95": [
+      0.0433634092108411,
+      0.06246757437286556
+    ],
+    "contrast": "TeacherBest minus TeacherUniform @ step 8",
+    "delta": 0.05286900235764708,
+    "prompts_by_category": {
+      "3d_spatial": 300,
+      "color": 300,
+      "complex": 300,
+      "numeracy": 300,
+      "shape": 300,
+      "spatial": 298,
+      "texture": 300
+    },
+    "scores_dir": "/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/phaseFP/teacher_ceiling_101493/compbench_scores"
+  },
+  "overlap_prompts_by_category": {
+    "3d_spatial": 300,
+    "color": 300,
+    "complex": 300,
+    "numeracy": 300,
+    "shape": 300,
+    "spatial": 298,
+    "texture": 300
+  },
+  "prompt_key": "prompt text (integer idx is per-job and not comparable across jobs)",
+  "ratio": {
+    "ci95": [
+      -0.1719648515082436,
+      0.18626998949795018
+    ],
+    "p_ratio_gt_0_25": 0.00393,
+    "point": 0.00846647814621003,
+    "upper_95_one_sided": 0.15747314059506065,
+    "upper_97_5": 0.18626998949795018
+  },
+  "seed": 20260807,
+  "shortcut_for_comparison": {
+    "upper_transfer_over_lower_oracle": 0.22492999355117416,
+    "upper_transfer_over_point_oracle": 0.18448865912334764
+  },
+  "total_overlap_prompts": 2098,
+  "transfer": {
+    "ci95": [
+      -0.008885059367726812,
+      0.009753731354151415
+    ],
+    "contrast": "B4 minus B2 @ step 4",
+    "delta": 0.0004476142530729455,
+    "prompts_by_category": {
+      "3d_spatial": 300,
+      "color": 300,
+      "complex": 300,
+      "numeracy": 300,
+      "shape": 300,
+      "spatial": 298,
+      "texture": 300
+    },
+    "scores_dir": "/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/phaseC/eval_scores",
+    "upper_97_5": 0.009753731354151415
+  }
+}

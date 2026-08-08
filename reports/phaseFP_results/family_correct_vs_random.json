@@ -1,0 +1,154 @@
+{
+  "blip_minus_unidet": {
+    "ci95": [
+      -0.008680588931585045,
+      0.030408836715462163
+    ],
+    "delta": 0.010830132322987511,
+    "families_disagree_in_sign": false
+  },
+  "bootstrap_draws": 10000,
+  "categories": {
+    "3d_spatial": {
+      "ci95": [
+        0.03235994436801731,
+        0.07151038337249313
+      ],
+      "delta": 0.05199746618579538,
+      "n": 300
+    },
+    "color": {
+      "ci95": [
+        0.038800183333333335,
+        0.07101041666666666
+      ],
+      "delta": 0.05474966666666667,
+      "n": 300
+    },
+    "complex": {
+      "ci95": [
+        0.019818712428147155,
+        0.038946050435455355
+      ],
+      "delta": 0.02948450683736246,
+      "n": 300
+    },
+    "non_spatial": {
+      "ci95": [
+        -0.001021331787109375,
+        0.0019087727864583333
+      ],
+      "delta": 0.00043863932291666666,
+      "n": 300
+    },
+    "numeracy": {
+      "ci95": [
+        0.006110416666666666,
+        0.05866736111111111
+      ],
+      "delta": 0.03258333333333333,
+      "n": 300
+    },
+    "shape": {
+      "ci95": [
+        0.06144274166666666,
+        0.10875101666666666
+      ],
+      "delta": 0.08467766666666666,
+      "n": 300
+    },
+    "spatial": {
+      "ci95": [
+        0.03708947649625129,
+        0.11013465642699824
+      ],
+      "delta": 0.0728428035119088,
+      "n": 298
+    },
+    "texture": {
+      "ci95": [
+        0.03420886666666668,
+        0.06719943333333334
+      ],
+      "delta": 0.05048666666666667,
+      "n": 300
+    }
+  },
+  "control": "RandomFixed",
+  "estimand": "equal-category-weighted mean paired difference; prompts resampled within category",
+  "families": {
+    "3-in-1": {
+      "categories": [
+        "complex"
+      ],
+      "ci95": [
+        0.019818712428147155,
+        0.038946050435455355
+      ],
+      "delta": 0.02948450683736246,
+      "n_prompts": 300,
+      "p_gt_zero": 1.0
+    },
+    "BLIP-VQA": {
+      "categories": [
+        "color",
+        "shape",
+        "texture"
+      ],
+      "ci95": [
+        0.052137777777777776,
+        0.07437491666666667
+      ],
+      "delta": 0.06330466666666668,
+      "n_prompts": 900,
+      "p_gt_zero": 1.0
+    },
+    "CLIPScore": {
+      "categories": [
+        "non_spatial"
+      ],
+      "ci95": [
+        -0.001021331787109375,
+        0.0019087727864583333
+      ],
+      "delta": 0.00043863932291666666,
+      "n_prompts": 300,
+      "p_gt_zero": 0.7179
+    },
+    "UniDet": {
+      "categories": [
+        "spatial",
+        "3d_spatial",
+        "numeracy"
+      ],
+      "ci95": [
+        0.03627836907017966,
+        0.06868689238168689
+      ],
+      "delta": 0.052474534343679165,
+      "n_prompts": 898,
+      "p_gt_zero": 1.0
+    }
+  },
+  "pooled_primary": {
+    "categories": [
+      "color",
+      "shape",
+      "texture",
+      "spatial",
+      "3d_spatial",
+      "numeracy",
+      "complex"
+    ],
+    "ci95": [
+      0.045210033772582904,
+      0.0623959583904774
+    ],
+    "delta": 0.053831729981200005
+  },
+  "scores_dir": "/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/reports/phaseFP_results/merged_compbench_scores",
+  "seed": 20260807,
+  "step": 4,
+  "title": "Phase-FP correct minus random orientation (identical fixed pairs)",
+  "treatment": "CorrectFixed"
+}

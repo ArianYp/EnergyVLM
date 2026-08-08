@@ -1,0 +1,154 @@
+{
+  "blip_minus_unidet": {
+    "ci95": [
+      -0.02698949619293356,
+      0.007307712255926547
+    ],
+    "delta": -0.009961717732152084,
+    "families_disagree_in_sign": false
+  },
+  "bootstrap_draws": 10000,
+  "categories": {
+    "3d_spatial": {
+      "ci95": [
+        0.029612465238075418,
+        0.06413371552617098
+      ],
+      "delta": 0.04670935299109375,
+      "n": 300
+    },
+    "color": {
+      "ci95": [
+        0.0028466166666666786,
+        0.026454416666666675
+      ],
+      "delta": 0.014162000000000004,
+      "n": 300
+    },
+    "complex": {
+      "ci95": [
+        -0.0008375288271665411,
+        0.009822137409123135
+      ],
+      "delta": 0.0045283825140600255,
+      "n": 300
+    },
+    "non_spatial": {
+      "ci95": [
+        -0.0007153422037760417,
+        0.0019331970214843748
+      ],
+      "delta": 0.0006278483072916667,
+      "n": 300
+    },
+    "numeracy": {
+      "ci95": [
+        -0.0010277777777777757,
+        0.04500069444444443
+      ],
+      "delta": 0.021861111111111112,
+      "n": 300
+    },
+    "shape": {
+      "ci95": [
+        0.011416941666666671,
+        0.046150541666666656
+      ],
+      "delta": 0.028524000000000004,
+      "n": 300
+    },
+    "spatial": {
+      "ci95": [
+        -0.009793809173318641,
+        0.05733369839758691
+      ],
+      "delta": 0.022857022427584733,
+      "n": 298
+    },
+    "texture": {
+      "ci95": [
+        0.0035039999999999924,
+        0.03508520833333331
+      ],
+      "delta": 0.01885633333333333,
+      "n": 300
+    }
+  },
+  "control": "Preference",
+  "estimand": "equal-category-weighted mean paired difference; prompts resampled within category",
+  "families": {
+    "3-in-1": {
+      "categories": [
+        "complex"
+      ],
+      "ci95": [
+        -0.0008375288271665411,
+        0.009822137409123135
+      ],
+      "delta": 0.0045283825140600255,
+      "n_prompts": 300,
+      "p_gt_zero": 0.9528
+    },
+    "BLIP-VQA": {
+      "categories": [
+        "color",
+        "shape",
+        "texture"
+      ],
+      "ci95": [
+        0.011844686111111112,
+        0.029440450000000003
+      ],
+      "delta": 0.02051411111111111,
+      "n_prompts": 900,
+      "p_gt_zero": 1.0
+    },
+    "CLIPScore": {
+      "categories": [
+        "non_spatial"
+      ],
+      "ci95": [
+        -0.0007153422037760417,
+        0.0019331970214843748
+      ],
+      "delta": 0.0006278483072916667,
+      "n_prompts": 300,
+      "p_gt_zero": 0.8211
+    },
+    "UniDet": {
+      "categories": [
+        "spatial",
+        "3d_spatial",
+        "numeracy"
+      ],
+      "ci95": [
+        0.01611898179839656,
+        0.04511482998167503
+      ],
+      "delta": 0.030475828843263195,
+      "n_prompts": 898,
+      "p_gt_zero": 0.9999
+    }
+  },
+  "pooled_primary": {
+    "categories": [
+      "color",
+      "shape",
+      "texture",
+      "spatial",
+      "3d_spatial",
+      "numeracy",
+      "complex"
+    ],
+    "ci95": [
+      0.015240096875474504,
+      0.029957034602161384
+    ],
+    "delta": 0.02249974319674042
+  },
+  "scores_dir": "/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/reports/audit_2026-08-07/merged_compbench_scores",
+  "seed": 20260807,
+  "step": 4,
+  "title": "CorrectPreference minus Preference (cross-job, identical prompt manifest)",
+  "treatment": "CorrectPreference"
+}

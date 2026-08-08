@@ -1,0 +1,384 @@
+{
+  "bootstrap_draws": 10000,
+  "bootstrap_seed": 20260807,
+  "created_by": "audit/build_registry.py",
+  "entries": [
+    {
+      "artifacts": {
+        "selection_dir": "phaseC"
+      },
+      "candidate_generator": "frozen SD3.5-M teacher, 8 steps, CFG 7, 4 seeds per prompt",
+      "evaluator": "VQAScore (clip-flant5-xxl) \u2014 SAME instrument as the selector, in-objective",
+      "id": "oracle.teacher_endpoint_scoring",
+      "independent_of_selector": false,
+      "intervention": "scoring only; no generation and no training",
+      "lsf_job": null,
+      "population": "5,559 training-split prompts",
+      "quantity": "top-of-4 minus candidate mean VQAScore inside the training cache",
+      "result": {
+        "ci95": [
+          0.11889470577814255,
+          0.12505500986552878
+        ],
+        "delta": 0.12198990760754742,
+        "records": 5559
+      },
+      "selector": "VQAScore (clip-flant5-xxl)",
+      "sha256": {
+        "selection_rank0.jsonl": "3e294a9b63f31ab68cb9f54e06fce26125dc68cca17696fd312df5c66e7487b9",
+        "selection_rank1.jsonl": "4af2f88073f9a2a38e62d21bfbc2245df8d7eb71fdf776af2e98d9cc75da7bfd",
+        "selection_rank2.jsonl": "67524df083442a5c364439d09f29ae3a80acf0b5c8b0b8d0c46a20c58d9a7027",
+        "selection_rank3.jsonl": "5068603c21764eb7ce33c5d2cafb79c360387ac0bf4fd632b5fcb048deb16ab5"
+      },
+      "wandb_run": null,
+      "warning": "Must never be used as an amortization denominator: selector and evaluator are the same model, and the population is the training split."
+    },
+    {
+      "artifacts": {
+        "verdict": "exp0/primary_headroom/verdict.json"
+      },
+      "candidate_generator": "frozen SD3.5-M teacher, 8 steps, CFG 7",
+      "evaluator": "official T2I-CompBench category evaluators (BLIP-VQA / UniDet / 3-in-1)",
+      "id": "oracle.teacher_best_of_4_heldout",
+      "independent_of_selector": true,
+      "intervention": "select 1 of 4 frozen-teacher candidates per prompt at inference",
+      "lsf_job": null,
+      "population": "1,200 held-out prompts, 150 per category",
+      "quantity": "teacher best-of-4 minus random candidate, official CompBench primary",
+      "result": {
+        "ci95": [
+          0.05726061737834847,
+          0.08650302209974442
+        ],
+        "delta": 0.07171848434543539,
+        "prompts": 1050
+      },
+      "selector": "VQAScore (clip-flant5-xxl)",
+      "sha256": {
+        "verdict.json": "384c9fe4860464ec66035b4b3f59fb5fb2ac032e21e2b021b04f44a062247be1"
+      },
+      "wandb_run": null,
+      "warning": "THIS is the teacher oracle. It is NOT the +0.0485 noise-seed oracle."
+    },
+    {
+      "artifacts": {
+        "verdict": "phaseC/eval_verdict.json"
+      },
+      "candidate_generator": "frozen M1 four-step student, CFG 1",
+      "evaluator": "official T2I-CompBench category evaluators",
+      "id": "oracle.student_noise_best_of_4_heldout",
+      "independent_of_selector": true,
+      "intervention": "select 1 of 4 initial latents for a FIXED four-step student",
+      "lsf_job": null,
+      "population": "held-out CompBench val prompts",
+      "quantity": "best-of-4 over the frozen M1 student's own initial noise seeds",
+      "result": {
+        "ci95": [
+          0.03860823553436298,
+          0.058525370192375706
+        ],
+        "delta": 0.04849931178533869
+      },
+      "selector": "VQAScore (clip-flant5-xxl)",
+      "sha256": {
+        "eval_verdict.json": "baf08b052e11892d10afca8bff723e9e0195dfd87d360881d08071b110a2af31"
+      },
+      "wandb_run": null,
+      "warning": "A DIFFERENT intervention from the teacher oracle. Shallow OOF prediction of reward from raw noise is r = -0.0123, capping this route near +0.0015. This does not refute Noise Hypernetworks, which learns noise modulation end to end."
+    },
+    {
+      "artifacts": {
+        "scores_dir": "phaseC/eval_scores"
+      },
+      "candidate_generator": "frozen SD3.5-M teacher",
+      "control": {
+        "ci95": [
+          -0.008668169380528678,
+          0.009903586485855372
+        ],
+        "delta": 0.0006842146292122837,
+        "prompts": 2098
+      },
+      "evaluator": "official T2I-CompBench category evaluators",
+      "id": "result.C1_selected_trajectory_transfer",
+      "independent_of_selector": true,
+      "intervention": "winner-only consistency distillation on selected teacher trajectories",
+      "lsf_job": null,
+      "population": "2,398 held-out CompBench val prompts",
+      "quantity": "B4 (selected teacher trajectory) minus B2 (random trajectory), CompBench primary",
+      "result": {
+        "ci95": [
+          -0.008775444811604614,
+          0.009806558199067002
+        ],
+        "delta": 0.00044761425307294524,
+        "prompts": 2098
+      },
+      "selector": "VQAScore (clip-flant5-xxl)",
+      "sha256": {},
+      "wandb_run": null,
+      "warning": "A null for THIS objective and setting; not a theorem that best-of-K cannot be amortized. Prompt idx in this directory is NOT comparable to the idx in exp0/primary_headroom: the two evaluations share zero prompts."
+    },
+    {
+      "artifacts": {
+        "scores_dir": "phaseI/eval_99955/compbench_scores"
+      },
+      "candidate_generator": "frozen SD3.5-M teacher (training pairs)",
+      "evaluator": "official T2I-CompBench category evaluators",
+      "id": "result.phaseI_preference_vs_placebo",
+      "independent_of_selector": true,
+      "intervention": "explicit pairwise preference fine-tuning of the M1 student",
+      "lsf_job": 99955,
+      "population": "2,398 held-out CompBench val prompts",
+      "quantity": "Preference minus Placebo, CompBench primary at 4 steps",
+      "result": {
+        "ci95": [
+          0.0369985263563167,
+          0.05518879491003199
+        ],
+        "delta": 0.045866559753618405,
+        "prompts": 2098
+      },
+      "selector": "VQAScore (clip-flant5-xxl)",
+      "sha256": {},
+      "training_seeds": 1,
+      "wandb_run": "phaseI_eval_99955"
+    },
+    {
+      "artifacts": {
+        "scores_dir": "phaseI/eval_99955/compbench_scores"
+      },
+      "candidate_generator": "frozen SD3.5-M teacher (training pairs)",
+      "evaluator": "official T2I-CompBench category evaluators",
+      "id": "result.phaseI_preference_vs_m1",
+      "independent_of_selector": true,
+      "intervention": "explicit pairwise preference fine-tuning of the M1 student",
+      "lsf_job": 99955,
+      "population": "2,398 held-out CompBench val prompts",
+      "quantity": "Preference minus M1, CompBench primary at 4 steps",
+      "result": {
+        "ci95": [
+          0.03354720766496038,
+          0.05040510417405276
+        ],
+        "delta": 0.04196195451668654,
+        "prompts": 2098
+      },
+      "selector": "VQAScore (clip-flant5-xxl)",
+      "sha256": {},
+      "training_seeds": 1,
+      "wandb_run": "phaseI_eval_99955"
+    },
+    {
+      "artifacts": {
+        "scores_dir": "phaseI/eval_99955/compbench_scores"
+      },
+      "candidate_generator": "frozen SD3.5-M teacher (training pairs)",
+      "evaluator": "official T2I-CompBench category evaluators",
+      "id": "result.phaseI_placebo_vs_m1",
+      "independent_of_selector": true,
+      "intervention": "explicit pairwise preference fine-tuning of the M1 student",
+      "lsf_job": 99955,
+      "population": "2,398 held-out CompBench val prompts",
+      "quantity": "Placebo minus M1, CompBench primary at 4 steps",
+      "result": {
+        "ci95": [
+          -0.011108607955628146,
+          0.00292242556833788
+        ],
+        "delta": -0.0039046052369318606,
+        "prompts": 2098
+      },
+      "selector": "VQAScore (clip-flant5-xxl)",
+      "sha256": {},
+      "training_seeds": 1,
+      "wandb_run": "phaseI_eval_99955"
+    },
+    {
+      "artifacts": {
+        "scores_dir": "phaseI/eval_99955/compbench_scores"
+      },
+      "candidate_generator": "frozen SD3.5-M teacher (training pairs)",
+      "evaluator": "official T2I-CompBench category evaluators",
+      "id": "result.phaseI_repa_increment",
+      "independent_of_selector": true,
+      "intervention": "explicit pairwise preference fine-tuning of the M1 student",
+      "lsf_job": 99955,
+      "population": "2,398 held-out CompBench val prompts",
+      "quantity": "PreferenceREPA minus Preference, CompBench primary at 4 steps",
+      "result": {
+        "ci95": [
+          0.0013063859363590838,
+          0.015234730802177177
+        ],
+        "delta": 0.008327794688516807,
+        "prompts": 2098
+      },
+      "selector": "VQAScore (clip-flant5-xxl)",
+      "sha256": {},
+      "training_seeds": 1,
+      "wandb_run": "phaseI_eval_99955"
+    },
+    {
+      "artifacts": {
+        "scores_dir": "phaseI/counterfactual_eval_100593/compbench_scores"
+      },
+      "candidate_generator": "frozen SD3.5-M teacher, identical 4 candidates in both arms",
+      "evaluator": "official T2I-CompBench category evaluators",
+      "id": "result.phaseI_correct_vs_counterfactual_construction",
+      "independent_of_selector": true,
+      "intervention": "the labelling text changed BOTH pair membership (60.75% of records) and orientation, so this is the total effect of the pair-construction policy",
+      "lsf_job": 100593,
+      "population": "2,398 held-out CompBench val prompts",
+      "quantity": "correct minus counterfactual PAIR CONSTRUCTION, CompBench primary at 4 steps",
+      "result": {
+        "ci95": [
+          0.040575040950019826,
+          0.05805041443444703
+        ],
+        "delta": 0.04922497528325411,
+        "prompts": 2098
+      },
+      "selector": "VQAScore under the original prompt vs under a one-atom edited prompt",
+      "sha256": {},
+      "training_seeds": 1,
+      "wandb_run": "phaseI_counterfactual_eval_100593",
+      "warning": "NOT the orientation-only direct effect. Pair identity is a downstream mediator of the text intervention. The fixed-pair experiment estimates the direct effect."
+    },
+    {
+      "artifacts": {
+        "fidelity": "phaseI/eval_99955/fidelity.json"
+      },
+      "generation_prompt_pool": "T2I-CompBench compositional prompts (compbench/images)",
+      "id": "result.fidelity_job_99955",
+      "lsf_job": 99955,
+      "quantity": "FID / CMMD / precision / recall against COCO val2017 real images",
+      "reference_pool": "2398 COCO val2017 real images, square-cropped",
+      "result": {
+        "M1@4": {
+          "cmmd": 66.14279747009277,
+          "fid": 68.12024809170367,
+          "n": 2398,
+          "precision": 0.40241867303848267,
+          "recall": 0.09633027762174606
+        },
+        "Placebo@4": {
+          "cmmd": 65.90655446052551,
+          "fid": 69.96291945392966,
+          "n": 2398,
+          "precision": 0.40366971492767334,
+          "recall": 0.11092577129602432
+        },
+        "Preference@4": {
+          "cmmd": 66.98596477508545,
+          "fid": 68.9649558398877,
+          "n": 2398,
+          "precision": 0.38532111048698425,
+          "recall": 0.12885737419128418
+        },
+        "PreferenceREPA@4": {
+          "cmmd": 66.2972629070282,
+          "fid": 67.99371919082023,
+          "n": 2398,
+          "precision": 0.3807339370250702,
+          "recall": 0.1276063323020935
+        }
+      },
+      "sha256": {
+        "fidelity.json": "0ae2c8801eb833be4c8cdbfeabc411bfcd079b9e95162bc9c41e3dad92935a63"
+      },
+      "warning": "THE TWO FIDELITY JOBS ARE NOT COMPARABLE. Job 99955 generated from CompBench compositional prompts; job 100593 generated from COCO captions. Both are scored against the same COCO real reference, so the ~24-point FID difference is a prompt-distribution effect, not an anomaly. Only job 100593's protocol is a standard matched-caption FID."
+    },
+    {
+      "artifacts": {
+        "fidelity": "phaseI/counterfactual_eval_100593/fidelity.json"
+      },
+      "generation_prompt_pool": "COCO captions (fidelity/images)",
+      "id": "result.fidelity_job_100593",
+      "lsf_job": 100593,
+      "quantity": "FID / CMMD / precision / recall against COCO val2017 real images",
+      "reference_pool": "2398 COCO val2017 real images, square-cropped",
+      "result": {
+        "CorrectPreference@4": {
+          "cmmd": 42.64262318611145,
+          "fid": 43.58055941417291,
+          "n": 2398,
+          "precision": 0.6693077683448792,
+          "recall": 0.17389491200447083
+        },
+        "CounterfactualPreference@4": {
+          "cmmd": 49.37809705734253,
+          "fid": 43.968624065649806,
+          "n": 2398,
+          "precision": 0.6359466314315796,
+          "recall": 0.15262718498706818
+        }
+      },
+      "sha256": {
+        "fidelity.json": "2d6b270e4b778d55f852661e66b3a0958582cb6fabfdf53b434acc0ee3d7ac80"
+      },
+      "warning": "THE TWO FIDELITY JOBS ARE NOT COMPARABLE. Job 99955 generated from CompBench compositional prompts; job 100593 generated from COCO captions. Both are scored against the same COCO real reference, so the ~24-point FID difference is a prompt-distribution effect, not an anomaly. Only job 100593's protocol is a standard matched-caption FID."
+    },
+    {
+      "artifacts": {
+        "diversity": "phaseI/counterfactual_eval_100593/diversity.json"
+      },
+      "id": "result.phaseI_counterfactual_diversity",
+      "lsf_job": 100593,
+      "population": "400 stratified held-out prompts",
+      "quantity": "within-prompt DINO and LPIPS diversity over 4 seeds",
+      "result": {
+        "4": {
+          "dino": {
+            "ci": [
+              -0.04794432359561324,
+              -0.03471950286626816
+            ],
+            "delta": -0.041363248229026796,
+            "n": 400,
+            "verdict": "**FAIL \u2014 diversity collapse**"
+          },
+          "lpips": {
+            "ci": [
+              -0.015408853866159915,
+              -0.010135581762529912
+            ],
+            "delta": -0.012733832113444804,
+            "n": 400,
+            "verdict": "PASS (non-inferior)"
+          }
+        }
+      },
+      "sha256": {
+        "diversity.json": "fa38a568ae756871e4d5d1f4004988766f5e2cdc9e73a0c46cfdebd2f23b9de5"
+      },
+      "warning": "The preregistered DINO gate FAILED. Compare against the teacher best-of-K diversity price, not against M1 alone."
+    },
+    {
+      "artifacts": {
+        "cache": "phaseFP/fixedpair_101185"
+      },
+      "id": "cache.fixed_pair_101185",
+      "lsf_job": 101185,
+      "quantity": "fixed-unordered-pair label-only cache, four orientation arms",
+      "records": 5042,
+      "result": {
+        "arm_agreement_with_correct": {
+          "correct": 1.0,
+          "counterfactual": 0.7276874256247521,
+          "inverted": 0.0,
+          "random": 0.5
+        },
+        "cross_arm_pair_identity": true,
+        "reversal_fraction": 0.2723125743752479
+      },
+      "sha256": {
+        "pair_manifest.json": "e1c155240368715bab9f58d257945a6ad24c2e428abc7e04b31e4f352ce4f22d",
+        "summary.json": "e8bb75e5e279f6b6f4cdd672aeeb6799310b1513bb482a24566490b5c89c2b7b"
+      },
+      "wandb_run": "phaseFP_cache_101185"
+    }
+  ],
+  "git_revision": "6b3be42533a27af9c5a32da8d016411686e0967f",
+  "prompt_key_warning": "The integer `idx` field is assigned per evaluation job. Two jobs may use the same idx for different prompts. Always join evaluations on prompt TEXT unless the idx->prompt maps have been shown to agree."
+}

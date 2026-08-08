@@ -1,0 +1,154 @@
+{
+  "blip_minus_unidet": {
+    "ci95": [
+      -0.04881504591078423,
+      -0.0086048699194451
+    ],
+    "delta": -0.02840090121579384,
+    "families_disagree_in_sign": false
+  },
+  "bootstrap_draws": 10000,
+  "categories": {
+    "3d_spatial": {
+      "ci95": [
+        0.04573962258869759,
+        0.08414689673867619
+      ],
+      "delta": 0.06483592147760965,
+      "n": 300
+    },
+    "color": {
+      "ci95": [
+        0.019527841666666674,
+        0.05467901666666667
+      ],
+      "delta": 0.036389333333333336,
+      "n": 300
+    },
+    "complex": {
+      "ci95": [
+        0.009148693220201363,
+        0.023097152815041534
+      ],
+      "delta": 0.01614012333539715,
+      "n": 300
+    },
+    "non_spatial": {
+      "ci95": [
+        0.000612762451171875,
+        0.0035087076822916665
+      ],
+      "delta": 0.0020572916666666665,
+      "n": 300
+    },
+    "numeracy": {
+      "ci95": [
+        0.0014722222222222192,
+        0.05347291666666665
+      ],
+      "delta": 0.0275,
+      "n": 300
+    },
+    "shape": {
+      "ci95": [
+        0.024901325000000005,
+        0.06473710833333332
+      ],
+      "delta": 0.044897666666666676,
+      "n": 300
+    },
+    "spatial": {
+      "ci95": [
+        0.07656167692677429,
+        0.15489260824705758
+      ],
+      "delta": 0.11448278216977191,
+      "n": 298
+    },
+    "texture": {
+      "ci95": [
+        0.0229467,
+        0.05795595833333332
+      ],
+      "delta": 0.040329000000000004,
+      "n": 300
+    }
+  },
+  "control": "CounterfactualPreference",
+  "estimand": "equal-category-weighted mean paired difference; prompts resampled within category",
+  "families": {
+    "3-in-1": {
+      "categories": [
+        "complex"
+      ],
+      "ci95": [
+        0.009148693220201363,
+        0.023097152815041534
+      ],
+      "delta": 0.01614012333539715,
+      "n_prompts": 300,
+      "p_gt_zero": 1.0
+    },
+    "BLIP-VQA": {
+      "categories": [
+        "color",
+        "shape",
+        "texture"
+      ],
+      "ci95": [
+        0.030110069444444446,
+        0.05128658333333333
+      ],
+      "delta": 0.040538666666666674,
+      "n_prompts": 900,
+      "p_gt_zero": 1.0
+    },
+    "CLIPScore": {
+      "categories": [
+        "non_spatial"
+      ],
+      "ci95": [
+        0.000612762451171875,
+        0.0035087076822916665
+      ],
+      "delta": 0.0020572916666666665,
+      "n_prompts": 300,
+      "p_gt_zero": 0.998
+    },
+    "UniDet": {
+      "categories": [
+        "spatial",
+        "3d_spatial",
+        "numeracy"
+      ],
+      "ci95": [
+        0.052419899395501825,
+        0.08599946287273093
+      ],
+      "delta": 0.06893956788246051,
+      "n_prompts": 898,
+      "p_gt_zero": 1.0
+    }
+  },
+  "pooled_primary": {
+    "categories": [
+      "color",
+      "shape",
+      "texture",
+      "spatial",
+      "3d_spatial",
+      "numeracy",
+      "complex"
+    ],
+    "ci95": [
+      0.04063050219962941,
+      0.05792113774810869
+    ],
+    "delta": 0.049224975283254105
+  },
+  "scores_dir": "/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/phaseI/counterfactual_eval_100593/compbench_scores",
+  "seed": 20260807,
+  "step": 4,
+  "title": "Correct minus counterfactual pair construction (job 100593)",
+  "treatment": "CorrectPreference"
+}

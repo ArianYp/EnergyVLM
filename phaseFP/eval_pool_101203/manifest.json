@@ -1,0 +1,24 @@
+{
+  "configuration": {
+    "compbench_dir": "T2I-CompBench/examples/dataset",
+    "diversity_per_category": 50,
+    "fidelity_n": 2398,
+    "out_root": "phaseFP/eval_pool_101203",
+    "per_category": 1000,
+    "seed": 0,
+    "split": "val"
+  },
+  "counts": {
+    "compbench_prompts.json": 2398,
+    "diversity_prompts.json": 400,
+    "fidelity_prompts.json": 2398,
+    "geneval2_prompts.json": 800
+  },
+  "out_root": "/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/phaseFP/eval_pool_101203",
+  "sha256": {
+    "compbench_prompts.json": "d999de7263d9f5ddf8a0dd2f99936112e5c80954b4715b0887769e79fff51a8b",
+    "diversity_prompts.json": "1da11e191dab7bc0277c46c341ff8316c76b56389aefb28574bc7711d5057ba6",
+    "fidelity_prompts.json": "d0e7aadc7200b8fc1b263f4be67e473f3a649067e40b53969b0e90b390a255d8",
+    "geneval2_prompts.json": "4bf291400d289fce89b56a2e972a593b02bf6fd66773ddc1f67777a9870df984"
+  }
+}

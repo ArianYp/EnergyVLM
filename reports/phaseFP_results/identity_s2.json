@@ -1,0 +1,26 @@
+{
+  "arms": [
+    "correct",
+    "inverted",
+    "random"
+  ],
+  "checks": {
+    "correct_first_logit": 0.00045299530029296875,
+    "correct_first_sigma_mean": 0.5832664109766483,
+    "inverted_always_opposed": true,
+    "inverted_first_logit": -0.00045299530029296875,
+    "inverted_first_sigma_mean": 0.5832664109766483,
+    "random_first_logit": -0.00045299530029296875,
+    "random_first_sigma_mean": 0.5832664109766483
+  },
+  "endpoint_hash_identical_rows": 3000,
+  "endpoint_mismatch_examples": [],
+  "failures": [],
+  "pass": true,
+  "rows_compared": 3000,
+  "rows_per_arm": {
+    "correct": 3000,
+    "inverted": 3000,
+    "random": 3000
+  }
+}

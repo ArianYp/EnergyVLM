@@ -1,0 +1,68 @@
+{
+  "draws": 100000,
+  "joint_bootstrap_possible": false,
+  "method": "independent bootstraps; the two contrasts share no prompts, so no joint resampling exists and independence is a design property, not an assumption",
+  "oracle": {
+    "ci95": [
+      0.05708847783594032,
+      0.0865516856382597
+    ],
+    "contrast": "oracle minus random @ step 8",
+    "delta": 0.0717184843454354,
+    "prompts_by_category": {
+      "3d_spatial": 150,
+      "color": 150,
+      "complex": 150,
+      "numeracy": 150,
+      "shape": 150,
+      "spatial": 150,
+      "texture": 150
+    },
+    "scores_dir": "/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/exp0/primary_headroom/scores"
+  },
+  "overlap_prompts_by_category": {
+    "3d_spatial": 0,
+    "color": 0,
+    "complex": 0,
+    "numeracy": 0,
+    "shape": 0,
+    "spatial": 0,
+    "texture": 0
+  },
+  "prompt_key": "prompt text (integer idx is per-job and not comparable across jobs)",
+  "ratio": {
+    "ci95": [
+      -0.1264645048184755,
+      0.13902286597075317
+    ],
+    "p_ratio_gt_0_25": 0.00039,
+    "point": 0.0062412676056703975,
+    "upper_95_one_sided": 0.11679783367012493,
+    "upper_97_5": 0.13902286597075317
+  },
+  "seed": 20260807,
+  "shortcut_for_comparison": {
+    "upper_transfer_over_lower_oracle": 0.17085288877698726,
+    "upper_transfer_over_point_oracle": 0.13600024377498157
+  },
+  "total_overlap_prompts": 0,
+  "transfer": {
+    "ci95": [
+      -0.008885059367726812,
+      0.009753731354151415
+    ],
+    "contrast": "B4 minus B2 @ step 4",
+    "delta": 0.0004476142530729455,
+    "prompts_by_category": {
+      "3d_spatial": 300,
+      "color": 300,
+      "complex": 300,
+      "numeracy": 300,
+      "shape": 300,
+      "spatial": 298,
+      "texture": 300
+    },
+    "scores_dir": "/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/phaseC/eval_scores",
+    "upper_97_5": 0.009753731354151415
+  }
+}

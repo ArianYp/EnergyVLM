@@ -1,0 +1,31 @@
+{
+  "items": 210,
+  "per_stratum": 15,
+  "sampled_by_edit_family": {
+    "3d_spatial": 30,
+    "color": 30,
+    "count": 30,
+    "shape": 30,
+    "spatial": 30,
+    "texture": 30,
+    "verb": 30
+  },
+  "sampled_reversing": 105,
+  "seed": 20260807,
+  "strata_sizes": {
+    "3d_spatial/norev": 517,
+    "3d_spatial/rev": 190,
+    "color/norev": 536,
+    "color/rev": 291,
+    "count/norev": 606,
+    "count/rev": 96,
+    "shape/norev": 664,
+    "shape/rev": 68,
+    "spatial/norev": 440,
+    "spatial/rev": 501,
+    "texture/norev": 690,
+    "texture/rev": 120,
+    "verb/norev": 216,
+    "verb/rev": 107
+  }
+}

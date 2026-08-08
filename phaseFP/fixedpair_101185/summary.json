@@ -1,0 +1,137 @@
+{
+  "arms": [
+    "correct",
+    "counterfactual",
+    "random",
+    "inverted"
+  ],
+  "candidate_count": 4,
+  "code_sha256": {
+    "phaseFP/build_fixed_pair_selection.py": "e723923ac973c6fae1264e3b05ceaccf8a763e26d3162c301fc22f00b6036731"
+  },
+  "configuration": {
+    "expected_records": 5042,
+    "label_seed": 20260806,
+    "min_original_margin": 0.2,
+    "min_reversal_fraction": 0.2,
+    "no_wandb": false,
+    "out_root": "phaseFP/fixedpair_101185",
+    "shards": 4,
+    "source_root": "phaseI/counterfactual_data_100590",
+    "tie_policy": "keep",
+    "wandb_group": "phaseFP_fixedpair_20260807T130930Z",
+    "wandb_project": "sd-pref-repa-fixedpair-v1",
+    "wandb_run_name": "phaseFP_cache_101185"
+  },
+  "created_by": "phaseFP/build_fixed_pair_selection.py",
+  "cross_arm_pair_identity": true,
+  "gates": {
+    "counterfactual_arm_partially_disagrees": true,
+    "inverted_arm_fully_opposed": true,
+    "mean_original_margin": true,
+    "random_arm_balanced": true,
+    "record_count": true,
+    "reversal_fraction": true
+  },
+  "git_revision": "6b3be42533a27af9c5a32da8d016411686e0967f",
+  "output_sha256": {
+    "correct": {
+      "selection_rank0.jsonl": "b0c4299fb0d895d4e55142383ddbf186319c589bbe27809b331b4c822d60f6fb",
+      "selection_rank1.jsonl": "ec1b0f2995d90a8ea5546049837241cc4e8750ab1b13abf59f8173a2f0d469e3",
+      "selection_rank2.jsonl": "e3da879fd5ddd8150af6b6fd936ca3815c4585b213a4854db1415fdf43b50fe0",
+      "selection_rank3.jsonl": "9b25019bace0574c938369fa9d91e6dda0cd8a5d25199642b0724eb22018dffa"
+    },
+    "counterfactual": {
+      "selection_rank0.jsonl": "bcfd3a821d767a3c84769cc7ec010a4910ef615f0e825c346b243c2fca90108a",
+      "selection_rank1.jsonl": "4e2dcfc5099e4d179739da42e9bfd70bd0af13e5a9f58768f4247809f5d9ad29",
+      "selection_rank2.jsonl": "2e02038e0b9402c13c193519676e99b49da76d78590d2c9484210b1df757f467",
+      "selection_rank3.jsonl": "67995353c0e0cf3115b3d3d1c7b71cac531da2e28e8431cb9cbdf3dfcee4c218"
+    },
+    "inverted": {
+      "selection_rank0.jsonl": "814ce5b06bc848e1808bd3c9d4d2cf8380f54e2044f3a2309bf1c13a0a10c8dc",
+      "selection_rank1.jsonl": "8dcfd828faa1e03c7cc0e4f72295bd91e0755b9a8c772d87c0067327b89960ae",
+      "selection_rank2.jsonl": "820a2aa5d94c86b198a0b79484cc701323ac324dd5246d2607d05623d44ca8c2",
+      "selection_rank3.jsonl": "346309180a2425643bfcfc0597080a9bd152f5ee890baa6b7da7b54570fbd4e4"
+    },
+    "random": {
+      "selection_rank0.jsonl": "2443f47d6bd498f5f61997040fa67531e5f9b244e59c11edabe5f472507e64ad",
+      "selection_rank1.jsonl": "0a3858014d9ef323909c609db71c22191ddee0f9e96bda80edfe9b2fe4e32640",
+      "selection_rank2.jsonl": "2f9efdc71851b03e3d8694ee5f974055ede0fef77c94ac63bf8f9240f8928aa6",
+      "selection_rank3.jsonl": "a250f8cdebc9d63bd8b4ca48a12548acffd5301a06d17c5cc4330772bd2976ce"
+    }
+  },
+  "pass": true,
+  "records": 5042,
+  "source_root": "/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/phaseI/counterfactual_data_100590",
+  "source_sha256": {
+    "correct/selection_rank0.jsonl": "9c387d4fc4687b5ed7a1bfbbb04c9038176eab91590124fbb950840b7f23a19f",
+    "correct/selection_rank1.jsonl": "e9b355da258c301a5d7e949cad8d7eb335fc7e1bf042b0c2b16d62fa42c5ad74",
+    "correct/selection_rank2.jsonl": "63408adc7248cb2d717af966f0fa4b25f42e515543291ca65628a52ceee9842d",
+    "correct/selection_rank3.jsonl": "6f4cb3d687e0550fc9cd8f23c176af92d56f6c1f4f6dbf42a020ba56ac82d411",
+    "counterfactual/selection_rank0.jsonl": "b3b5ab84416f5d5abc6b66d2bdaffb62e1a1671ff8592bbb462a62bb9537ea72",
+    "counterfactual/selection_rank1.jsonl": "1c9311bb76702046e6d4d68e443debadd456192b102d910aedfa79ada31bba42",
+    "counterfactual/selection_rank2.jsonl": "20d6fa0a01778e2efbfe224eba8131ad94758c5f40c632375dc8327599cd6ce5",
+    "counterfactual/selection_rank3.jsonl": "7e5817313d8901717699ef6fddac7b3ff13db7806aeb1662d7962818dc549777"
+  },
+  "statistics": {
+    "arm_agreement_with_correct": {
+      "correct": 1.0,
+      "counterfactual": 0.7276874256247521,
+      "inverted": 0.0,
+      "random": 0.5
+    },
+    "counterfactual_pair_margin": {
+      "mean": 0.13541229851085815,
+      "median": 0.08994441665709019
+    },
+    "counterfactual_ties": 4,
+    "original_pair_margin": {
+      "max": 0.9676600806415081,
+      "mean": 0.28645693753668294,
+      "median": 0.20796050131320953,
+      "min": 0.0009018182754516602
+    },
+    "random_arm_positive_is_a_fraction": 0.5,
+    "records_by_category": {
+      "3d_spatial": 700,
+      "color": 677,
+      "complex": 550,
+      "non_spatial": 336,
+      "numeracy": 699,
+      "shape": 685,
+      "spatial": 700,
+      "texture": 695
+    },
+    "records_by_edit_family": {
+      "3d_spatial": 707,
+      "color": 827,
+      "count": 702,
+      "shape": 732,
+      "spatial": 941,
+      "texture": 810,
+      "verb": 323
+    },
+    "reversal_fraction": 0.2723125743752479,
+    "reversal_rate_by_category": {
+      "3d_spatial": 0.2714285714285714,
+      "color": 0.3914327917282127,
+      "complex": 0.2381818181818182,
+      "non_spatial": 0.3273809523809524,
+      "numeracy": 0.13733905579399142,
+      "shape": 0.09197080291970802,
+      "spatial": 0.5771428571428572,
+      "texture": 0.16402877697841728
+    },
+    "reversal_rate_by_edit_family": {
+      "3d_spatial": 0.26874115983026875,
+      "color": 0.3518742442563482,
+      "count": 0.13675213675213677,
+      "shape": 0.09289617486338798,
+      "spatial": 0.5324123273113709,
+      "texture": 0.14814814814814814,
+      "verb": 0.33126934984520123
+    },
+    "reversals": 1373,
+    "tie_policy": "keep"
+  }
+}

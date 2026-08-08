@@ -1,0 +1,280 @@
+{
+  "across_seeds": {
+    "3-in-1_dose_slope": {
+      "all_same_sign": true,
+      "max": -0.05370670860521632,
+      "mean": -0.06344450422884411,
+      "min": -0.071670065994787,
+      "n_seeds": 3,
+      "range": 0.017963357389570674,
+      "sd": 0.009076656356093208
+    },
+    "BLIP-VQA_dose_slope": {
+      "all_same_sign": true,
+      "max": -0.148368451076021,
+      "mean": -0.17702236314616046,
+      "min": -0.20074802990855825,
+      "n_seeds": 3,
+      "range": 0.052379578832537244,
+      "sd": 0.026535274089944015
+    },
+    "UniDet_dose_slope": {
+      "all_same_sign": true,
+      "max": -0.057519192313163874,
+      "mean": -0.09080631428844214,
+      "min": -0.1135243083100958,
+      "n_seeds": 3,
+      "range": 0.05600511599693193,
+      "sd": 0.029460534681714737
+    },
+    "correct_minus_counterfactual": {
+      "all_same_sign": true,
+      "max": 0.04783799768298902,
+      "mean": 0.04018233201871798,
+      "min": 0.03208213584367059,
+      "n_seeds": 3,
+      "range": 0.01575586183931843,
+      "sd": 0.007887331684808305
+    },
+    "correct_minus_inverted": {
+      "all_same_sign": true,
+      "max": 0.09141120549778853,
+      "mean": 0.0797342453499106,
+      "min": 0.06163030832155908,
+      "n_seeds": 3,
+      "range": 0.02978089717622945,
+      "sd": 0.01589669723627818
+    },
+    "correct_minus_random": {
+      "all_same_sign": true,
+      "max": 0.05511115243103215,
+      "mean": 0.05063774434048398,
+      "min": 0.04297035060921989,
+      "n_seeds": 3,
+      "range": 0.012140801821812264,
+      "sd": 0.006670901395160521
+    },
+    "dose_slope": {
+      "all_same_sign": true,
+      "max": -0.0959099483961102,
+      "mean": -0.12384721950466447,
+      "min": -0.13972006892095165,
+      "n_seeds": 3,
+      "range": 0.043810120524841456,
+      "sd": 0.024269206171132113
+    },
+    "ordering_probability": {
+      "all_same_sign": true,
+      "max": 0.9998,
+      "mean": 0.9740000000000001,
+      "min": 0.9254,
+      "n_seeds": 3,
+      "range": 0.07440000000000002,
+      "sd": 0.042115555321044995
+    }
+  },
+  "estimand_note": "Per-seed intervals are prompt bootstraps and describe prompt sampling only. The across-seed mean/range describes training randomness. They are reported separately and must not be combined into a single interval with only three seeds.",
+  "per_seed": {
+    "s1": {
+      "absolute": {
+        "correct": 0.5569726280400966,
+        "counterfactual": 0.5091346303571076,
+        "inverted": 0.4655614225423081,
+        "random": 0.5031408980588967
+      },
+      "contrasts": {
+        "correct_minus_counterfactual": {
+          "ci95": [
+            0.039556183542454555,
+            0.056261357071638304
+          ],
+          "delta": 0.04783799768298902
+        },
+        "correct_minus_inverted": {
+          "ci95": [
+            0.08102546361351527,
+            0.10202145855554036
+          ],
+          "delta": 0.09141120549778853
+        },
+        "correct_minus_random": {
+          "ci95": [
+            0.04539533243998979,
+            0.06252479455132526
+          ],
+          "delta": 0.053831729981199894
+        }
+      },
+      "dose_slope": {
+        "ci95": [
+          -0.15730591638478003,
+          -0.12259182080133835
+        ],
+        "point": -0.13972006892095165
+      },
+      "families": {
+        "3-in-1": {
+          "correct_minus_counterfactual": 0.01439174278571309,
+          "dose_slope": -0.071670065994787,
+          "dose_slope_ci95": [
+            -0.09025855381343098,
+            -0.05343626457826172
+          ]
+        },
+        "BLIP-VQA": {
+          "correct_minus_counterfactual": 0.04083077777777766,
+          "dose_slope": -0.20074802990855825,
+          "dose_slope_ci95": [
+            -0.22698668017892898,
+            -0.17548537981304177
+          ]
+        },
+        "UniDet": {
+          "correct_minus_counterfactual": 0.06599396922062584,
+          "dose_slope": -0.10137544224206674,
+          "dose_slope_ci95": [
+            -0.13177375941487537,
+            -0.07123930688386794
+          ]
+        }
+      },
+      "ordering_probability": 0.9254
+    },
+    "s2": {
+      "absolute": {
+        "correct": 0.541913661173326,
+        "counterfactual": 0.5098315253296554,
+        "inverted": 0.4802833528517669,
+        "random": 0.49894331056410607
+      },
+      "contrasts": {
+        "correct_minus_counterfactual": {
+          "ci95": [
+            0.024587738577316033,
+            0.03953156356580966
+          ],
+          "delta": 0.03208213584367059
+        },
+        "correct_minus_inverted": {
+          "ci95": [
+            0.052285982469393893,
+            0.07053584478123745
+          ],
+          "delta": 0.06163030832155908
+        },
+        "correct_minus_random": {
+          "ci95": [
+            0.03494532897716769,
+            0.05113252693066039
+          ],
+          "delta": 0.04297035060921989
+        }
+      },
+      "dose_slope": {
+        "ci95": [
+          -0.11089950980657838,
+          -0.08038482169697576
+        ],
+        "point": -0.0959099483961102
+      },
+      "families": {
+        "3-in-1": {
+          "correct_minus_counterfactual": 0.007223741101510139,
+          "dose_slope": -0.05370670860521632,
+          "dose_slope_ci95": [
+            -0.07192190144127666,
+            -0.03593305073375347
+          ]
+        },
+        "BLIP-VQA": {
+          "correct_minus_counterfactual": 0.029311888888888915,
+          "dose_slope": -0.148368451076021,
+          "dose_slope_ci95": [
+            -0.17193855236057468,
+            -0.12546920373167858
+          ]
+        },
+        "UniDet": {
+          "correct_minus_counterfactual": 0.04313851437917249,
+          "dose_slope": -0.057519192313163874,
+          "dose_slope_ci95": [
+            -0.08362920148411998,
+            -0.031391633754133674
+          ]
+        }
+      },
+      "ordering_probability": 0.9968
+    },
+    "s3": {
+      "absolute": {
+        "correct": 0.5594660422979948,
+        "counterfactual": 0.5188391797685005,
+        "inverted": 0.4733048200676106,
+        "random": 0.5043548898669626
+      },
+      "contrasts": {
+        "correct_minus_counterfactual": {
+          "ci95": [
+            0.032729179706003135,
+            0.0483045688171945
+          ],
+          "delta": 0.04062686252949432
+        },
+        "correct_minus_inverted": {
+          "ci95": [
+            0.07664230727148742,
+            0.09565478416602338
+          ],
+          "delta": 0.0861612222303842
+        },
+        "correct_minus_random": {
+          "ci95": [
+            0.0466001770273152,
+            0.0639414796124422
+          ],
+          "delta": 0.05511115243103215
+        }
+      },
+      "dose_slope": {
+        "ci95": [
+          -0.15175168057794408,
+          -0.12004181031651709
+        ],
+        "point": -0.13591164119693155
+      },
+      "families": {
+        "3-in-1": {
+          "correct_minus_counterfactual": 0.015817407588577748,
+          "dose_slope": -0.06495673808652899,
+          "dose_slope_ci95": [
+            -0.08380470238577262,
+            -0.046669282111837816
+          ]
+        },
+        "BLIP-VQA": {
+          "correct_minus_counterfactual": 0.03451044444444451,
+          "dose_slope": -0.18195060845390212,
+          "dose_slope_ci95": [
+            -0.20635976387897603,
+            -0.15821272578500703
+          ]
+        },
+        "UniDet": {
+          "correct_minus_counterfactual": 0.05501309892818307,
+          "dose_slope": -0.1135243083100958,
+          "dose_slope_ci95": [
+            -0.14083991687712272,
+            -0.08626037610991924
+          ]
+        }
+      },
+      "ordering_probability": 0.9998
+    }
+  },
+  "seeds_analyzed": [
+    "s1",
+    "s2",
+    "s3"
+  ],
+  "seeds_skipped_incomplete": []
+}

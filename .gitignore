@@ -32,7 +32,7 @@ Arshia/
 t2v_metrics/
 third_party/
 # Generated evaluation pools, candidate banks and image trees
-phaseFP/eval_*/
+phaseFP/eval_[A-Z]*/
 phaseFP/teacher_ceiling_*/gen/
 phaseFP/exact_headroom_*/cands/
 phaseFP/aggregate_*/

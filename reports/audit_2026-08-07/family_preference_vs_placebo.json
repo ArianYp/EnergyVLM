@@ -1,0 +1,154 @@
+{
+  "blip_minus_unidet": {
+    "ci95": [
+      0.0023199645923052915,
+      0.04382779689869896
+    ],
+    "delta": 0.023236126504051394,
+    "families_disagree_in_sign": false
+  },
+  "bootstrap_draws": 10000,
+  "categories": {
+    "3d_spatial": {
+      "ci95": [
+        -0.014951204776683677,
+        0.026217774301781852
+      ],
+      "delta": 0.0059065972399415445,
+      "n": 300
+    },
+    "color": {
+      "ci95": [
+        0.044279325,
+        0.08360656666666666
+      ],
+      "delta": 0.06359866666666666,
+      "n": 300
+    },
+    "complex": {
+      "ci95": [
+        0.016472349001490458,
+        0.03549904169210535
+      ],
+      "delta": 0.02596563112081629,
+      "n": 300
+    },
+    "non_spatial": {
+      "ci95": [
+        0.00022663370768229168,
+        0.003788248697916667
+      ],
+      "delta": 0.001978759765625,
+      "n": 300
+    },
+    "numeracy": {
+      "ci95": [
+        -0.00383402777777778,
+        0.04641736111111109
+      ],
+      "delta": 0.020972222222222215,
+      "n": 300
+    },
+    "shape": {
+      "ci95": [
+        0.04795588333333333,
+        0.09194652499999997
+      ],
+      "delta": 0.06965,
+      "n": 300
+    },
+    "spatial": {
+      "ci95": [
+        0.04574019195965949,
+        0.12658636026855805
+      ],
+      "delta": 0.08581713435901539,
+      "n": 298
+    },
+    "texture": {
+      "ci95": [
+        0.02930594166666667,
+        0.06937429999999999
+      ],
+      "delta": 0.04915566666666666,
+      "n": 300
+    }
+  },
+  "control": "Placebo",
+  "estimand": "equal-category-weighted mean paired difference; prompts resampled within category",
+  "families": {
+    "3-in-1": {
+      "categories": [
+        "complex"
+      ],
+      "ci95": [
+        0.016472349001490458,
+        0.03549904169210535
+      ],
+      "delta": 0.02596563112081629,
+      "n_prompts": 300,
+      "p_gt_zero": 1.0
+    },
+    "BLIP-VQA": {
+      "categories": [
+        "color",
+        "shape",
+        "texture"
+      ],
+      "ci95": [
+        0.049044413888888895,
+        0.0727933111111111
+      ],
+      "delta": 0.06080144444444444,
+      "n_prompts": 900,
+      "p_gt_zero": 1.0
+    },
+    "CLIPScore": {
+      "categories": [
+        "non_spatial"
+      ],
+      "ci95": [
+        0.00022663370768229168,
+        0.003788248697916667
+      ],
+      "delta": 0.001978759765625,
+      "n_prompts": 300,
+      "p_gt_zero": 0.9864
+    },
+    "UniDet": {
+      "categories": [
+        "spatial",
+        "3d_spatial",
+        "numeracy"
+      ],
+      "ci95": [
+        0.0205086975140911,
+        0.05472877604310317
+      ],
+      "delta": 0.03756531794039305,
+      "n_prompts": 898,
+      "p_gt_zero": 1.0
+    }
+  },
+  "pooled_primary": {
+    "categories": [
+      "color",
+      "shape",
+      "texture",
+      "spatial",
+      "3d_spatial",
+      "numeracy",
+      "complex"
+    ],
+    "ci95": [
+      0.03682610885200531,
+      0.05497948582292914
+    ],
+    "delta": 0.0458665597536184
+  },
+  "scores_dir": "/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/phaseI/eval_99955/compbench_scores",
+  "seed": 20260807,
+  "step": 4,
+  "title": "Preference minus Placebo (job 99955)",
+  "treatment": "Preference"
+}

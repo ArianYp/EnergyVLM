@@ -1,0 +1,17 @@
+{
+  "arms": {
+    "M1": "M1Fixed",
+    "correct": "CorrectFixed",
+    "counterfactual": "CounterfactualFixed",
+    "inverted": "InvertedFixed",
+    "random": "RandomFixed"
+  },
+  "by_stratum": {
+    "loss": 7,
+    "random": 14,
+    "tie": 7,
+    "win": 7
+  },
+  "items": 35,
+  "selection_rule": "seed 20260808; 2 uniform per category (score-blind) plus 1 each of win/tie/loss of correct vs M1; column order shuffled per row"
+}

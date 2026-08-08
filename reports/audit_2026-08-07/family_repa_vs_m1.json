@@ -1,0 +1,154 @@
+{
+  "blip_minus_unidet": {
+    "ci95": [
+      0.02356637060047678,
+      0.060488322328540164
+    ],
+    "delta": 0.04211935487253083,
+    "families_disagree_in_sign": false
+  },
+  "bootstrap_draws": 10000,
+  "categories": {
+    "3d_spatial": {
+      "ci95": [
+        0.005759784018954859,
+        0.04232005245759193
+      ],
+      "delta": 0.023896756753188753,
+      "n": 300
+    },
+    "color": {
+      "ci95": [
+        0.03946957500000001,
+        0.0741947
+      ],
+      "delta": 0.056203666666666666,
+      "n": 300
+    },
+    "complex": {
+      "ci95": [
+        0.01758197078567332,
+        0.036034057795523565
+      ],
+      "delta": 0.02674764238734923,
+      "n": 300
+    },
+    "non_spatial": {
+      "ci95": [
+        -0.0016361796061197917,
+        0.0018119506835937499
+      ],
+      "delta": 7.975260416666667e-05,
+      "n": 300
+    },
+    "numeracy": {
+      "ci95": [
+        0.0049159722222222235,
+        0.05369722222222219
+      ],
+      "delta": 0.029555555555555557,
+      "n": 300
+    },
+    "shape": {
+      "ci95": [
+        0.07110595833333333,
+        0.114800125
+      ],
+      "delta": 0.0928,
+      "n": 300
+    },
+    "spatial": {
+      "ci95": [
+        0.013607517038602216,
+        0.07987089331973912
+      ],
+      "delta": 0.046008956406996544,
+      "n": 298
+    },
+    "texture": {
+      "ci95": [
+        0.05970230833333333,
+        0.09466974999999998
+      ],
+      "delta": 0.07681566666666666,
+      "n": 300
+    }
+  },
+  "control": "M1",
+  "estimand": "equal-category-weighted mean paired difference; prompts resampled within category",
+  "families": {
+    "3-in-1": {
+      "categories": [
+        "complex"
+      ],
+      "ci95": [
+        0.01758197078567332,
+        0.036034057795523565
+      ],
+      "delta": 0.02674764238734923,
+      "n_prompts": 300,
+      "p_gt_zero": 1.0
+    },
+    "BLIP-VQA": {
+      "categories": [
+        "color",
+        "shape",
+        "texture"
+      ],
+      "ci95": [
+        0.06460320555555556,
+        0.08635789444444443
+      ],
+      "delta": 0.07527311111111111,
+      "n_prompts": 900,
+      "p_gt_zero": 1.0
+    },
+    "CLIPScore": {
+      "categories": [
+        "non_spatial"
+      ],
+      "ci95": [
+        -0.0016361796061197917,
+        0.0018119506835937499
+      ],
+      "delta": 7.975260416666667e-05,
+      "n_prompts": 300,
+      "p_gt_zero": 0.5287
+    },
+    "UniDet": {
+      "categories": [
+        "spatial",
+        "3d_spatial",
+        "numeracy"
+      ],
+      "ci95": [
+        0.018215244658141335,
+        0.0481783702903167
+      ],
+      "delta": 0.03315375623858028,
+      "n_prompts": 898,
+      "p_gt_zero": 1.0
+    }
+  },
+  "pooled_primary": {
+    "categories": [
+      "color",
+      "shape",
+      "texture",
+      "spatial",
+      "3d_spatial",
+      "numeracy",
+      "complex"
+    ],
+    "ci95": [
+      0.0421547013460613,
+      0.05833332704892913
+    ],
+    "delta": 0.05028974920520334
+  },
+  "scores_dir": "/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/phaseI/eval_99955/compbench_scores",
+  "seed": 20260807,
+  "step": 4,
+  "title": "PreferenceREPA minus M1 (job 99955)",
+  "treatment": "PreferenceREPA"
+}

@@ -1,0 +1,32 @@
+{
+  "arms": [
+    "correct",
+    "counterfactual",
+    "inverted",
+    "random"
+  ],
+  "checks": {
+    "correct_first_logit": -0.000979006290435791,
+    "correct_first_sigma_mean": 0.5883766412734985,
+    "counterfactual_disagreement_rows": 826,
+    "counterfactual_disagrees_exactly_on_reversals": true,
+    "counterfactual_first_logit": -0.000979006290435791,
+    "counterfactual_first_sigma_mean": 0.5883766412734985,
+    "inverted_always_opposed": true,
+    "inverted_first_logit": 0.000979006290435791,
+    "inverted_first_sigma_mean": 0.5883766412734985,
+    "random_first_logit": -0.000979006290435791,
+    "random_first_sigma_mean": 0.5883766412734985
+  },
+  "endpoint_hash_identical_rows": 3000,
+  "endpoint_mismatch_examples": [],
+  "failures": [],
+  "pass": true,
+  "rows_compared": 3000,
+  "rows_per_arm": {
+    "correct": 3000,
+    "counterfactual": 3000,
+    "inverted": 3000,
+    "random": 3000
+  }
+}

@@ -1,0 +1,29 @@
+{
+  "N": 4,
+  "absolute": {
+    "best": 0.5307842542917067,
+    "non_oracle": 0.4527560347850771,
+    "uniform": 0.4722630896617344
+  },
+  "control_bias": {
+    "exact_N_over_N_minus_1": 1.3333333333333333,
+    "observed_ratio": 1.3333333333333315
+  },
+  "headroom_vs_non_oracle": {
+    "ci95": [
+      0.06864612911483765,
+      0.08723290744611589
+    ],
+    "delta": 0.07802821950662964
+  },
+  "headroom_vs_uniform": {
+    "ci95": [
+      0.05148459683612822,
+      0.06542468058458685
+    ],
+    "delta": 0.05852116462997231
+  },
+  "mixture_identity_residual": -1.1102230246251565e-16,
+  "note": "With exact per-prompt expectations the identity residual should be ~0 (float error only) and the observed ratio should equal N/(N-1) exactly. Any residual indicates a prompt-set mismatch between the candidate slots, not sampling noise.",
+  "prompts": 2098
+}

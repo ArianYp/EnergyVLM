@@ -1,0 +1,16 @@
+{
+  "N": 4,
+  "in_objective_vqa": {
+    "oracle_minus_candidate_mean": 0.1238112189815542,
+    "oracle_minus_random_nonoracle": 0.16551674204607422,
+    "oracle_minus_uniform": 0.12060379136269843
+  },
+  "note": "These VQAScore gaps are in-objective (selector == scorer) and are reported only as a sanity check that selection did something. The load-bearing numbers come from the official CompBench evaluators run over these symlinks.",
+  "prompts": 2398,
+  "steps": 8,
+  "symlinks_per_model": {
+    "TeacherBest": 2398,
+    "TeacherRandom": 2398,
+    "TeacherUniform": 2398
+  }
+}

@@ -1,0 +1,154 @@
+{
+  "blip_minus_unidet": {
+    "ci95": [
+      -0.0030955325911845646,
+      0.03684485995737892
+    ],
+    "delta": 0.016887972864960223,
+    "families_disagree_in_sign": false
+  },
+  "bootstrap_draws": 10000,
+  "categories": {
+    "3d_spatial": {
+      "ci95": [
+        0.024454761285460893,
+        0.06568098048487618
+      ],
+      "delta": 0.04476588295404628,
+      "n": 300
+    },
+    "color": {
+      "ci95": [
+        0.043720816666666676,
+        0.07832581666666667
+      ],
+      "delta": 0.06029633333333334,
+      "n": 300
+    },
+    "complex": {
+      "ci95": [
+        0.019751424128626908,
+        0.03811475822988643
+      ],
+      "delta": 0.028785802588869373,
+      "n": 300
+    },
+    "non_spatial": {
+      "ci95": [
+        -0.00024699910481770836,
+        0.0028833414713541664
+      ],
+      "delta": 0.0013163248697916667,
+      "n": 300
+    },
+    "numeracy": {
+      "ci95": [
+        0.022665277777777777,
+        0.07547361111111109
+      ],
+      "delta": 0.048999999999999995,
+      "n": 300
+    },
+    "shape": {
+      "ci95": [
+        0.08119495833333333,
+        0.12893975000000002
+      ],
+      "delta": 0.10473666666666666,
+      "n": 300
+    },
+    "spatial": {
+      "ci95": [
+        0.05824478428937483,
+        0.12782022645107644
+      ],
+      "delta": 0.09212519845107307,
+      "n": 298
+    },
+    "texture": {
+      "ci95": [
+        0.051496900000000005,
+        0.09184550833333331
+      ],
+      "delta": 0.071522,
+      "n": 300
+    }
+  },
+  "control": "M1",
+  "estimand": "equal-category-weighted mean paired difference; prompts resampled within category",
+  "families": {
+    "3-in-1": {
+      "categories": [
+        "complex"
+      ],
+      "ci95": [
+        0.019751424128626908,
+        0.03811475822988643
+      ],
+      "delta": 0.028785802588869373,
+      "n_prompts": 300,
+      "p_gt_zero": 1.0
+    },
+    "BLIP-VQA": {
+      "categories": [
+        "color",
+        "shape",
+        "texture"
+      ],
+      "ci95": [
+        0.06690874444444445,
+        0.09104194444444443
+      ],
+      "delta": 0.07885166666666667,
+      "n_prompts": 900,
+      "p_gt_zero": 1.0
+    },
+    "CLIPScore": {
+      "categories": [
+        "non_spatial"
+      ],
+      "ci95": [
+        -0.00024699910481770836,
+        0.0028833414713541664
+      ],
+      "delta": 0.0013163248697916667,
+      "n_prompts": 300,
+      "p_gt_zero": 0.9519
+    },
+    "UniDet": {
+      "categories": [
+        "spatial",
+        "3d_spatial",
+        "numeracy"
+      ],
+      "ci95": [
+        0.046178843462450186,
+        0.07799163718949967
+      ],
+      "delta": 0.061963693801706445,
+      "n_prompts": 898,
+      "p_gt_zero": 1.0
+    }
+  },
+  "pooled_primary": {
+    "categories": [
+      "color",
+      "shape",
+      "texture",
+      "spatial",
+      "3d_spatial",
+      "numeracy",
+      "complex"
+    ],
+    "ci95": [
+      0.05587679227822983,
+      0.07322251237723494
+    ],
+    "delta": 0.06446169771342695
+  },
+  "scores_dir": "/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/reports/audit_2026-08-07/merged_compbench_scores",
+  "seed": 20260807,
+  "step": 4,
+  "title": "CorrectPreference minus M1 (cross-job, identical prompt manifest)",
+  "treatment": "CorrectPreference"
+}

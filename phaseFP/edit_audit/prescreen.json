@@ -1,0 +1,113 @@
+{
+  "article_disagreement_already_in_original": 59,
+  "baseline_reversal_rate": 0.2723125743752479,
+  "cache_root": "/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/phaseFP/fixedpair_101185",
+  "defects": {
+    "article_introduced": {
+      "associated_with_reversal": true,
+      "by_edit_family": {
+        "color": 111,
+        "shape": 74
+      },
+      "clean_reversal_rate": 0.27589046736668726,
+      "count": 185,
+      "difference_ci95": [
+        -0.15327070430529355,
+        -0.039957931990050544
+      ],
+      "examples": [
+        {
+          "edited": "a orange bird and a red giraffe",
+          "original": "a brown bird and a red giraffe"
+        },
+        {
+          "edited": "a orange banana and a green sheep",
+          "original": "a brown banana and a green sheep"
+        },
+        {
+          "edited": "a orange horse and a white cow",
+          "original": "a brown horse and a white cow"
+        },
+        {
+          "edited": "a orange banana and a green bird",
+          "original": "a brown banana and a green bird"
+        },
+        {
+          "edited": "a orange chair and a red clock",
+          "original": "a brown chair and a red clock"
+        }
+      ],
+      "fraction": 0.03669178897262991,
+      "reversal_rate": 0.1783783783783784,
+      "reversal_rate_difference": -0.09751208898830888
+    },
+    "multi_token_change": {
+      "associated_with_reversal": true,
+      "by_edit_family": {
+        "spatial": 151,
+        "verb": 1
+      },
+      "clean_reversal_rate": 0.26380368098159507,
+      "count": 152,
+      "difference_ci95": [
+        0.20187008933376388,
+        0.3593558282208589
+      ],
+      "examples": [
+        {
+          "edited": "a fish far from a bicycle",
+          "original": "a fish next to a bicycle"
+        },
+        {
+          "edited": "a sheep far from a wallet",
+          "original": "a sheep next to a wallet"
+        },
+        {
+          "edited": "a woman far from a bird",
+          "original": "a woman next to a bird"
+        },
+        {
+          "edited": "a frog far from a clock",
+          "original": "a frog next to a clock"
+        },
+        {
+          "edited": "a boy far from a mouse",
+          "original": "a boy next to a mouse"
+        }
+      ],
+      "fraction": 0.03014676715589052,
+      "reversal_rate": 0.5460526315789473,
+      "reversal_rate_difference": 0.2822489505973523
+    },
+    "no_op_edit": {
+      "associated_with_reversal": false,
+      "by_edit_family": {},
+      "clean_reversal_rate": 0.2723125743752479,
+      "count": 0,
+      "difference_ci95": [
+        NaN,
+        NaN
+      ],
+      "examples": [],
+      "fraction": 0.0,
+      "reversal_rate": null,
+      "reversal_rate_difference": NaN
+    },
+    "target_absent": {
+      "associated_with_reversal": false,
+      "by_edit_family": {},
+      "clean_reversal_rate": 0.2723125743752479,
+      "count": 0,
+      "difference_ci95": [
+        NaN,
+        NaN
+      ],
+      "examples": [],
+      "fraction": 0.0,
+      "reversal_rate": null,
+      "reversal_rate_difference": NaN
+    }
+  },
+  "note": "multi_token_change is not necessarily a defect: a single spatial-relation atom can span several tokens ('far from' -> 'on side of'). It is reported so the human audit can adjudicate, which is why the review sheet asks about atoms rather than tokens.",
+  "records": 5042
+}

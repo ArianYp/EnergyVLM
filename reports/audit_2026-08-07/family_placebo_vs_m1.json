@@ -1,0 +1,154 @@
+{
+  "blip_minus_unidet": {
+    "ci95": [
+      -0.013217226646694124,
+      0.019970529966884185
+    ],
+    "delta": 0.0036135640930609184,
+    "families_disagree_in_sign": false
+  },
+  "bootstrap_draws": 10000,
+  "categories": {
+    "3d_spatial": {
+      "ci95": [
+        -0.02652208273152321,
+        0.010772546983928823
+      ],
+      "delta": -0.007850067276989009,
+      "n": 300
+    },
+    "color": {
+      "ci95": [
+        -0.03130230833333333,
+        -0.004282708333333337
+      ],
+      "delta": -0.01746433333333333,
+      "n": 300
+    },
+    "complex": {
+      "ci95": [
+        -0.007043763981119788,
+        0.003790297585720486
+      ],
+      "delta": -0.0017082110460069433,
+      "n": 300
+    },
+    "non_spatial": {
+      "ci95": [
+        -0.00256353759765625,
+        -4.069010416666667e-07
+      ],
+      "delta": -0.001290283203125,
+      "n": 300
+    },
+    "numeracy": {
+      "ci95": [
+        -0.014527777777777775,
+        0.027806249999999998
+      ],
+      "delta": 0.006166666666666668,
+      "n": 300
+    },
+    "shape": {
+      "ci95": [
+        -0.009830416666666666,
+        0.022493141666666664
+      ],
+      "delta": 0.006562666666666668,
+      "n": 300
+    },
+    "spatial": {
+      "ci95": [
+        -0.04742316473959479,
+        0.014490318494405815
+      ],
+      "delta": -0.016548958335527077,
+      "n": 298
+    },
+    "texture": {
+      "ci95": [
+        -0.012893391666666667,
+        0.019399141666666658
+      ],
+      "delta": 0.0035100000000000014,
+      "n": 300
+    }
+  },
+  "control": "M1",
+  "estimand": "equal-category-weighted mean paired difference; prompts resampled within category",
+  "families": {
+    "3-in-1": {
+      "categories": [
+        "complex"
+      ],
+      "ci95": [
+        -0.007043763981119788,
+        0.003790297585720486
+      ],
+      "delta": -0.0017082110460069433,
+      "n_prompts": 300,
+      "p_gt_zero": 0.2661
+    },
+    "BLIP-VQA": {
+      "categories": [
+        "color",
+        "shape",
+        "texture"
+      ],
+      "ci95": [
+        -0.011219188888888891,
+        0.006212224999999999
+      ],
+      "delta": -0.0024638888888888874,
+      "n_prompts": 900,
+      "p_gt_zero": 0.2966
+    },
+    "CLIPScore": {
+      "categories": [
+        "non_spatial"
+      ],
+      "ci95": [
+        -0.00256353759765625,
+        -4.069010416666667e-07
+      ],
+      "delta": -0.001290283203125,
+      "n_prompts": 300,
+      "p_gt_zero": 0.0249
+    },
+    "UniDet": {
+      "categories": [
+        "spatial",
+        "3d_spatial",
+        "numeracy"
+      ],
+      "ci95": [
+        -0.019885392413415557,
+        0.007919802557378458
+      ],
+      "delta": -0.006077452981949806,
+      "n_prompts": 898,
+      "p_gt_zero": 0.2008
+    }
+  },
+  "pooled_primary": {
+    "categories": [
+      "color",
+      "shape",
+      "texture",
+      "spatial",
+      "3d_spatial",
+      "numeracy",
+      "complex"
+    ],
+    "ci95": [
+      -0.010981540744163161,
+      0.0033005950493797467
+    ],
+    "delta": -0.0039046052369318606
+  },
+  "scores_dir": "/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/phaseI/eval_99955/compbench_scores",
+  "seed": 20260807,
+  "step": 4,
+  "title": "Placebo minus M1 (job 99955)",
+  "treatment": "Placebo"
+}
