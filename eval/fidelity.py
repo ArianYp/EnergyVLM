@@ -27,7 +27,7 @@ import torch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-from eval.cmmd import clip_embed, cmmd  # noqa: E402
+from eval.cmmd import CLIP_ID, clip_embed, cmmd, load_clip  # noqa: E402
 
 
 def square_crop(img_np):
@@ -81,7 +81,7 @@ def main():
     ap.add_argument("--steps", default="4")
     ap.add_argument("--image_name", default="cand0.png")
     ap.add_argument("--coco_dir", required=True, help="COCO val2017 image directory")
-    ap.add_argument("--clip_id", default="openai/clip-vit-large-patch14")
+    ap.add_argument("--clip_id", default=CLIP_ID, help="fixed by the CMMD reference; recorded only")
     ap.add_argument("--n_ref", type=int, default=5000, help="0 = all real images")
     ap.add_argument("--min_gen", type=int, default=1000)
     ap.add_argument("--boot", type=int, default=1000)
@@ -100,12 +100,10 @@ def main():
     print(f"reference: {len(coco)} real images (center-cropped square)", flush=True)
 
     from cleanfid.fid import build_feature_extractor
-    from transformers import CLIPImageProcessor, CLIPVisionModelWithProjection
     incep = build_feature_extractor("clean", device=torch.device(device), use_dataparallel=False)
-    proc = CLIPImageProcessor.from_pretrained(args.clip_id)
-    clip = CLIPVisionModelWithProjection.from_pretrained(args.clip_id, torch_dtype=torch.float16).to(device).eval()
+    clip = load_clip(device)                       # CLIP ViT-L/14 @ 336, the CMMD reference model
     ref_i = inception_feats(coco, incep, True)
-    ref_c = clip_embed([str(p) for p in coco], clip, proc, device).to(device)
+    ref_c = clip_embed([str(p) for p in coco], clip, device).to(device)
 
     root = Path(args.gen_root)
     res = {}
@@ -116,7 +114,7 @@ def main():
                 print(f"  skip {m}@{s}: {len(files)} images < --min_gen {args.min_gen}", flush=True)
                 continue
             gi = inception_feats(files, incep, False)
-            gc = clip_embed([str(f) for f in files], clip, proc, device).to(device)
+            gc = clip_embed([str(f) for f in files], clip, device).to(device)
             n = len(files)
             half = rng.permutation(n)
             fid = fid_from_feats(gi, ref_i)
@@ -132,6 +130,8 @@ def main():
         sys.exit("no generated set reached --min_gen")
 
     md = [f"# Fidelity vs {len(coco)} real COCO val2017 images\n\n",
+          f"CMMD per the reference implementation: `{CLIP_ID}`, center-crop + bicubic 336, unit-norm "
+          "embeddings, RBF sigma 10, biased estimator, x1000. FID via clean-fid (mode=clean).\n\n",
           "| model@steps | n | FID | FID split-half | CMMD | CMMD 95% CI | precision | recall |\n",
           "|---|--:|--:|--:|--:|---|--:|--:|\n"]
     for k, v in res.items():

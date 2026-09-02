@@ -35,4 +35,5 @@ torchrun --standalone --nproc-per-node="$GPUS" train/distill.py \
   --seed "$SEED" --num_steps "$STEPS" --num_warmup_steps 1000 --lr "$LR" \
   --K 8 --cfg 7.0 --window 0.4,0.9 --delta_min 1 --delta_max 3 --height 512 \
   --gradient_checkpointing --save_every 5000 --log_every 50 \
+  --sample_every "${SAMPLE_EVERY:-2000}" --sample_prompts "${SAMPLE_PROMPTS:-pools/sample_prompts.json}" \
   ${WANDB_PROJECT:+--wandb_project "$WANDB_PROJECT" --wandb_run_name "$RUN"}

@@ -25,6 +25,10 @@ source scripts/env.sh
 : "${CFG:?set CFG explicitly: 1.0 for students, 7.0 for base}"
 STEPS=${STEPS:-4}
 POOL=${POOL:-pools/eval}
+# T2I-CompBench's official protocol scores 10 images per prompt; 1 is the cheap sweep setting.
+# Candidate 0 is the same image either way (same seed), so 10 is a strict superset of 1.
+IMAGES_PER_PROMPT=${IMAGES_PER_PROMPT:-1}
+NAMES=$(python3 -c "print(','.join(f'cand{j}.png' for j in range($IMAGES_PER_PROMPT)))")
 ROOT="out/eval/eval_${LABEL}"
 mkdir -p "$ROOT" logs
 if [[ "$CKPT" != "base" ]]; then
@@ -38,13 +42,14 @@ echo "[$(date --iso-8601=seconds)] generation"
 torchrun --standalone --nproc-per-node=4 eval/generate.py \
   --out_root "$ROOT/compbench,$ROOT/geneval2" \
   --prompts_json "$POOL/compbench_prompts.json,$POOL/geneval2_prompts.json" \
-  --label "$LABEL" --checkpoint "$CKPT" --cfg "$CFG" --steps_list "$STEPS"
+  --label "$LABEL" --checkpoint "$CKPT" --cfg "$CFG" --steps_list "$STEPS" --n_seeds "$IMAGES_PER_PROMPT"
 
 echo "[$(date --iso-8601=seconds)] T2I-CompBench"
 for CAT in color shape texture spatial 3d_spatial numeracy non_spatial complex; do
   D="$ROOT/compbench_scores/${LABEL}_s${STEPS}_${CAT}"
   python3 eval/compbench.py stage --images "$ROOT/compbench/images/$LABEL" \
-    --prompts "$POOL/compbench_prompts.json" --steps "$STEPS" --categories "$CAT" --out "$D"
+    --prompts "$POOL/compbench_prompts.json" --steps "$STEPS" --categories "$CAT" \
+    --image_name "$NAMES" --out "$D"
   python3 eval/compbench.py run --dir "$D" --skip_done
   python3 eval/compbench.py collect --dir "$D" --routing_split val
 done
@@ -58,7 +63,23 @@ python3 eval/geneval2.py collect --dir "$D" --method soft_tifa_gm
 
 python3 - <<PY
 import json, glob, os
-out = {"label": "$LABEL", "ckpt": "$CKPT", "steps": $STEPS, "cfg": float("$CFG"), "compbench": {}}
+import hashlib, subprocess, importlib
+def sha(p):
+    h = hashlib.sha256()
+    with open(p, "rb") as f:
+        for c in iter(lambda: f.read(1 << 24), b""): h.update(c)
+    return h.hexdigest()
+def rev(d):
+    try: return subprocess.run(["git", "-C", d, "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
+    except Exception: return None
+pins = {"evaluators": {d: rev(f"third_party/{d}") for d in ("T2I-CompBench", "GenEval2", "t2v_metrics")},
+        "repo_commit": rev("."),
+        "packages": {m: getattr(importlib.import_module(m), "__version__", None) for m in ("torch", "diffusers", "transformers")},
+        "pool_manifest": json.load(open("$POOL/manifest.json")),
+        "checkpoint_sha256": (sha("$CKPT") if "$CKPT" != "base" else "base")}
+subprocess.run("pip freeze > $ROOT/pip_freeze.txt", shell=True)
+out = {"label": "$LABEL", "ckpt": "$CKPT", "steps": $STEPS, "cfg": float("$CFG"), "compbench": {}, "pins": pins,
+       "protocol": {"compbench_images_per_prompt": $IMAGES_PER_PROMPT, "geneval2_images_per_prompt": 1}}
 for p in sorted(glob.glob("$ROOT/compbench_scores/*/scores.json")):
     cat = os.path.basename(os.path.dirname(p)).split("_s${STEPS}_")[-1]
     out["compbench"][cat] = json.load(open(p))["mean"]

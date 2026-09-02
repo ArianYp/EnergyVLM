@@ -28,6 +28,7 @@ import hashlib
 import json
 import random
 import sys
+import time
 from pathlib import Path
 
 import numpy as np
@@ -38,7 +39,7 @@ from tqdm import tqdm
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from common.distributed import barrier, setup_distributed, teardown  # noqa: E402
-from common.sampling import candidate_noise, encode_prompt, rollout  # noqa: E402
+from common.sampling import candidate_noise, encode_prompt, rollout, vae_decode  # noqa: E402
 
 SELECTORS = {"random": None, "dino_patch": "dino_patch_cos"}
 
@@ -60,6 +61,38 @@ def select(rec: dict, selector: str) -> int:
         return int(rec["random_idx"])
     s = rec[field]
     return int(max(range(len(s)), key=lambda j: s[j]))
+
+
+SCORE_FIELDS = ("dino_patch_cos", "dino_cos", "clip_cos", "endpoint_vqa")
+
+
+@torch.no_grad()
+def log_samples(model, pipe, prompts, steps, cfg, height, device, gstep, tag, neg_emb, neg_pool):
+    """Sample a fixed prompt set from `model` and log an image grid and a table to wandb.
+
+    Only private generators are used (seeded by each prompt's idx, the evaluation generator's
+    convention), so the RNG streams that decide the data order and the noise-level draws are not
+    advanced: a run with sampling on is bit-identical to one with it off.
+    """
+    import wandb
+    was_training = model.training
+    model.eval()
+    lat_c = model.config.in_channels
+    h_lat = height // pipe.vae_scale_factor
+    grid, rows = [], []
+    for p in prompts:
+        emb, pooled = encode_prompt(pipe, p["prompt"], device)
+        z0 = candidate_noise(0, int(p["idx"]), (1, lat_c, h_lat, h_lat), device)
+        z = rollout(model, pipe.scheduler, z0, emb, pooled, neg_emb, neg_pool, steps, cfg, device)
+        img = vae_decode(pipe.vae, z)
+        u8 = ((img + 1) / 2).mul(255).add_(0.5).clamp_(0, 255).to(torch.uint8)[0].permute(1, 2, 0).cpu().numpy()
+        grid.append(wandb.Image(u8, caption=f"[{p.get('bench', '')} {p['idx']}] {p['prompt'][:70]}"))
+        rows.append([gstep, int(p["idx"]), p.get("bench", ""), p.get("category", ""), p["prompt"], wandb.Image(u8)])
+    if was_training:
+        model.train()
+    wandb.log({f"{tag}/grid": grid,
+               f"{tag}/table": wandb.Table(columns=["step", "idx", "bench", "category", "prompt", "image"], data=rows)},
+              step=gstep)
 
 
 def main() -> None:
@@ -85,11 +118,20 @@ def main() -> None:
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--wandb_project", default=None, help="log to Weights & Biases if set")
     ap.add_argument("--wandb_run_name", default=None)
+    ap.add_argument("--sample_every", type=int, default=0,
+                    help="every N steps, sample --sample_prompts with the student and log an image "
+                         "grid and a table to wandb (0 = off)")
+    ap.add_argument("--sample_prompts", default=None, help="json list of {idx, prompt[, bench, category]}")
+    ap.add_argument("--sample_steps", type=int, default=4)
+    ap.add_argument("--sample_cfg", type=float, default=1.0)
     args = ap.parse_args()
 
     rank, world, local_rank, device, is_main = setup_distributed(0)
     torch.manual_seed(args.seed + rank * 1009)
     random.seed(args.seed + rank * 1009)
+    # Private generator for the noise-level draws: wandb.init() consumes a draw from the global
+    # `random` stream, which would otherwise make logging change which states are supervised.
+    delta_rng = random.Random(args.seed + rank * 1009)
     if is_main:
         Path(args.output_dir).mkdir(parents=True, exist_ok=True)
         (Path(args.output_dir) / "args.json").write_text(json.dumps(vars(args), indent=2))
@@ -149,8 +191,31 @@ def main() -> None:
 
     if is_main and args.wandb_project:
         import wandb
-        wandb.init(project=args.wandb_project, name=args.wandb_run_name,
-                   config={**vars(args), "n_captions": len(recs), "world_size": world})
+        run = wandb.init(project=args.wandb_project, name=args.wandb_run_name, save_code=True,
+                         config={**vars(args), "n_captions": len(recs), "world_size": world,
+                                 "torch": torch.__version__, "cuda": torch.version.cuda})
+        # snapshot the code: git commit, working-tree diff, and every source file as a code artifact
+        try:
+            import subprocess
+            git = lambda *a: subprocess.run(["git", *a], cwd=ROOT, capture_output=True, text=True).stdout  # noqa: E731
+            diff = git("diff", "HEAD", "--", "*.py", "*.lsf", "*.sh")
+            run.config.update({"git_commit": git("rev-parse", "HEAD").strip(), "git_dirty": bool(diff.strip())},
+                              allow_val_change=True)
+            patch = Path(args.output_dir) / "git_diff.patch"
+            patch.write_text(diff)
+            wandb.save(str(patch), base_path=str(Path(args.output_dir)), policy="now")
+            # explicit source dirs rather than log_code(root=ROOT): log_code walks everything under
+            # root (out/, checkpoints/, third_party/ ...) before filtering
+            art = wandb.Artifact(f"source-{run.id}", type="code")
+            for pat in ("common/*.py", "data/*.py", "train/*.py", "eval/*.py", "eval/compat/*.py",
+                        "scripts/*", "README.md", "requirements.txt"):
+                for f in sorted(ROOT.glob(pat)):
+                    if f.is_file():
+                        art.add_file(str(f), name=str(f.relative_to(ROOT)))
+            art.add_file(str(patch), name="git_diff.patch")
+            run.log_artifact(art)
+        except Exception as e:
+            print(f"[wandb] code snapshot skipped: {e}", flush=True)
     if is_main:
         h = hashlib.sha256()
         for r in recs:
@@ -158,8 +223,13 @@ def main() -> None:
         print(f"[selection] window={args.window} K={K} supervised_k={score_idxs} "
               f"caption->candidate sha256={h.hexdigest()[:16]}", flush=True)
 
+    sample_prompts = None
+    if is_main and args.wandb_project and args.sample_prompts and args.sample_every > 0:
+        sample_prompts = json.loads(Path(args.sample_prompts).read_text())
+    gain: dict[str, list] = {}         # score field -> [sum(selected - mean over candidates), count]
     pbar = tqdm(total=args.num_steps, disable=not is_main, desc=args.selector)
     gstep = 0
+    t_last = time.time()
     while gstep < args.num_steps:
         try:
             rec = next(data_iter)
@@ -170,6 +240,14 @@ def main() -> None:
             data_iter = iter(loader)
             rec = next(data_iter)
         sel = select(rec, args.selector)
+        if is_main:
+            for f in SCORE_FIELDS:                     # what this arm's choice buys under each scorer
+                if f in rec:
+                    s = np.asarray(rec[f], dtype=float)
+                    if np.all(np.isfinite(s)):
+                        g = gain.setdefault(f, [0.0, 0])
+                        g[0] += float(s[sel] - s.mean())
+                        g[1] += 1
 
         # re-roll the selected teacher trajectory from its seed
         with torch.no_grad():
@@ -180,7 +258,7 @@ def main() -> None:
             z = [s.float() for s in states]
 
         opt.zero_grad(set_to_none=True)
-        deltas = {k: random.randint(args.delta_min, args.delta_max) for k in score_idxs}
+        deltas = {k: delta_rng.randint(args.delta_min, args.delta_max) for k in score_idxs}
         stu_idx = [k - deltas[k] for k in score_idxs]
         n_w = len(score_idxs)
         z_in = torch.cat([z[s] for s in stu_idx], 0).to(torch.bfloat16)
@@ -197,7 +275,8 @@ def main() -> None:
             x_tea.append(z[k] - sigmas[k] * v_k)
         x_tea = torch.cat(x_tea, 0).detach()
         sq = (x_hat - x_tea).pow(2).sum(dim=(1, 2, 3))
-        loss = (torch.sqrt(sq + huber_c * huber_c) - huber_c).mean()
+        per_k = torch.sqrt(sq + huber_c * huber_c) - huber_c      # one loss per supervised state
+        loss = per_k.mean()
 
         loss.backward()
         gn = torch.nn.utils.clip_grad_norm_(student_module.parameters(), args.grad_clip)
@@ -211,7 +290,23 @@ def main() -> None:
             pbar.set_postfix({"loss": f"{lv:.3g}", "g": f"{g:.2g}"})
             if args.wandb_project:
                 import wandb
-                wandb.log({"train/loss": lv, "train/grad_norm": g, "train/lr": sched.get_last_lr()[0]}, step=gstep)
+                now = time.time()
+                payload = {"train/loss": lv, "train/grad_norm": g, "train/lr": sched.get_last_lr()[0],
+                           "train/epoch": epoch, "train/samples_seen": gstep * world,
+                           "train/steps_per_s": args.log_every / max(now - t_last, 1e-6),
+                           "train/gpu_mem_max_gb": torch.cuda.max_memory_allocated() / 2 ** 30}
+                t_last = now
+                for k, v in zip(score_idxs, per_k.detach().tolist()):
+                    payload[f"train/loss_k{k}"] = v
+                for f, (s, c) in gain.items():
+                    payload[f"sel/gain_{f}"] = s / max(c, 1)
+                wandb.log(payload, step=gstep)
+        if (is_main and sample_prompts and args.sample_every > 0 and gstep % args.sample_every == 0):
+            if gstep == args.sample_every:          # once: the guided 28-step teacher as reference
+                log_samples(teacher, pipe, sample_prompts, 28, args.cfg, args.height, device, gstep,
+                            "samples/teacher_28step", neg_emb, neg_pool)
+            log_samples(student_module, pipe, sample_prompts, args.sample_steps, args.sample_cfg,
+                        args.height, device, gstep, "samples/student", neg_emb, neg_pool)
         if gstep % args.save_every == 0 and gstep != args.num_steps:
             if is_main:
                 torch.save({"model": student_module.state_dict(), "step": gstep, "selector": args.selector},

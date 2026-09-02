@@ -88,8 +88,43 @@ bsub < scripts/fidelity_score.lsf
 Evaluate students with `CFG=1.0`. Sampling a student with guidance applies it twice and roughly
 halves its scores.
 
+`IMAGES_PER_PROMPT=10` on `scripts/eval_alignment.lsf` runs T2I-CompBench's official protocol
+(10 images per prompt, per-prompt mean); the default 1 is the cheap sweep setting and candidate 0
+is the same image in both. Every `alignment.json` records the evaluator repo commits, package
+versions, prompt-pool hashes and the checkpoint sha256 under `pins`, and a `pip_freeze.txt` is
+written beside it. Missing generations make staging fail rather than silently shrink the benchmark.
+
+In-domain alignment (VQAScore on the held-out COCO captions of the fidelity pool):
+`python eval/coco_vqascore.py --images out/fidelity/images/dino_patch_s0_s4 --steps 4
+--prompts pools/eval/fidelity_prompts.json --out out/coco_vqa/dino_patch_s0.json`.
+
+`eval/fidelity.py` reports CMMD per the reference implementation (CLIP ViT-L/14@336, center crop
+then bicubic resize, unit-norm embeddings, RBF sigma 10, biased estimator, x1000); it agrees with
+the public PyTorch port to three decimals on a frozen image set.
+
 GenEval2's judge (Qwen3-VL) needs `transformers >= 4.57`; if the training environment pins an
 older version, point `GENEVAL2_PYTHON` at a second interpreter that has it.
+
+## Logging
+
+With `WANDB_PROJECT` set, each run logs per step: loss, the loss at every supervised trajectory
+state (`train/loss_k*`), gradient norm, learning rate, epoch, samples seen, steps/s, peak GPU
+memory, and `sel/gain_<score>`: the running mean of (score of the selected candidate − mean over
+the four candidates) under every scorer stored in the cache, i.e. what the arm's selection buys
+under each scorer. Every `SAMPLE_EVERY` steps the student samples a fixed prompt list
+(`SAMPLE_PROMPTS`, any json list of `{idx, prompt}`; noise seeded by `idx` like the evaluation
+generator) and logs an image grid and a table; the guided 28-step teacher is logged once on the
+same prompts as a reference. Sampling uses private generators only, so it does not change the
+training trajectory.
+
+Finished evaluations can be pushed to the same project with `eval/log_to_wandb.py` (summary
+metrics per category, a per-prompt score table, fidelity numbers, and image grids), one run per
+evaluated model:
+
+```
+python eval/log_to_wandb.py --project $WANDB_PROJECT --eval_dir out/eval/eval_dino_patch_s0 \
+    --fidelity out/fidelity_report.json
+```
 
 Neither arm needs VQAScore. `data/build_candidates.py --vqa` additionally records
 `endpoint_vqa` / `oracle_idx` per caption (for a VQAScore-selected arm) and requires

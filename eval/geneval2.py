@@ -44,7 +44,8 @@ def cmd_stage(args):
         "n_missing": len(missing), "manifest": kept}, indent=1))
     print(f"staged {len(kept)} prompts -> {out / 'image_filepaths.json'}")
     if missing:
-        print(f"  MISSING {len(missing)} images; evaluation.py needs every benchmark prompt")
+        sys.exit(f"stage: {len(missing)} of {len(pool)} images missing (e.g. {missing[0]}); evaluation.py "
+                 f"scores the whole benchmark, so a partial set cannot be joined back")
 
 
 def cmd_run(args):

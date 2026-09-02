@@ -99,14 +99,19 @@ def cmd_stage(args):
         if "_" in prompt or "/" in prompt:
             unsafe.append(prompt)
             continue
-        src = images_root / f"p{idx:05d}" / f"s{args.steps}" / args.image_name
-        if not src.exists():
-            missing.append(str(src))
+        # one or several images per prompt (official protocol: 10); each staged under its own
+        # question_id, `collect` averages back to one score per prompt
+        names = [n for n in args.image_name.split(",") if n]
+        srcs = [images_root / f"p{idx:05d}" / f"s{args.steps}" / n for n in names]
+        absent = [str(s) for s in srcs if not s.exists()]
+        if absent:
+            missing += absent
             continue
-        qid = len(manifest)
-        (samples / f"{prompt}_{qid:06d}.png").symlink_to(src.resolve())
-        manifest.append({"question_id": qid, "idx": idx, "category": item["category"],
-                         "prompt": prompt, "src": str(src.resolve())})
+        for name, src in zip(names, srcs):
+            qid = len(manifest)
+            (samples / f"{prompt}_{qid:06d}.png").symlink_to(src.resolve())
+            manifest.append({"question_id": qid, "idx": idx, "category": item["category"],
+                             "prompt": prompt, "image": name, "src": str(src.resolve())})
     (out / "manifest.json").write_text(json.dumps({
         "images_root": str(images_root.resolve()), "steps": args.steps,
         "categories": sorted({m["category"] for m in manifest}), "n": len(manifest),
@@ -115,7 +120,10 @@ def cmd_stage(args):
     if unsafe:
         print(f"  skipped {len(unsafe)} prompts unusable as filenames")
     if missing:
-        print(f"  skipped {len(missing)} missing images, e.g. {missing[0]}")
+        msg = f"{len(missing)} of {len(prompts)} images missing, e.g. {missing[0]}"
+        if not args.allow_missing:
+            sys.exit(f"stage: {msg}; a partial benchmark is not the benchmark (pass --allow_missing to override)")
+        print(f"  WARNING {msg}")
 
 
 def cmd_run(args):
@@ -198,6 +206,19 @@ def cmd_collect(args):
         rows = [{**m, "score": by_qid[m["question_id"]]} for m in meta["manifest"] if m["question_id"] in by_qid]
     if not rows:
         sys.exit("no scores matched the manifest")
+    # several staged images per prompt -> one score per prompt (mean over its images)
+    per_image = rows
+    by_idx: dict = {}
+    for r in rows:
+        by_idx.setdefault(r["idx"], []).append(r)
+    rows = []
+    for i, rs in sorted(by_idx.items()):
+        row = {k: rs[0][k] for k in ("question_id", "idx", "category", "prompt", "src")}
+        row.update({"score": sum(r["score"] for r in rs) / len(rs), "n_images": len(rs),
+                    "image_scores": [r["score"] for r in rs]})
+        if "branch" in rs[0]:
+            row["branch"] = rs[0]["branch"]
+        rows.append(row)
     scores = [r["score"] for r in rows]
     per_cat: dict[str, list[float]] = {}
     for r in rows:
@@ -205,7 +226,8 @@ def cmd_collect(args):
     summary = {"dir": str(d), "evaluator": evaluator, "steps": meta["steps"],
                "images_root": meta["images_root"], "n": len(rows), "mean": sum(scores) / len(scores),
                "per_category": {c: {"n": len(v), "mean": sum(v) / len(v)} for c, v in sorted(per_cat.items())},
-               "per_prompt": rows}
+               "per_prompt": rows, "images_per_prompt": sorted({len(v) for v in by_idx.values()}),
+               "per_image": per_image}
     (d / "scores.json").write_text(json.dumps(summary, indent=1))
     print(f"{evaluator} @ {meta['steps']} steps | n={len(rows)} mean={summary['mean']:.4f}")
 
@@ -221,6 +243,7 @@ def main():
     s.add_argument("--categories", default=None, help="comma-separated")
     s.add_argument("--limit", type=int, default=0)
     s.add_argument("--out", required=True)
+    s.add_argument("--allow_missing", action="store_true", help="stage a partial set instead of failing")
     s.set_defaults(func=cmd_stage)
     choices = sorted(set(EVALUATORS) | set(COMPOSITE))
     r = sub.add_parser("run")
