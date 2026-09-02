@@ -206,7 +206,7 @@ def main() -> None:
             wandb.save(str(patch), base_path=str(Path(args.output_dir)), policy="now")
             # explicit source dirs rather than log_code(root=ROOT): log_code walks everything under
             # root (out/, checkpoints/, third_party/ ...) before filtering
-            art = wandb.Artifact(f"source-{run.id}", type="code")
+            art = wandb.Artifact(f"source-{run.id}", type="source")     # 'code' is reserved by wandb
             for pat in ("common/*.py", "data/*.py", "train/*.py", "eval/*.py", "eval/compat/*.py",
                         "scripts/*", "README.md", "requirements.txt"):
                 for f in sorted(ROOT.glob(pat)):
