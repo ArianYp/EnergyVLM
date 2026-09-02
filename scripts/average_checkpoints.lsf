@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+#BSUB -J ckpt-average
+#BSUB -q training-parallel
+#BSUB -n 4
+#BSUB -W 2:00
+#BSUB -R "span[hosts=1]"
+#BSUB -R "select[mem>64000]"
+#BSUB -R "rusage[mem=64000]"
+#BSUB -M 64000
+#BSUB -gpu "num=1:mode=exclusive_process:gmem=10G"
+#BSUB -o logs/ckpt-average-%J.out
+#BSUB -e logs/ckpt-average-%J.err
+#
+# Uniform average of the last five checkpoints of one run (steps 40k, 45k, 50k, 55k and final for
+# the 118k-caption configuration). The averaged file is what the report evaluates at that scale.
+# Needs no GPU compute; the GPU request only satisfies the queue. Chain the evaluation on it:
+#
+#   A=$(bsub -env "all,RUN=checkpoints/dino_patch_s0" < scripts/average_checkpoints.lsf | grep -oE "[0-9]+")
+#   bsub -w "done($A)" -env "all,LABEL=dino_patch_avg_s0,CKPT=checkpoints/dino_patch_s0/checkpoint_avg_last5.pt,CFG=1.0" \
+#        < scripts/eval_alignment.lsf
+set -euo pipefail
+source scripts/env.sh
+: "${RUN:?set RUN (checkpoint directory of one training run)}"
+STEPS=${STEPS:-40000,45000,50000,55000,final}
+mkdir -p logs
+python3 train/average_checkpoints.py --run "$RUN" --steps "$STEPS" --out "$RUN/checkpoint_avg_last5.pt"

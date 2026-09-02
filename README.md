@@ -83,7 +83,23 @@ bsub -env "all,LABEL=random_s0,CKPT=checkpoints/random_s0/checkpoint_final.pt,CF
 bsub -env "all,LABEL=dino_patch_s0,CKPT=checkpoints/dino_patch_s0/checkpoint_final.pt,CFG=1.0,STEPS=4" < scripts/fidelity_generate.lsf
 bsub -env "all,LABEL=base,CKPT=base,CFG=7.0,STEPS=28"                                                   < scripts/fidelity_generate.lsf
 bsub < scripts/fidelity_score.lsf
+
+# 6. at the 118k scale: average the last five checkpoints and evaluate the average
+A=$(bsub -env "all,RUN=checkpoints/dino_patch_s0" < scripts/average_checkpoints.lsf | grep -oE "[0-9]+")
+bsub -w "done($A)" -env "all,LABEL=dino_patch_avg_s0,CKPT=checkpoints/dino_patch_s0/checkpoint_avg_last5.pt,CFG=1.0" \
+     < scripts/eval_alignment.lsf
+
+# 7. absolute per-category tables (markdown + LaTeX)
+python eval/absolute_tables.py --model "naive=out/eval/eval_random_s[0-9]" \
+    --model "DINO patches=out/eval/eval_dino_patch_s[0-9]" --tex out/absolute_tables.tex
 ```
+
+Two training configurations are used in the report. `scripts/train_3k.lsf` is the small one
+(3,000 captions, one GPU, 6,000 updates, lr 1e-5, 300 warm-up steps; every three-seed result and
+every ablation). `scripts/train.lsf` is the scale one (113,948 captions, four GPUs, 56,974 updates,
+lr 2e-5, 1,000 warm-up steps). At the scale configuration single checkpoints of one run differ by
+up to 0.035 CompBench, so the reported model is the uniform average of its last five checkpoints
+(step 6 above); `train/average_checkpoints.py` writes it in the same layout as a checkpoint.
 
 Evaluate students with `CFG=1.0`. Sampling a student with guidance applies it twice and roughly
 halves its scores.
@@ -104,6 +120,27 @@ the public PyTorch port to three decimals on a frozen image set.
 
 GenEval2's judge (Qwen3-VL) needs `transformers >= 4.57`; if the training environment pins an
 older version, point `GENEVAL2_PYTHON` at a second interpreter that has it.
+
+## Results
+
+Paired against the random-selection student on identical prompts. The 3k rows are three training
+seeds with 95% hierarchical bootstrap intervals over seeds and prompts; the 118k rows are one seed
+with weight-averaged checkpoints. Full tables, ablations and the evaluation protocol are in
+`docs/report.pdf` (source `docs/report.tex`).
+
+| setting | selector | T2I-CompBench | GenEval2 (x100) | CMMD |
+|---|---|---|---|---|
+| 3k captions, 6k updates | random | 0.4584 | 20.73 | 0.963 |
+| 3k captions, 6k updates | dino_patch | +0.0140 [+0.0051, +0.0237] | +2.17 [+0.24, +4.08] | 0.893 |
+| 118k captions, 57k updates, averaged | random | 0.4642 | 20.61 | 0.84 |
+| 118k captions, 57k updates, averaged | dino_patch | +0.0222 (p 7e-10) | +1.44 (p 0.11) | 0.78 |
+| teacher, 28 steps, cfg 7 | | 0.5053 | 17.05 | 0.64 |
+
+The scorer reads no text. Selection costs nothing at inference and does not cost fidelity: the
+scored student has lower CMMD and higher precision and recall than the random-selection student in
+both settings. The gain depends on the candidate variance the teacher leaves: with a 28-step
+teacher the offline headroom halves and the trained gain vanishes, so this is a fixed-teacher gain,
+not a substitute for teacher quality.
 
 ## Logging
 

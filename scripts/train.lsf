@@ -1,17 +1,23 @@
 #!/usr/bin/env bash
 #BSUB -J distill
 #BSUB -q training-parallel
-#BSUB -n 32
+#BSUB -n 16
 #BSUB -W 24:00
 #BSUB -R "span[hosts=1]"
 #BSUB -R "select[mem>256000]"
 #BSUB -R "rusage[mem=256000]"
 #BSUB -M 256000
-#BSUB -gpu "num=8:mode=exclusive_process:gmem=80G"
+#BSUB -gpu "num=4:mode=exclusive_process:gmem=80G"
 #BSUB -o logs/distill-%J.out
 #BSUB -e logs/distill-%J.err
 #
-# One training arm on 8 GPUs. Both arms use identical settings; only SELECTOR differs.
+# The scale configuration used for the 118k-caption result in the report: 4 GPUs (one caption per
+# GPU per step), two passes over the cache (56,974 updates for 113,948 captions), lr 2e-5 with a
+# 1,000-step linear warm-up then constant, gradient clip 1.0, checkpoint every 5,000 steps.
+# About 12.5 hours on four H200s. Both arms use identical settings; only SELECTOR differs.
+# After training, average the last five checkpoints with scripts/average_checkpoints.lsf; the
+# averaged file is the reported model at this scale. For the 3k-caption configuration use
+# scripts/train_3k.lsf.
 #
 #   bsub -env "all,SELECTOR=random,SEED=0"     < scripts/train.lsf     # naive distillation
 #   bsub -env "all,SELECTOR=dino_patch,SEED=0" < scripts/train.lsf     # DINO-patch scored
@@ -21,18 +27,19 @@ source scripts/env.sh
 : "${SELECTOR:?set SELECTOR (random | dino_patch)}"
 SEED=${SEED:-0}
 CACHE=${CACHE:-cache/train}
-GPUS=${GPUS:-8}
+GPUS=${GPUS:-4}
 EPOCHS=${EPOCHS:-2}
-LR=${LR:-2.8e-5}
+LR=${LR:-2e-5}
+WARMUP=${WARMUP:-1000}
 NREC=$(cat "$CACHE"/selection_rank*.jsonl | wc -l)
-STEPS=$(python3 -c "print(int(round($EPOCHS * $NREC / $GPUS)))")
+STEPS=${STEPS:-$(python3 -c "print(int(round($EPOCHS * $NREC / $GPUS)))")}
 RUN="${SELECTOR}_s${SEED}"
 mkdir -p checkpoints logs
-echo "selector=$SELECTOR seed=$SEED captions=$NREC gpus=$GPUS epochs=$EPOCHS steps=$STEPS lr=$LR"
+echo "selector=$SELECTOR seed=$SEED captions=$NREC gpus=$GPUS epochs=$EPOCHS steps=$STEPS lr=$LR warmup=$WARMUP"
 
 torchrun --standalone --nproc-per-node="$GPUS" train/distill.py \
   --selector "$SELECTOR" --cache_dir "$CACHE" --output_dir "checkpoints/$RUN" \
-  --seed "$SEED" --num_steps "$STEPS" --num_warmup_steps 1000 --lr "$LR" \
+  --seed "$SEED" --num_steps "$STEPS" --num_warmup_steps "$WARMUP" --lr "$LR" \
   --K 8 --cfg 7.0 --window 0.4,0.9 --delta_min 1 --delta_max 3 --height 512 \
   --gradient_checkpointing --save_every 5000 --log_every 50 \
   --sample_every "${SAMPLE_EVERY:-2000}" --sample_prompts "${SAMPLE_PROMPTS:-pools/sample_prompts.json}" \

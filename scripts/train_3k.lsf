@@ -1,0 +1,42 @@
+#!/usr/bin/env bash
+#BSUB -J distill-3k
+#BSUB -q training-parallel
+#BSUB -n 4
+#BSUB -W 6:00
+#BSUB -R "span[hosts=1]"
+#BSUB -R "select[mem>128000]"
+#BSUB -R "rusage[mem=128000]"
+#BSUB -M 128000
+#BSUB -gpu "num=1:mode=exclusive_process:gmem=78G"
+#BSUB -o logs/distill-3k-%J.out
+#BSUB -e logs/distill-3k-%J.err
+#
+# The 3k-caption configuration used for every three-seed result and every ablation in the report:
+# one GPU, 6,000 updates (two passes over 3,000 captions), lr 1e-5 with a 300-step linear warm-up
+# then constant, gradient clip 1.0, pseudo-Huber x0 loss, window 0.4-0.9, delta in {1,2,3}.
+# About 1.6 hours on one H200. Only SELECTOR and SEED differ between arms.
+#
+#   for S in 0 1 2; do
+#     bsub -env "all,SELECTOR=random,SEED=$S"     < scripts/train_3k.lsf
+#     bsub -env "all,SELECTOR=dino_patch,SEED=$S" < scripts/train_3k.lsf
+#   done
+set -euo pipefail
+source scripts/env.sh
+
+: "${SELECTOR:?set SELECTOR (random | dino_patch)}"
+SEED=${SEED:-0}
+CACHE=${CACHE:-cache/train_3k}
+STEPS=${STEPS:-6000}
+LR=${LR:-1e-5}
+WARMUP=${WARMUP:-300}
+RUN="${SELECTOR}_3k_s${SEED}"
+mkdir -p checkpoints logs
+echo "selector=$SELECTOR seed=$SEED captions=$(cat "$CACHE"/selection_rank*.jsonl | wc -l) gpus=1 steps=$STEPS lr=$LR warmup=$WARMUP"
+
+torchrun --standalone --nproc-per-node=1 train/distill.py \
+  --selector "$SELECTOR" --cache_dir "$CACHE" --output_dir "checkpoints/$RUN" \
+  --seed "$SEED" --num_steps "$STEPS" --num_warmup_steps "$WARMUP" --lr "$LR" \
+  --K 8 --cfg 7.0 --window 0.4,0.9 --delta_min 1 --delta_max 3 --height 512 \
+  --gradient_checkpointing --save_every 2000 --log_every 10 \
+  --sample_every "${SAMPLE_EVERY:-0}" --sample_prompts "${SAMPLE_PROMPTS:-pools/sample_prompts.json}" \
+  ${WANDB_PROJECT:+--wandb_project "$WANDB_PROJECT" --wandb_run_name "$RUN"}
