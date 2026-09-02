@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+#BSUB -J fidelity-score
+#BSUB -q training-parallel
+#BSUB -n 8
+#BSUB -W 8:00
+#BSUB -R "span[hosts=1]"
+#BSUB -R "select[mem>128000]"
+#BSUB -R "rusage[mem=128000]"
+#BSUB -M 128000
+#BSUB -gpu "num=1:mode=exclusive_process:gmem=40G"
+#BSUB -o logs/fidelity-score-%J.out
+#BSUB -e logs/fidelity-score-%J.err
+#
+# FID / CMMD / precision / recall for every pool under out/fidelity/images, against COCO val2017.
+#   bsub < scripts/fidelity_score.lsf
+set -euo pipefail
+source scripts/env.sh
+MODELS=$(ls out/fidelity/images | tr '\n' ',' | sed 's/,$//')
+mkdir -p logs
+python3 eval/fidelity.py --gen_root out/fidelity/images --models "$MODELS" --steps 4,28 \
+  --coco_dir "$COCO_ROOT/val2017" --n_ref 5000 --out out/fidelity_report.md

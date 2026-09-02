@@ -1,0 +1,38 @@
+#!/usr/bin/env bash
+#BSUB -J distill
+#BSUB -q training-parallel
+#BSUB -n 32
+#BSUB -W 24:00
+#BSUB -R "span[hosts=1]"
+#BSUB -R "select[mem>256000]"
+#BSUB -R "rusage[mem=256000]"
+#BSUB -M 256000
+#BSUB -gpu "num=8:mode=exclusive_process:gmem=80G"
+#BSUB -o logs/distill-%J.out
+#BSUB -e logs/distill-%J.err
+#
+# One training arm on 8 GPUs. Both arms use identical settings; only SELECTOR differs.
+#
+#   bsub -env "all,SELECTOR=random,SEED=0"     < scripts/train.lsf     # naive distillation
+#   bsub -env "all,SELECTOR=dino_patch,SEED=0" < scripts/train.lsf     # DINO-patch scored
+set -euo pipefail
+source scripts/env.sh
+
+: "${SELECTOR:?set SELECTOR (random | dino_patch)}"
+SEED=${SEED:-0}
+CACHE=${CACHE:-cache/train}
+GPUS=${GPUS:-8}
+EPOCHS=${EPOCHS:-2}
+LR=${LR:-2.8e-5}
+NREC=$(cat "$CACHE"/selection_rank*.jsonl | wc -l)
+STEPS=$(python3 -c "print(int(round($EPOCHS * $NREC / $GPUS)))")
+RUN="${SELECTOR}_s${SEED}"
+mkdir -p checkpoints logs
+echo "selector=$SELECTOR seed=$SEED captions=$NREC gpus=$GPUS epochs=$EPOCHS steps=$STEPS lr=$LR"
+
+torchrun --standalone --nproc-per-node="$GPUS" train/distill.py \
+  --selector "$SELECTOR" --cache_dir "$CACHE" --output_dir "checkpoints/$RUN" \
+  --seed "$SEED" --num_steps "$STEPS" --num_warmup_steps 1000 --lr "$LR" \
+  --K 8 --cfg 7.0 --window 0.4,0.9 --delta_min 1 --delta_max 3 --height 512 \
+  --gradient_checkpointing --save_every 5000 --log_every 50 \
+  ${WANDB_PROJECT:+--wandb_project "$WANDB_PROJECT" --wandb_run_name "$RUN"}

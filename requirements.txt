@@ -1,0 +1,14 @@
+torch>=2.4
+torchvision
+diffusers>=0.30
+transformers>=4.45
+accelerate
+sentencepiece
+protobuf
+numpy
+scipy
+pillow
+tqdm
+clean-fid
+ruamel.yaml
+wandb

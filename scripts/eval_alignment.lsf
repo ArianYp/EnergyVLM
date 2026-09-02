@@ -1,0 +1,69 @@
+#!/usr/bin/env bash
+#BSUB -J eval-alignment
+#BSUB -q training-parallel
+#BSUB -n 16
+#BSUB -W 8:00
+#BSUB -R "span[hosts=1]"
+#BSUB -R "select[mem>128000]"
+#BSUB -R "rusage[mem=128000]"
+#BSUB -M 128000
+#BSUB -gpu "num=4:mode=exclusive_process:gmem=40G"
+#BSUB -o logs/eval-alignment-%J.out
+#BSUB -e logs/eval-alignment-%J.err
+#
+# T2I-CompBench + GenEval2 for one model. Distilled students are sampled with cfg 1 (guidance
+# absorbed); the base model with cfg 7. Both pools are generated in one process from identical
+# per-prompt noise, then scored with the official evaluators.
+#
+#   bsub -env "all,LABEL=dino_patch_s0,CKPT=checkpoints/dino_patch_s0/checkpoint_final.pt,CFG=1.0" < scripts/eval_alignment.lsf
+#   bsub -env "all,LABEL=base,CKPT=base,CFG=7.0"                                                    < scripts/eval_alignment.lsf
+set -euo pipefail
+source scripts/env.sh
+
+: "${LABEL:?set LABEL}"
+: "${CKPT:?set CKPT (path or 'base')}"
+: "${CFG:?set CFG explicitly: 1.0 for students, 7.0 for base}"
+STEPS=${STEPS:-4}
+POOL=${POOL:-pools/eval}
+ROOT="out/eval/eval_${LABEL}"
+mkdir -p "$ROOT" logs
+if [[ "$CKPT" != "base" ]]; then
+  python3 - <<PY
+import torch; ck = torch.load("$CKPT", map_location="cpu", weights_only=False)
+assert "model" in ck and ck.get("step"), "incomplete checkpoint"; print("checkpoint step", ck["step"])
+PY
+fi
+
+echo "[$(date --iso-8601=seconds)] generation"
+torchrun --standalone --nproc-per-node=4 eval/generate.py \
+  --out_root "$ROOT/compbench,$ROOT/geneval2" \
+  --prompts_json "$POOL/compbench_prompts.json,$POOL/geneval2_prompts.json" \
+  --label "$LABEL" --checkpoint "$CKPT" --cfg "$CFG" --steps_list "$STEPS"
+
+echo "[$(date --iso-8601=seconds)] T2I-CompBench"
+for CAT in color shape texture spatial 3d_spatial numeracy non_spatial complex; do
+  D="$ROOT/compbench_scores/${LABEL}_s${STEPS}_${CAT}"
+  python3 eval/compbench.py stage --images "$ROOT/compbench/images/$LABEL" \
+    --prompts "$POOL/compbench_prompts.json" --steps "$STEPS" --categories "$CAT" --out "$D"
+  python3 eval/compbench.py run --dir "$D" --skip_done
+  python3 eval/compbench.py collect --dir "$D" --routing_split val
+done
+
+echo "[$(date --iso-8601=seconds)] GenEval2"
+D="$ROOT/geneval2_scores/${LABEL}_s${STEPS}"
+python3 eval/geneval2.py stage --images "$ROOT/geneval2/images/$LABEL" \
+  --pool "$POOL/geneval2_prompts.json" --steps "$STEPS" --out "$D"
+python3 eval/geneval2.py run --dir "$D" --method soft_tifa_gm --skip_done ${GENEVAL2_PYTHON:+--python "$GENEVAL2_PYTHON"}
+python3 eval/geneval2.py collect --dir "$D" --method soft_tifa_gm
+
+python3 - <<PY
+import json, glob, os
+out = {"label": "$LABEL", "ckpt": "$CKPT", "steps": $STEPS, "cfg": float("$CFG"), "compbench": {}}
+for p in sorted(glob.glob("$ROOT/compbench_scores/*/scores.json")):
+    cat = os.path.basename(os.path.dirname(p)).split("_s${STEPS}_")[-1]
+    out["compbench"][cat] = json.load(open(p))["mean"]
+out["compbench_mean"] = sum(out["compbench"].values()) / len(out["compbench"])
+out["geneval2"] = json.load(open("$D/scores.json"))["mean"]
+json.dump(out, open("$ROOT/alignment.json", "w"), indent=2); print(json.dumps(out, indent=2))
+PY
+echo "[$(date --iso-8601=seconds)] done -> $ROOT"

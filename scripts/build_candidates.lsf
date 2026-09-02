@@ -1,0 +1,42 @@
+#!/usr/bin/env bash
+#BSUB -J build-candidates
+#BSUB -q training-parallel
+#BSUB -n 32
+#BSUB -W 24:00
+#BSUB -R "span[hosts=1]"
+#BSUB -R "select[mem>450000]"
+#BSUB -R "rusage[mem=450000]"
+#BSUB -M 450000
+#BSUB -gpu "num=8:mode=exclusive_process:gmem=80G"
+#BSUB -o logs/build-candidates-%J.out
+#BSUB -e logs/build-candidates-%J.err
+#
+# Candidate cache over the training pool, 8 independent ranks per job. Ranks shard by position
+# (i % WORLD_SIZE == RANK) and never communicate, so more jobs with disjoint SHARD values scale
+# linearly: WORLD_SIZE = NSHARD * GPUS.
+#
+#   bsub -env "all,SHARD=0,NSHARD=4" < scripts/build_candidates.lsf      # ... SHARD=1,2,3
+set -euo pipefail
+source scripts/env.sh
+
+: "${SHARD:?set SHARD}"
+NSHARD=${NSHARD:-1}
+GPUS=${GPUS:-8}
+POOL=${POOL:-pools/train/pool_manifest.json}
+OUT=${OUT:-cache/train}
+WORLD=$((NSHARD * GPUS))
+mkdir -p "$OUT" logs
+
+pids=()
+for g in $(seq 0 $((GPUS - 1))); do
+  R=$((SHARD * GPUS + g))
+  CUDA_VISIBLE_DEVICES=$g RANK=$R LOCAL_RANK=0 WORLD_SIZE=$WORLD \
+    python3 data/build_candidates.py --pool_manifest "$POOL" --out_root "$OUT" \
+      --N 4 --K 8 --cfg 7.0 --height 512 --seed 0 ${VQA:+--vqa} \
+      > "logs/build-candidates_r${R}.log" 2>&1 &
+  pids+=($!)
+done
+fail=0
+for p in "${pids[@]}"; do wait "$p" || fail=1; done
+wc -l "$OUT"/selection_rank*.jsonl | tail -1
+exit $fail

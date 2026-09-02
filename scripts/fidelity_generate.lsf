@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+#BSUB -J fidelity-generate
+#BSUB -q training-parallel
+#BSUB -n 4
+#BSUB -W 8:00
+#BSUB -R "span[hosts=1]"
+#BSUB -R "select[mem>64000]"
+#BSUB -R "rusage[mem=64000]"
+#BSUB -M 64000
+#BSUB -gpu "num=1:mode=exclusive_process:gmem=40G"
+#BSUB -o logs/fidelity-generate-%J.out
+#BSUB -e logs/fidelity-generate-%J.err
+#
+# 5,000 COCO-caption images for one model, for FID / CMMD / precision / recall.
+#
+#   bsub -env "all,LABEL=dino_patch_s0,CKPT=checkpoints/dino_patch_s0/checkpoint_final.pt,CFG=1.0,STEPS=4" < scripts/fidelity_generate.lsf
+#   bsub -env "all,LABEL=base,CKPT=base,CFG=7.0,STEPS=28"                                                    < scripts/fidelity_generate.lsf
+set -euo pipefail
+source scripts/env.sh
+: "${LABEL:?}"; : "${CKPT:?}"; : "${CFG:?}"
+STEPS=${STEPS:-4}
+POOL=${POOL:-pools/eval}
+mkdir -p logs
+torchrun --standalone --nproc-per-node=1 eval/generate.py \
+  --out_root out/fidelity --prompts_json "$POOL/fidelity_prompts.json" \
+  --label "${LABEL}_s${STEPS}" --checkpoint "$CKPT" --cfg "$CFG" --steps_list "$STEPS"
