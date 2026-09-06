@@ -20,7 +20,7 @@
 \maketitle
 
 \begin{abstract}
-We distil Stable Diffusion 3.5 Medium into a 4-step student with consistency distillation. For every training caption the frozen teacher generates four candidate trajectories from four seeds. A scorer picks one of the four, and the student is trained on that trajectory only. The baseline picks at random. The main scorer is the cosine similarity between DINOv2 mean-pooled patch features of the candidate image and of the real photograph that the caption describes. It uses no text model. On 3,000 COCO captions, three seeds, and 6,000 updates, this selection improves T2I-CompBench by $+0.014$ and GenEval2 by $+2.2$ points over random selection, with 95\% bootstrap intervals that exclude zero, and does not cost fidelity. At 118k captions and 57k updates, with weight averaging of the last five checkpoints, the gain is $+0.022$ CompBench, and the scored student also has better CMMD, precision and recall than the random-selection student. The same pipeline with VQAScore as the scorer gives similar gains but shares a model family with the evaluators. This document gives the full recipe: data, model, scorers, loss, hyperparameters, evaluation protocol, results and ablations.
+We distil Stable Diffusion 3.5 Medium into a 4-step student with consistency distillation. For every training caption the frozen teacher generates four candidate trajectories from four seeds. A scorer picks one of the four, and the student is trained on that trajectory only. The baseline picks at random. The main scorer is the cosine similarity between DINOv2 mean-pooled patch features of the candidate image and of the real photograph that the caption describes. It uses no text model. On 3,000 COCO captions, three seeds, and 6,000 updates, this selection improves T2I-CompBench by $+0.014$ and GenEval2 by $+2.2$ points over random selection, with 95\% bootstrap intervals that exclude zero, and does not cost fidelity. At 118k captions and 57k updates, three training seeds, with weight averaging of the last five checkpoints, the gain is $+0.0175$ CompBench ($p=10^{-14}$) and $+1.3$ GenEval2; it is $+0.013$ under the official ten-images-per-prompt CompBench protocol ($p=10^{-41}$), and the scored student has better CMMD, precision and recall on every seed. The gain is unchanged by the optimizer batch size, does not grow with eight candidates instead of four, and vanishes with a stronger teacher. Argmax is the right selection rule: exact Boltzmann weighting of all four candidates ties it at 2.3 times the compute, and drawing one candidate from the same weights loses most of the gain through target churn. The same pipeline with VQAScore as the scorer gives similar gains but shares a model family with the evaluators. This document gives the full recipe: data, model, scorers, loss, hyperparameters, evaluation protocol, results, ablations and qualitative examples.
 \end{abstract}
 
 \tableofcontents
@@ -35,7 +35,7 @@ Table~\ref{tab:summary} gives the headline results. All deltas are paired agains
 
 \begin{table}[ht]
 \centering
-\caption{Headline results. Alignment deltas are against the random-selection student. The 3k rows use three training seeds; intervals are 95\% hierarchical bootstrap over seeds and prompts. The 118k rows use one seed and weight-averaged checkpoints.}
+\caption{Headline results. Alignment deltas are against the random-selection student. The 3k rows use three training seeds; intervals are 95\% hierarchical bootstrap over seeds and prompts. The 118k rows use three training seeds and weight-averaged checkpoints, with per-prompt paired tests pooled over seeds; the VQAScore arm at 118k is one seed. CMMD is the seed mean.}
 \label{tab:summary}
 \resizebox{\textwidth}{!}{%
 \begin{tabular}{l l c c c}
@@ -46,9 +46,10 @@ Setting & Scorer & CompBench $\Delta$ & GenEval2 $\Delta$ ($\times100$) & CMMD $
 3k captions, 6k updates & DINOv2 patches & $+0.0140$ [$+0.0051$, $+0.0237$] & $+2.17$ [$+0.24$, $+4.08$] & 0.893 \\
 3k captions, 6k updates & VQAScore & $+0.0233$ [$+0.0097$, $+0.0364$] & $+2.34$ [$+0.55$, $+4.05$] & 0.883 \\
 \midrule
-118k captions, 57k updates & random (baseline) & 0.4642 & 20.61 & 0.84 \\
-118k captions, 57k updates & DINOv2 patches & $+0.0222$ ($p=7\times10^{-10}$) & $+1.44$ ($p=0.11$) & 0.78 \\
-118k captions, 57k updates & VQAScore & $+0.0185$ ($p=1\times10^{-7}$) & $+3.05$ ($p=0.001$) & 0.79 \\
+118k captions, 57k updates, 3 seeds & random (baseline) & 0.4668 & 20.29 & 0.84 \\
+118k captions, 57k updates, 3 seeds & DINOv2 patches & $+0.0175$ ($p=10^{-14}$) & $+1.29$ ($p=0.02$) & 0.78 \\
+118k, official 10-image CompBench, 3 seeds & DINOv2 patches & $+0.0131$ ($p=2\times10^{-41}$) & -- & -- \\
+118k captions, 57k updates, 1 seed & VQAScore & $+0.0185$ ($p=10^{-7}$) & $+3.05$ ($p=0.001$) & 0.79 \\
 \midrule
 Teacher, 28 steps, $w=7$ & -- & 0.5053 & 17.05 & 0.64 \\
 \bottomrule
@@ -140,7 +141,7 @@ A scorer assigns a number $S_j$ to each candidate. Selection is hard:
 \begin{equation}
 j^\star=\argmax_{j\in\{1,\dots,4\}}S_j.
 \end{equation}
-The index $j^\star$ is computed once, offline, and stored in a manifest keyed by caption. No gradient ever flows through a scorer. The random baseline replaces $j^\star$ by a uniform draw that is also stored in the manifest and is therefore identical across training seeds.
+The index $j^\star$ is computed once, offline, and stored in a manifest keyed by caption. No gradient ever flows through a scorer. Section~\ref{sec:selrule} compares this rule with Boltzmann-weighted and sampled selection; argmax is the best of them. The random baseline replaces $j^\star$ by a uniform draw that is also stored in the manifest and is therefore identical across training seeds.
 
 \subsection{DINOv2 mean-pooled patches (main scorer)}
 We use DINOv2-B (\texttt{facebook/dinov2-base}, $d=768$) with its standard preprocessing: resize the short side to 256, centre-crop to $224\times224$, ImageNet normalisation. The model returns one CLS token and $P=256$ patch tokens $h_1,\dots,h_P$ (a $16\times16$ grid, patch size 14). We drop the CLS token, average the patch tokens and normalise:
@@ -233,7 +234,7 @@ Table~\ref{tab:hyper} lists both training configurations. Each optimiser step pr
 Captions & 3,000 & 113,948 \\
 GPUs (H200) & 1 & 4, DDP, one caption per GPU per step \\
 Updates & 6,000 (2 passes) & 56,974 (2 passes) \\
-Seeds & 3 & 1 \\
+Seeds & 3 & 3 (VQAScore arm: 1) \\
 Optimiser & AdamW, $\beta=(0.9,0.999)$, $\epsilon=10^{-8}$ & same \\
 Weight decay & 0 & 0 \\
 Learning rate & $10^{-5}$ & $2\times10^{-5}$ \\
@@ -242,6 +243,7 @@ Gradient clip & global norm 1.0 & global norm 1.0 \\
 Precision & fp32 master weights, bf16 autocast & same \\
 Gradient checkpointing & on & on \\
 Teacher, text encoders, VAE & frozen, bf16 & same \\
+Captions per update & 1 & 4 (one per GPU; 16 with accumulation, Section~\ref{sec:batch}) \\
 Reported weights & final step & uniform average of steps 40k, 45k, 50k, 55k, final \\
 Wall-clock per run & 1.6 h & 12.5 h \\
 Peak GPU memory & -- & 66 GB per GPU \\
@@ -270,7 +272,7 @@ The student is sampled with 4 Euler steps on the 4-step grid of Table~\ref{tab:g
 5,000 images from \texttt{val2017} captions against the 5,000 matching real photographs, centre-cropped to squares. FID uses clean-fid. CMMD uses the reference implementation: CLIP ViT-L/14 at 336 px, centre crop then bicubic resize, unit-normalised embeddings, RBF kernel with $\sigma=10$, biased estimator, $\times1000$. Precision and recall use $k$-NN manifolds. CMMD intervals are 1,000-sample bootstraps.
 
 \subsection{Statistics}
-Deltas are paired on identical prompts. For three-seed experiments, the interval is a hierarchical bootstrap that resamples seeds and prompts jointly (4,000 resamples). Per-prompt $t$-tests and Wilcoxon tests are reported for single-seed contrasts.
+Deltas are paired on identical prompts. For the three-seed experiments on the 3k pool, the interval is a hierarchical bootstrap that resamples seeds and prompts jointly (4,000 resamples). The 118k and selection-rule contrasts report per-prompt paired $t$-tests (Wilcoxon tests agree throughout), pooled over seeds where there are several, with the per-seed deltas alongside.
 
 \subsection{Two properties of the metrics that matter for reading the tables}
 \label{sec:metricprops}
@@ -410,33 +412,113 @@ Scored CD, VQAScore & \textbf{0.4817 $\pm$ 0.0106} & \textbf{0.8120} & \textbf{0
 \section{Results at 118k captions}
 \label{sec:scale}
 
-\subsection{Weight-averaged students}
-Table~\ref{tab:scale} gives the 118k result with weight-averaged checkpoints. This is the largest and best-performing setting in this work.
+\subsection{Weight-averaged students, three seeds}
+Table~\ref{tab:scale} gives the 118k result. Every arm is three training seeds on the same cache and the same configuration, and the reported weights are the uniform average of the last five checkpoints of each run. This is the largest and best-performing setting in this work.
 
 \begin{table}[ht]
 \centering
-\caption{118k captions, 56,974 updates on 4 GPUs, one seed, uniform average of the last five checkpoints. Deltas are per-prompt paired tests against the random-selection student.}
+\caption{118k captions, 56,974 updates on 4 GPUs, three training seeds, uniform average of the last five checkpoints. Per-seed scores and seed means; deltas are per-prompt paired tests against the random-selection student, pooled over seeds. The VQAScore arm has one seed and is paired against seed 0 of the baseline.}
 \label{tab:scale}
 \resizebox{\textwidth}{!}{%
-\begin{tabular}{l c c c c c c c c}
+\begin{tabular}{l c c c c c c}
 \toprule
-Scorer & CompBench & $\Delta$ & $p$ & GenEval2 & $\Delta$ & $p$ & CMMD & Precision / Recall \\
+Scorer & CompBench (s0 / s1 / s2) & mean & $\Delta$ ($p$) & GenEval2 (s0 / s1 / s2) & mean & $\Delta$ ($p$) \\
 \midrule
-random (baseline) & 0.4642 & -- & -- & 20.61 & -- & -- & 0.84 & 0.485 / 0.059 \\
-DINOv2 patches & \textbf{0.4865} & +0.0222 & $7\times10^{-10}$ & 22.05 & +1.44 & 0.11 & \textbf{0.78} & \textbf{0.522 / 0.071} \\
-VQAScore & 0.4827 & +0.0185 & $1\times10^{-7}$ & \textbf{23.66} & +3.05 & 0.001 & 0.79 & 0.510 / 0.061 \\
+random (baseline) & 0.4642 / 0.4709 / 0.4653 & 0.4668 & -- & 20.61 / 20.52 / 19.74 & 20.29 & -- \\
+DINOv2 patches & 0.4865 / 0.4821 / 0.4843 & \textbf{0.4843} & $+0.0175$ ($10^{-14}$) & 22.05 / 21.22 / 21.48 & 21.58 & $+1.29$ (0.02) \\
+VQAScore (seed 0) & 0.4827 & 0.4827 & $+0.0185$ ($10^{-7}$) & 23.66 & \textbf{23.66} & $+3.05$ (0.001) \\
 \bottomrule
 \end{tabular}}
 \end{table}
 
-The DINOv2 patch gain is present in both evaluator families of CompBench: UniDet $+0.025$ ($p=4\times10^{-4}$) and BLIP-VQA $+0.030$ ($p=2\times10^{-6}$). The averaged patch student is 0.019 CompBench below the 28-step teacher and 0.032 above its 8-step source. On fidelity, both scored arms beat the random-selection student by 0.05 to 0.06 CMMD, well outside the $\pm0.01$ interval, and on precision and recall. FID is within split-half noise.
+The per-seed DINOv2 patch gains are $+0.022$, $+0.011$ and $+0.019$ CompBench (standard deviation 0.006, so a single-seed contrast on this branch resolves about 0.01). The gain is present in both evaluator families of CompBench: UniDet $+0.026$ ($p=5\times10^{-9}$) and BLIP-VQA $+0.017$ ($p=10^{-5}$); the CLIPScore category is a null ($+0.0002$). The averaged patch student is 0.021 CompBench below the 28-step teacher and 0.030 above its 8-step source.
 
-\subsection{Why averaging is needed}
-Table~\ref{tab:curve} evaluates every saved checkpoint of the three runs. Consecutive checkpoints of one run differ by up to 0.035 CompBench, which is larger than the effect. The cause is the fixed-size normalised step (Section~\ref{sec:distill}) with no averaging: the weights move on a plateau and each checkpoint samples a different point of it. Paired across the eight checkpoints, the patch arm is ahead of random on CompBench by $+0.014$ on average (7 of 8 checkpoints, $p=0.02$) and the VQAScore arm by $+0.010$ (6 of 8, $p=0.05$). Averaging the last five checkpoints raised every arm and moved the scored arms most.
+\subsection{Official protocol: ten images per prompt}
+T2I-CompBench's official protocol scores ten images per prompt. Table~\ref{tab:official} repeats the evaluation of the same seven averaged models under it (images seeded by prompt and sample index, identical across arms). The gain holds on every seed with the same category profile (Table~\ref{tab:scale_categories}, Figure~\ref{fig:percat}). Its size is about three quarters of the one-image number, because ten images per prompt is a less noisy estimate for both arms, and its statistical strength is far higher.
 
 \begin{table}[ht]
 \centering
-\caption{CompBench of every saved checkpoint of the 118k runs (one seed). The last row is the weight average of the last five checkpoints.}
+\caption{Official ten-images-per-prompt T2I-CompBench on the 118k weight-averaged models, per training seed. Paired deltas against the random-selection student.}
+\label{tab:official}
+\begin{tabular}{l c c c c}
+\toprule
+Scorer & seed 0 & seed 1 & seed 2 & mean, $\Delta$ ($p$) \\
+\midrule
+random (baseline) & 0.4704 & 0.4723 & 0.4729 & 0.4719 \\
+DINOv2 patches & 0.4878 & 0.4838 & 0.4832 & 0.4850, $+0.0131$ ($2\times10^{-41}$) \\
+VQAScore & 0.4835 & -- & -- & $+0.0131$ ($3\times10^{-18}$) \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{table}[ht]
+\centering
+\caption{CompBench per category at 118k, three-seed means of the weight-averaged students, under the one-image and the official ten-image protocol.}
+\label{tab:scale_categories}
+\resizebox{\textwidth}{!}{%
+\begin{tabular}{l ccc ccc}
+\toprule
+ & \multicolumn{3}{c}{one image per prompt} & \multicolumn{3}{c}{ten images per prompt (official)} \\
+Category & random & DINOv2 patches & $\Delta$ & random & DINOv2 patches & $\Delta$ \\
+\midrule
+color & 0.7755 & 0.7978 & $+0.0223$ & 0.7747 & 0.7950 & $+0.0203$ \\
+shape & 0.5338 & 0.5455 & $+0.0118$ & 0.5367 & 0.5575 & $+0.0207$ \\
+texture & 0.7051 & 0.7233 & $+0.0182$ & 0.7166 & 0.7260 & $+0.0094$ \\
+2D-spatial & 0.1971 & 0.2279 & $+0.0308$ & 0.2112 & 0.2284 & $+0.0172$ \\
+3D-spatial & 0.2999 & 0.3224 & $+0.0224$ & 0.3116 & 0.3252 & $+0.0136$ \\
+numeracy & 0.5483 & 0.5726 & $+0.0242$ & 0.5498 & 0.5619 & $+0.0122$ \\
+non-spatial & 0.3141 & 0.3142 & $+0.0002$ & 0.3137 & 0.3139 & $+0.0002$ \\
+complex & 0.3606 & 0.3707 & $+0.0101$ & 0.3607 & 0.3717 & $+0.0111$ \\
+\midrule
+mean & 0.4668 & 0.4843 & $+0.0175$ & 0.4719 & 0.4850 & $+0.0131$ \\
+\bottomrule
+\end{tabular}}
+\end{table}
+
+\begin{figure}[htbp]
+\centering
+\begin{minipage}[t]{0.56\textwidth}
+\centering
+\includegraphics[width=\textwidth]{figs/per_category_gap.pdf}
+\caption{Per-category CompBench gain of DINOv2 patch selection over random selection at 118k (three-seed means of the averaged students) under both protocols. The gain is spread over the attribute-binding, spatial and counting categories and is zero on non-spatial, whose CLIPScore evaluator does not separate any two students in this work.}
+\label{fig:percat}
+\end{minipage}\hfill
+\begin{minipage}[t]{0.42\textwidth}
+\centering
+\includegraphics[width=\textwidth]{figs/checkpoint_curve.pdf}
+\caption{CompBench of every saved checkpoint of the seed-0 118k runs; the star marks the weight average of the last five checkpoints of each arm (Section~\ref{sec:averaging}).}
+\label{fig:curve}
+\end{minipage}
+\end{figure}
+
+\subsection{Fidelity, three seeds}
+Table~\ref{tab:fid118k} gives fidelity per seed. The 0.05 to 0.06 CMMD advantage of the scored student holds on every seed, far outside the $\pm0.01$ bootstrap interval, and so do precision and recall. FID is within its split-half spread.
+
+\begin{table}[ht]
+\centering
+\caption{Fidelity at 118k, weight-averaged students, 5,000 COCO \texttt{val2017} captions, 4 steps, $w=1$, per training seed (s0 / s1 / s2).}
+\label{tab:fid118k}
+\resizebox{\textwidth}{!}{%
+\begin{tabular}{l c c c c}
+\toprule
+Arm & FID $\downarrow$ & CMMD $\downarrow$ & Precision $\uparrow$ & Recall $\uparrow$ \\
+\midrule
+random (baseline) & 31.08 / 30.97 / 31.44 & 0.84 / 0.84 / 0.83 & 0.485 / 0.489 / 0.503 & 0.059 / 0.066 / 0.062 \\
+DINOv2 patches & 30.98 / 30.83 / 31.47 & \textbf{0.78 / 0.79 / 0.78} & \textbf{0.522 / 0.511 / 0.522} & \textbf{0.071 / 0.068 / 0.063} \\
+VQAScore (seed 0) & 30.45 & 0.79 & 0.510 & 0.061 \\
+\midrule
+Teacher, 28 steps, $w=7$ & 29.21 & 0.64 & 0.549 & 0.156 \\
+\bottomrule
+\end{tabular}}
+\end{table}
+
+\subsection{Why averaging is needed}
+\label{sec:averaging}
+Table~\ref{tab:curve} and Figure~\ref{fig:curve} evaluate every saved checkpoint of the three seed-0 runs. Consecutive checkpoints of one run differ by up to 0.035 CompBench, which is larger than the effect. The cause is the fixed-size normalised step (Section~\ref{sec:distill}) with no averaging: the weights move on a plateau and each checkpoint samples a different point of it. Paired across the eight checkpoints, the patch arm is ahead of random on CompBench by $+0.014$ on average (7 of 8 checkpoints, $p=0.02$) and the VQAScore arm by $+0.010$ (6 of 8, $p=0.05$). Averaging the last five checkpoints raised every arm and moved the scored arms most. Over the three seeds, the raw final checkpoints give a patch-minus-random gap of only $+0.007$ ($+0.001$, $+0.003$, $+0.017$; $p=0.003$) against $+0.0175$ for the averaged weights, so averaging is not optional at this scale, and it is applied identically to every arm.
+
+\begin{table}[ht]
+\centering
+\caption{CompBench of every saved checkpoint of the seed-0 118k runs. The last row is the weight average of the last five checkpoints.}
 \label{tab:curve}
 \resizebox{\textwidth}{!}{%
 \begin{tabular}{r r c c c c c}
@@ -457,8 +539,116 @@ average of last 5 & & 0.4642 & 0.4865 & 0.4827 & $+0.0222$ & $+0.0185$ \\
 \end{tabular}}
 \end{table}
 
-The averaging also improved fidelity for every arm: CMMD went from 0.87 to 0.84 for random, 0.86 to 0.78 for the patch arm and 0.87 to 0.79 for the VQAScore arm.
 
+The averaging also improved fidelity for every arm at seed 0: CMMD went from 0.87 to 0.84 for random, 0.86 to 0.78 for the patch arm and 0.87 to 0.79 for the VQAScore arm.
+
+\subsection{Optimizer batch size}
+\label{sec:batch}
+Every update above processes four captions, one per GPU. To test whether the oscillation or the gap depends on that, both arms were retrained at seed 0 with gradient accumulation over four captions per GPU: 16 captions per update, 14,244 updates for the same two passes over the data, checkpoints every 1,250 updates so that the last-five average spans the same data window. Nothing else changed. Table~\ref{tab:batch} gives the result. The selection gap is unchanged ($+0.0221$ against $+0.0223$ for this seed at batch 4). Batch 16 lifts both arms by the same $+0.005$, which is not significant at one seed. It removes the oscillation of the random arm (raw final and average within 0.001) but not of the scored arm (0.012 apart), so averaging remains necessary, and batch 4 with averaging remains the reported configuration. This row is a robustness check.
+
+\begin{table}[ht]
+\centering
+\caption{Optimizer batch size at 118k, seed 0. Batch 16 uses gradient accumulation over four captions per GPU at the same data budget. CompBench / GenEval2$\times100$.}
+\label{tab:batch}
+\resizebox{\textwidth}{!}{%
+\begin{tabular}{l c c c c}
+\toprule
+Batch (updates) & random, raw final & random, averaged & DINOv2 patches, raw final & DINOv2 patches, averaged \\
+\midrule
+4 (56,974) & 0.4573 / 19.51 & 0.4642 / 20.61 & 0.4587 / 20.18 & 0.4865 / 22.05 \\
+16 (14,244) & 0.4684 / 20.28 & 0.4695 / 21.22 & 0.4796 / 20.90 & \textbf{0.4916 / 22.68} \\
+\midrule
+gap at batch 16, averaged & \multicolumn{4}{c}{$+0.0221$ CompBench ($p=4\times10^{-10}$), $+1.45$ GenEval2 ($p=0.10$)} \\
+\bottomrule
+\end{tabular}}
+\end{table}
+
+\subsection{Number of candidates}
+\label{sec:n8}
+The cache was extended from four to eight candidates per caption with the same seed convention (candidate $j$ from seed $1000\cdot\texttt{idx}+j$, $j=4,\dots,7$), keeping the random arm's stored draw, so the $N=4$ arms remain the exact control. Offline, best-of-eight raises the VQAScore oracle on this pool from 0.9335 to 0.9487 (headroom over the random pick $+0.094\to+0.109$, 16\% more), and the DINOv2-selected candidate from 0.8796 to 0.8862, the same 43\% of the respective headroom. Trained with argmax over eight candidates, three seeds, the averaged students score 0.4862 / 0.4859 / 0.4838 CompBench (mean 0.4853) and 21.68 / 21.44 / 21.50 GenEval2 (21.54): $+0.0010$ ($p=0.64$) and $-0.04$ against the $N=4$ arm, a null. Both arms are about $+0.018$ over random. Four candidates saturate this scorer on this teacher; the extra offline headroom of eight does not convert into a trained gain.
+
+\clearpage
+\section{Selection rule: argmax, Boltzmann weighting and sampling}
+\label{sec:selrule}
+
+Argmax selection is one point on a family of rules. The natural alternative weights the candidates by a Boltzmann distribution over the raw scores,
+\begin{equation}
+\pi_j=\frac{\exp(S_j/T)}{\sum_{l=1}^{4}\exp(S_l/T)},
+\end{equation}
+which recovers argmax as $T\to0$ and uniform weighting as $T\to\infty$. Two estimators of the weighted objective $\sum_j\pi_j\mathcal{L}_j$ were trained, and they differ in cost. \emph{Exact} weighting rolls out all four candidates and back-propagates each candidate's loss with weight $\pi_j$: four teacher rollouts and four student passes per caption, 2.3 times the wall-clock of the single-candidate trainer, at the same peak memory because candidates are back-propagated one at a time. \emph{Sampled} weighting draws one candidate from $\pi$ on every visit of the caption and trains on it alone, at single-candidate cost. The sampled estimator has the same expected gradient but a different target on each visit. Two controls complete the design: the random baseline, which draws once per caption and keeps that draw, and a \emph{uniform-visit} arm that draws uniformly on every visit, which isolates target persistence from label quality.
+
+\subsection{Selection entropy and effective sample size}
+The temperature is calibrated on the scores themselves. Figure~\ref{fig:entropy} and Table~\ref{tab:scorestats} summarise the DINOv2 patch score over the four candidates of a caption. Within a caption the scores have a standard deviation of 0.070 (range 0.18, margin between the best and the second-best candidate 0.05); between captions the mean score varies twice as much (0.14), which is why scores are only ever compared within a caption. The selection distribution of a caption is characterised by its normalised entropy $H(\pi)/\log 4$ and its effective sample size $\mathrm{ESS}=\exp H(\pi)$. At $T=0.04$ the median ESS is 2.5 (mean entropy 0.62, mean weight of the argmax candidate 0.63); at $T=0.08$ it is 3.3 (entropy 0.82). The 3k and 118k pools have the same statistics, so a temperature calibrated on one transfers to the other. Stronger teachers compress the candidates: on the 16-step $w=4.5$ and 28-step caches the within-caption spread almost halves (0.041 and 0.038) and the entropy at a fixed temperature rises (0.75 and 0.76 at $T=0.04$). This is the offline face of the vanishing selection gain of Section~\ref{sec:k28}.
+
+\begin{table}[ht]
+\centering
+\caption{DINOv2 patch score statistics per candidate cache ($N=4$): within-caption standard deviation, mean range, mean margin between the two best candidates, and the mean normalised entropy and median effective sample size of the Boltzmann weights at the two temperatures used in training.}
+\label{tab:scorestats}
+\resizebox{\textwidth}{!}{%
+\begin{tabular}{l r c c c cc cc}
+\toprule
+ & & & & & \multicolumn{2}{c}{$T=0.04$} & \multicolumn{2}{c}{$T=0.08$} \\
+Cache (teacher) & captions & within std & range & top-2 margin & entropy & ESS & entropy & ESS \\
+\midrule
+3k, 8 steps, $w=7$ & 3,000 & 0.069 & 0.175 & 0.049 & 0.63 & 2.54 & 0.82 & 3.33 \\
+118k, 8 steps, $w=7$ & 113,948 & 0.070 & 0.179 & 0.051 & 0.62 & 2.52 & 0.81 & 3.32 \\
+3k, 16 steps, $w=4.5$ & 3,000 & 0.041 & 0.105 & 0.034 & 0.75 & 3.01 & 0.91 & 3.65 \\
+3k, 28 steps, $w=7$ & 3,000 & 0.038 & 0.099 & 0.033 & 0.76 & 3.09 & 0.91 & 3.68 \\
+\bottomrule
+\end{tabular}}
+\end{table}
+
+\begin{figure}[ht]
+\centering
+\includegraphics[width=\textwidth]{figs/score_entropy.pdf}
+\caption{Left: distribution over captions of the normalised selection entropy at three temperatures (118k pool). Middle: within-caption spread of the DINOv2 patch score for the four caches; stronger teachers leave less to select on. Right: median effective sample size of the Boltzmann weights as a function of temperature; the two temperatures used in training are marked.}
+\label{fig:entropy}
+\end{figure}
+
+\subsection{Result}
+All eight arms of Table~\ref{tab:selrule} were trained on the 3k pool with the 3k configuration, three seeds each, from one frozen copy of the trainer, so every contrast in the table is a one-factor change. The random and argmax arms were retrained alongside the new ones. Their absolute level is 0.008 below the earlier runs of Table~\ref{tab:main3k} (a different launch, three seeds each, within the seed spread of 0.011), and the argmax gain replicates at $+0.0203$; contrasts should be read within this table.
+
+\begin{table}[ht]
+\centering
+\caption{Selection rule, 3k pool, three seeds. CompBench and GenEval2$\times100$ seed means; paired deltas against the random baseline and against argmax. \emph{exact}: every candidate's loss weighted by $\pi_j$. \emph{sampled}: one draw from $\pi$ per visit. ESS is the median effective sample size of the weights.}
+\label{tab:selrule}
+\resizebox{\textwidth}{!}{%
+\begin{tabular}{l l c c c c c c}
+\toprule
+Rule & Estimator & ESS & CompBench & $\Delta$ vs random ($p$) & $\Delta$ vs argmax ($p$) & GenEval2 & $\Delta$ vs random ($p$) \\
+\midrule
+random (fixed draw) & -- & 1 & 0.4499 & -- & $-0.0203$ ($2\times10^{-17}$) & 21.12 & -- \\
+argmax & -- & 1 & \textbf{0.4702} & $+0.0203$ ($2\times10^{-17}$) & -- & 22.46 & $+1.35$ (0.014) \\
+\midrule
+Boltzmann $T=0.04$ & exact & 2.5 & \textbf{0.4703} & $+0.0204$ ($4\times10^{-17}$) & $+0.0000$ (0.98) & \textbf{22.65} & $+1.53$ (0.011) \\
+Boltzmann $T=0.08$ & exact & 3.3 & 0.4689 & $+0.0190$ ($3\times10^{-15}$) & $-0.0013$ (0.56) & 22.17 & $+1.06$ (0.07) \\
+uniform ($T\to\infty$) & exact & 4 & 0.4557 & $+0.0058$ (0.012) & $-0.0145$ ($6\times10^{-10}$) & 21.28 & $+0.16$ (0.77) \\
+\midrule
+Boltzmann $T=0.04$ & sampled & 2.5 & 0.4562 & $+0.0063$ (0.009) & $-0.0140$ ($3\times10^{-9}$) & 21.18 & $+0.07$ (0.90) \\
+Boltzmann $T=0.08$ & sampled & 3.3 & 0.4517 & $+0.0019$ (0.44) & $-0.0185$ ($2\times10^{-13}$) & 22.37 & $+1.26$ (0.03) \\
+uniform-visit & sampled & 4 & 0.4422 & $-0.0077$ (0.002) & $-0.0280$ ($10^{-27}$) & 20.59 & $-0.52$ (0.35) \\
+\bottomrule
+\end{tabular}}
+\end{table}
+
+\begin{figure}[ht]
+\centering
+\includegraphics[width=0.92\textwidth]{figs/selection_rule.pdf}
+\caption{The two estimators of Boltzmann-weighted selection as a function of the effective sample size of the weights (three seeds, bars are seed standard deviations, grey band is the random baseline). Exact weighting is flat from argmax to $\mathrm{ESS}=3.3$ and drops only at uniform weighting; sampling one candidate per visit falls monotonically from argmax.}
+\label{fig:selrule}
+\end{figure}
+
+Four conclusions follow.
+\begin{itemize}
+\item \textbf{Exact Boltzmann weighting ties argmax.} At $T=0.04$ and $T=0.08$ the exactly weighted objective matches argmax within 0.001 on CompBench and within the seed spread on GenEval2 ($p=0.98$ and $0.56$). There is no temperature at which soft selection beats hard selection, and the soft arm costs 2.3 times the compute. Argmax is the recipe.
+\item \textbf{The sampled estimator loses through target churn, not through the softer tilt.} At the same weights, sampling one candidate per visit is $0.0141$ below exact weighting ($p=3\times10^{-9}$), which is the whole of its deficit to argmax ($0.0140$). The uniform-visit control shows the mechanism directly: redrawing the target on every visit is $0.008$ \emph{worse} than a fixed random draw ($p=0.002$). A consistency target that changes between visits of a caption costs more than a worse but stable target. The monotone decline of the sampled arms with temperature is a property of the estimator, not of soft selection.
+\item \textbf{The gain is weighting toward the best candidate, not exposure to more trajectories.} Uniform exact weighting trains on all four candidates of every caption, at four times the rollout cost, with a fixed target set and no selection. It is worth at most $+0.006$ of the $+0.020$; the remaining $+0.014$ ($p=6\times10^{-10}$ against argmax) comes from the weights.
+\item \textbf{Seed spread.} The exact-weighted arms have a seed standard deviation of 0.002 CompBench against 0.011 for the single-candidate arms: averaging the loss over four trajectories per caption also stabilises training, in line with the batch-size result of Section~\ref{sec:batch}.
+\end{itemize}
+
+A decode-free variant that scores in latent space was not pursued. Decoding four candidates costs 61 ms per caption (Section~\ref{sec:cost}), and the scorer needs the decoded image.
+
+\clearpage
 \section{Ablations}
 All ablations use the 3k pool, three seeds and the 3k configuration unless stated.
 
@@ -485,23 +675,53 @@ A progressive-distillation-style objective places the student on state $z_k$ and
 
 \subsection{Teacher quality}
 \label{sec:k28}
-With a 28-step teacher, candidates are generated and trained on the 28-step grid (supervised states 10, 14, 18, 22, 26, $\Delta\in\{3,\dots,10\}$). The stronger teacher halves the candidate variance a scorer can act on: the oracle-minus-random VQAScore headroom falls from 0.0905 to 0.0415 on the same captions and seeds. The trained selection gain disappears (Table~\ref{tab:k28}). A stronger teacher on its own is worth about as much as scored selection on the 8-step teacher, and the two do not add.
+Two stronger teachers were tested with the same captions and seeds: 28 steps at $w=7$ (candidates and training on the 28-step grid, supervised states 10, 14, 18, 22, 26, $\Delta\in\{3,\dots,10\}$), and 16 steps at the model-card guidance $w=4.5$ (the 4-step inference grid nests in the 16-step grid; supervised states 6, 8, 10, 12, 14, $\Delta\in\{2,\dots,6\}$). Both compress the candidate pool a scorer can act on (Table~\ref{tab:scorestats}): the oracle-minus-random VQAScore headroom falls from 0.0905 to 0.0415 (28 steps) and 0.0459 (16 steps), and the fraction of it the DINOv2 patch scorer recovers falls from 43.6\% to 11.0\% at 16 steps (top-1 agreement with the oracle 0.285, chance 0.25). The trained selection gain disappears (Table~\ref{tab:k28}). A stronger teacher on its own is worth about as much on CompBench as scored selection on the 8-step teacher, and the two do not add. Guidance matters separately from step count: 16 steps at $w=4.5$ lifts GenEval2 by 1.3 but CompBench by only 0.004 over the 8-step $w=7$ teacher, while 28 steps at $w=7$ lifts CompBench by 0.021.
 
 \begin{table}[ht]
 \centering
-\caption{Teacher quality. CompBench / GenEval2, seed means. The last column is the paired selection gain within the same teacher.}
+\caption{Teacher quality. CompBench / GenEval2, seed means over three seeds, and the paired selection gain within the same teacher.}
 \label{tab:k28}
-\begin{tabular}{l c c c}
+\resizebox{\textwidth}{!}{%
+\begin{tabular}{l c c c c}
 \toprule
-Teacher & random & DINOv2 patches & Selection gain \\
+Teacher & DINO headroom recovered & random & DINOv2 patches & Selection gain \\
 \midrule
-8 steps & 0.4584 / 20.73 & 0.4725 / 22.89 & $+0.0140$ / $+2.17$ \\
-28 steps & 0.4797 / 23.06 & 0.4801 / 22.25 & $+0.0004$ ($p=0.87$) / $-0.81$ ($p=0.18$) \\
+8 steps, $w=7$ & 43.6\% & 0.4584 / 20.73 & 0.4725 / 22.89 & $+0.0140$ / $+2.17$ \\
+16 steps, $w=4.5$ & 11.0\% & 0.4624 / 22.02 & 0.4664 / 22.16 & $+0.0040$ ($p=0.07$) / $+0.14$ ($p=0.81$) \\
+28 steps, $w=7$ & -- & 0.4797 / 23.06 & 0.4801 / 22.25 & $+0.0004$ ($p=0.87$) / $-0.81$ ($p=0.18$) \\
 \bottomrule
-\end{tabular}
+\end{tabular}}
 \end{table}
 
 Per teacher forward pass this is not a cost win for selection either: four 8-step candidates cost 32 passes per caption, one 28-step sample costs 28.
+
+\subsection{Regression onto the reference photograph}
+The reference photograph is the one sample we have from the distribution every scorer points at, so it was tested as a second regression target. On each update the photograph's latent is noised along its own straight path to two random supervised states, and the student's clean-latent estimate there is regressed onto the photograph latent with the same pseudo-Huber loss, added with weight $\lambda=0.2$. On the 16-step teacher, three seeds, this term hurts both arms on both metrics: random $0.4624\to0.4281$ CompBench ($-0.034$, $p=10^{-43}$, worst on UniDet at $-0.052$) and $22.02\to20.67$ GenEval2; DINOv2 patches $0.4664\to0.4407$ ($-0.022$) and $22.16\to20.32$. A single photograph per caption is a far noisier target than the teacher's trajectory, and it pulls the student off the trajectory it must reproduce at inference. The photograph is used for scoring only.
+
+\subsection{Evolving teacher}
+\label{sec:ema}
+The frozen teacher never moves toward the high-score region; selection only filters what it produces. A self-distillation variant was therefore tested in which the teacher is an exponential moving average of the student. On every update the EMA teacher rolls out four fresh-seed candidates at $w=1$, the DINOv2 patch scorer ranks them against the reference photograph on the fly, and the winner's EMA trajectory provides the targets. Runs start from the 118k averaged patch student (0.4865 / 22.05), use the 3k pool, 6,000 updates and one seed, and are compared with the same student continued against the frozen teacher (Table~\ref{tab:ema}). Both the student and its EMA copy are evaluated.
+
+\begin{table}[ht]
+\centering
+\caption{Evolving (EMA) teacher, seed 0, 6,000 updates from the 118k patch student. CompBench / GenEval2 of the raw student and of its EMA weights. $\bar S$ is the mean DINOv2 patch score of the teacher's fresh candidates at the end of training (0.60 at the start), $H$ their normalised selection entropy at $T=0.02$ (0.75 at the start).}
+\label{tab:ema}
+\resizebox{\textwidth}{!}{%
+\begin{tabular}{l l c c c c}
+\toprule
+Teacher & Selection & raw student & EMA weights & $\bar S$ at end & $H$ at end \\
+\midrule
+frozen (control) & DINOv2 patches, cached & 0.4779 / 19.96 & 0.4847 / 20.68 & -- & -- \\
+EMA, decay 0.999 & DINOv2 patches, online & 0.1655 / 0.88 & 0.1789 / 2.09 & 0.03 & 0.93 \\
+EMA, decay 0.999 & random & 0.1546 / 1.00 & 0.1667 / 1.52 & 0.03 & 0.93 \\
+EMA, decay 0.999, frozen anchor 50\% & DINOv2 patches, online & 0.2095 / 6.28 & 0.2250 / 8.96 & 0.05 & -- \\
+EMA, decay 0.9999 & DINOv2 patches, online & 0.4385 / 18.04 & \textbf{0.4936 / 22.33} & 0.62 & 0.75 \\
+EMA, decay 0.9999 & random & 0.4296 / 18.51 & 0.4917 / 22.03 & 0.61 & -- \\
+\bottomrule
+\end{tabular}}
+\end{table}
+
+A fast-tracking teacher (decay 0.999) collapses with or without selection and with a 50\% frozen anchor: the candidates' score falls from 0.60 to 0.03 and their selection entropy rises from 0.75 to 0.93, so the scorer can no longer tell them apart, while the training loss falls and the student's samples turn into texture noise. The entropy of the online scores is an early warning of this collapse, visible thousands of updates before any image metric is computed. A slow teacher (decay 0.9999) is inert over 6,000 updates: the candidate score stays at 0.60 to 0.62, and selection within the slow loop is worth $+0.002$ CompBench and $+0.3$ GenEval2 against random ($p>0.5$). Its EMA weights end 0.009 above the frozen-teacher control ($p=0.01$), which is the effect of weight averaging, not of the moving teacher. Continuing the 118k student on the 3k pool with the frozen teacher lowers it (0.4865 to 0.4847), so the small pool is not a source of further gain either. The frozen teacher is kept.
 
 \subsection{Reference photograph aspect handling}
 Rescoring the 3k pool with the reference centre-cropped then resized, or resized then cropped, changes the top-1 pick on 12.2\% and 11.8\% of captions and lowers the recovered headroom from 43.6\% to 41.0\% and 40.9\%. Cropping loses captioned objects at the edges, and mean-pooled patches tolerate the distortion of squashing. Squashing is therefore a design choice, not an oversight.
@@ -509,13 +729,34 @@ Rescoring the 3k pool with the reference centre-cropped then resized, or resized
 \subsection{Patch mean against CLS token}
 The two DINOv2 readouts are the same model, the same decode, the same reference and the same normalisation; only the token summary differs. Offline, the patch mean recovers 43.6\% of headroom against 39.9\% for CLS. Trained, the patch arm is ahead by $+0.0104$ CompBench on identical prompts, positive on all three seeds, while the CLS arm's gain over random has an interval that includes zero. The CLS token is a global summary of what kind of image this is; the patch mean keeps object and layout structure, which is what compositional prompts test.
 
+\clearpage
+\section{Qualitative examples}
+\label{sec:qual}
+Figures~\ref{fig:qual_cb} and~\ref{fig:qual_ge} show prompts on which the scored student differs most from the random-selection student, chosen by the rule stated on each figure: the eight largest per-prompt margins, at most two per CompBench category, seed 0 of each arm, identical initial noise across all columns. They are cherry-picked by construction and show what the gain looks like where it is large, not typical behaviour. On CompBench the scored student wins 366 prompts, loses 229 and ties 1,803 within 0.1; on GenEval2 it wins 169, loses 140 and ties 491 of 800, and both students score below 0.05 on 27\% of the prompts. The columns also show the base model at 4 steps with and without guidance, which fails, and the 28-step teacher, which the students approach. The recurring pattern in the wins is an object that the random-selection student drops or merges (the second object of a two-object prompt, the count of a numeracy prompt) and that the scored student renders, together with cleaner colour and material binding.
+
+\begin{figure}[p]
+\centering
+\includegraphics[width=\textwidth]{figs/qual_compbench.jpg}
+\caption{T2I-CompBench prompts with the largest scored-over-random margins at 118k. Columns: base model at 4 steps without and with guidance, random-selection student, DINOv2 patch student (framed), base model at 28 steps without and with guidance. Per-prompt scores under each student.}
+\label{fig:qual_cb}
+\end{figure}
+
+\begin{figure}[p]
+\centering
+\includegraphics[width=\textwidth]{figs/qual_geneval2.jpg}
+\caption{GenEval2 prompts with the largest scored-over-random margins at 118k, same layout as Figure~\ref{fig:qual_cb}.}
+\label{fig:qual_ge}
+\end{figure}
+
+\clearpage
 \section{Cost}
-Per training caption the candidate pool costs 64 teacher forward passes (4 candidates, 8 steps, two guidance branches), four VAE decodes and five DINOv2 forward passes. Measured on one H100 at $512\times512$, generation takes 789 ms per caption, the four decodes 61 ms, DINOv2 scoring 32 ms, CLIP-I 48 ms and VQAScore 280 ms. End to end, DINOv2 selection costs 0.95 s per caption and VQAScore selection 1.19 s; candidate generation dominates and no scorer avoids it. Training costs 16 teacher passes and five student forward-backward passes per caption. A 3k run takes 1.6 hours on one H200; the 118k run takes 12.5 hours on four H200s. The DINOv2 scorer needs no text model and no large VLM at selection time, which is its practical advantage over VQAScore, ImageReward and PickScore.
+\label{sec:cost}
+Per training caption the candidate pool costs 64 teacher forward passes (4 candidates, 8 steps, two guidance branches), four VAE decodes and five DINOv2 forward passes. Measured on one H100 at $512\times512$, generation takes 789 ms per caption, the four decodes 61 ms, DINOv2 scoring 32 ms, CLIP-I 48 ms and VQAScore 280 ms. End to end, DINOv2 selection costs 0.95 s per caption and VQAScore selection 1.19 s; candidate generation dominates and no scorer avoids it. Training costs 16 teacher passes and five student forward-backward passes per caption. A 3k run takes 1.6 hours on one H200; the 118k run takes 12.5 hours on four H200s. The DINOv2 scorer needs no text model and no large VLM at selection time, which is its practical advantage over VQAScore, ImageReward and PickScore. The exact Boltzmann arm of Section~\ref{sec:selrule}, which rolls out and trains on all four candidates, takes 2.6 s per update against 1.15 s for the single-candidate trainer (3.5 h against 1.2 h for a 3k run) for no gain over argmax.
 
 \section{Design choices}
 \begin{itemize}
 \item \textbf{Fixed teacher targets, no EMA.} Every target is a function of the frozen teacher's trajectory. There is no bootstrapping and no target drift. Consistency models use an EMA or stop-gradient student copy; we do not.
-\item \textbf{Hard selection, stored once.} One candidate per caption, chosen offline. The trainer rolls out one trajectory per caption for every arm, so compute is identical across arms.
+\item \textbf{Hard selection, stored once.} One candidate per caption, chosen offline. The trainer rolls out one trajectory per caption for every arm, so compute is identical across arms. Exact Boltzmann weighting of all four candidates ties argmax at 2.3 times the cost, and drawing one candidate per visit from soft weights loses through target churn (Section~\ref{sec:selrule}). Four candidates are enough; eight add nothing (Section~\ref{sec:n8}).
 \item \textbf{Guidance internalised.} The student trains with one conditional pass against guided teacher trajectories and is sampled at $w=1$. This halves the student's inference cost relative to a guided sampler.
 \item \textbf{Re-roll instead of store.} Trajectories are re-rolled from integer seeds. The cache holds only seeds, scores and indices.
 \item \textbf{Reference photograph squashed to a square.} Cropping discards captioned content; see the aspect ablation.
@@ -529,14 +770,15 @@ Per training caption the candidate pool costs 64 teacher forward passes (4 candi
 \item \textbf{The scorer needs a reference photograph.} DINOv2 selection is only possible where each caption has a real image. It cannot be applied to synthetic prompt sets without one.
 \item \textbf{Grids do not nest.} The 4-step inference grid shares only its endpoints with the 8-step training grid, so the student is deployed at $\sigma=0.858$ and $0.602$, which it never saw as training inputs, and is never trained at $\sigma=0.009$ (the last step is scaled by 0.009 and is immaterial). Grids with $K\in\{7,10,13,16,\dots\}$ nest exactly; this was not used here.
 \item \textbf{Duplicate student inputs.} With five independent $\Delta_k$ draws, 81\% of updates contain at least one repeated input state and the expected number of distinct inputs is 3.9 of 5. This does not change the objective, only its variance, and wastes about 22\% of student passes.
-\item \textbf{Single seed at 118k.} The 118k results are one training seed per arm. The three-seed statistics are on the 3k pool.
-\item \textbf{Selection gain depends on candidate variance.} With a 28-step teacher the gain vanishes. Scored selection is a fixed-teacher gain, not a substitute for teacher quality.
+\item \textbf{Seeds.} Every headline number is three training seeds. The single-seed contrasts (the VQAScore arm at 118k, the batch-size row, the evolving-teacher runs) are marked as such and resolve about 0.01 CompBench.
+\item \textbf{Checkpoint averaging is part of the method at scale.} Without it the 118k gap is $+0.007$ instead of $+0.0175$. Averaging is applied identically to every arm, but the reported 118k numbers are for averaged weights.
+\item \textbf{Selection gain depends on candidate variance.} With a 28-step or a 16-step $w=4.5$ teacher the within-caption score spread halves and the gain vanishes. Scored selection is a fixed-teacher gain, not a substitute for teacher quality.
 \item \textbf{VQAScore is circular.} Its gains share a model family with the BLIP-VQA categories of CompBench and the VLM judge of GenEval2. It is included as a reference, not as the proposed method.
 \item \textbf{Metric properties.} GenEval2's geometric mean rewards partial credit, and CompBench 2D-spatial has dead prompts (Section~\ref{sec:metricprops}). Both are constant across arms and do not reorder students, but they limit what absolute numbers mean.
 \end{itemize}
 
 \section{Reproducibility}
-The release code is the \texttt{scored-consistency-distillation} branch of the project repository. It contains the pool builder, the candidate scorer, the trainer with the \texttt{random} and \texttt{dino\_patch} selectors, the evaluation scripts (CompBench, GenEval2, COCO VQAScore, FID, reference CMMD, precision and recall) and the LSF launch scripts. The trimmed trainer was verified to be bit-identical to the experimental trainer on all 909 parameter tensors after six steps under deterministic kernels. Every evaluation writes a pinned record with evaluator commits, package versions, pool hashes and the checkpoint hash, and fails hard on missing images. Training runs log per-state losses, selection statistics, throughput, sample grids and a source snapshot to Weights \& Biases.
+The release code is the \texttt{scored-consistency-distillation} branch of the project repository. It contains the pool builder, the candidate scorer, the trainer with the \texttt{random}, \texttt{dino\_patch}, \texttt{boltzmann}, \texttt{boltzmann\_sample} and \texttt{uniform\_visit} selectors and gradient accumulation, the checkpoint averager, the evaluation scripts (CompBench with the one- and ten-image protocols, GenEval2, COCO VQAScore, FID, reference CMMD, precision and recall), the figure script and the LSF launch scripts. The release trainer was verified to be bit-identical to the experimental trainer that produced every number in this document, on all 909 parameter tensors after six optimizer updates under deterministic kernels, for every selector and for gradient accumulation, with an original-versus-original control at exactly zero. Every evaluation writes a pinned record with evaluator commits, package versions, pool hashes and the checkpoint hash, and fails hard on missing images. Training runs log per-state losses, selection statistics, throughput, sample grids and a source snapshot to Weights \& Biases.
 
 \begin{thebibliography}{9}
 \bibitem{sd3} P. Esser et al. Scaling rectified flow transformers for high-resolution image synthesis. ICML 2024.

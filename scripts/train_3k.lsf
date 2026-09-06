@@ -23,19 +23,31 @@
 set -euo pipefail
 source scripts/env.sh
 
-: "${SELECTOR:?set SELECTOR (random | dino_patch)}"
+#
+# The selection-rule ablation of the report (all on this configuration, three seeds each):
+#   SELECTOR=boltzmann TEMP=0.04|0.08|1e6      exact soft weighting (1e6 = uniform over all four)
+#   SELECTOR=boltzmann_sample TEMP=0.04|0.08   one draw per visit from the same weights
+#   SELECTOR=uniform_visit                     one uniform draw per visit
+# The boltzmann runs roll out and train on all four candidates (about 3.5 h instead of 1.2 h).
+set -euo pipefail
+source scripts/env.sh
+
+: "${SELECTOR:?set SELECTOR (random | dino_patch | boltzmann | boltzmann_sample | uniform_visit)}"
 SEED=${SEED:-0}
 CACHE=${CACHE:-cache/train_3k}
 STEPS=${STEPS:-6000}
 LR=${LR:-1e-5}
 WARMUP=${WARMUP:-300}
-RUN="${SELECTOR}_3k_s${SEED}"
+TEMP=${TEMP:-0.04}
+RUN="${SELECTOR}"
+case "$SELECTOR" in boltzmann*) RUN="${RUN}-T${TEMP}";; esac
+RUN="${RUN}_3k_s${SEED}"
 mkdir -p checkpoints logs
-echo "selector=$SELECTOR seed=$SEED captions=$(cat "$CACHE"/selection_rank*.jsonl | wc -l) gpus=1 steps=$STEPS lr=$LR warmup=$WARMUP"
+echo "selector=$SELECTOR seed=$SEED captions=$(cat "$CACHE"/selection_rank*.jsonl | wc -l) gpus=1 steps=$STEPS lr=$LR warmup=$WARMUP temp=$TEMP"
 
 torchrun --standalone --nproc-per-node=1 train/distill.py \
   --selector "$SELECTOR" --cache_dir "$CACHE" --output_dir "checkpoints/$RUN" \
-  --seed "$SEED" --num_steps "$STEPS" --num_warmup_steps "$WARMUP" --lr "$LR" \
+  --seed "$SEED" --num_steps "$STEPS" --num_warmup_steps "$WARMUP" --lr "$LR" --temp "$TEMP" \
   --K 8 --cfg 7.0 --window 0.4,0.9 --delta_min 1 --delta_max 3 --height 512 \
   --gradient_checkpointing --save_every 2000 --log_every 10 \
   --sample_every "${SAMPLE_EVERY:-0}" --sample_prompts "${SAMPLE_PROMPTS:-pools/sample_prompts.json}" \

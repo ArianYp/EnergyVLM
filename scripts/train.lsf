@@ -21,26 +21,39 @@
 #
 #   bsub -env "all,SELECTOR=random,SEED=0"     < scripts/train.lsf     # naive distillation
 #   bsub -env "all,SELECTOR=dino_patch,SEED=0" < scripts/train.lsf     # DINO-patch scored
+#
+# Optional factors, each changing one thing:
+#   ACCUM=4 SAVE_EVERY=1250   batch 16 at the same data budget (14,244 updates; average steps
+#                             10000:11250:12500:13750:final afterwards, colon-separated)
+#   SELECTOR=boltzmann TEMP=0.04   exact soft selection (all four candidates weighted; 2.3x the
+#                             compute); boltzmann_sample / uniform_visit are the sampled controls
 set -euo pipefail
 source scripts/env.sh
 
-: "${SELECTOR:?set SELECTOR (random | dino_patch)}"
+: "${SELECTOR:?set SELECTOR (random | dino_patch | boltzmann | boltzmann_sample | uniform_visit)}"
 SEED=${SEED:-0}
 CACHE=${CACHE:-cache/train}
 GPUS=${GPUS:-4}
 EPOCHS=${EPOCHS:-2}
 LR=${LR:-2e-5}
 WARMUP=${WARMUP:-1000}
+ACCUM=${ACCUM:-1}
+TEMP=${TEMP:-0.04}
+SAVE_EVERY=${SAVE_EVERY:-5000}
 NREC=$(cat "$CACHE"/selection_rank*.jsonl | wc -l)
-STEPS=${STEPS:-$(python3 -c "print(int(round($EPOCHS * $NREC / $GPUS)))")}
-RUN="${SELECTOR}_s${SEED}"
+STEPS=${STEPS:-$(python3 -c "print(int(round($EPOCHS * $NREC / ($GPUS * $ACCUM))))")}
+RUN="${SELECTOR}"
+case "$SELECTOR" in boltzmann*) RUN="${RUN}-T${TEMP}";; esac
+[ "$ACCUM" != "1" ] && RUN="${RUN}-acc${ACCUM}"
+RUN="${RUN}_s${SEED}"
 mkdir -p checkpoints logs
-echo "selector=$SELECTOR seed=$SEED captions=$NREC gpus=$GPUS epochs=$EPOCHS steps=$STEPS lr=$LR warmup=$WARMUP"
+echo "selector=$SELECTOR seed=$SEED captions=$NREC gpus=$GPUS accum=$ACCUM epochs=$EPOCHS steps=$STEPS lr=$LR warmup=$WARMUP temp=$TEMP"
 
 torchrun --standalone --nproc-per-node="$GPUS" train/distill.py \
   --selector "$SELECTOR" --cache_dir "$CACHE" --output_dir "checkpoints/$RUN" \
   --seed "$SEED" --num_steps "$STEPS" --num_warmup_steps "$WARMUP" --lr "$LR" \
+  --accum "$ACCUM" --temp "$TEMP" \
   --K 8 --cfg 7.0 --window 0.4,0.9 --delta_min 1 --delta_max 3 --height 512 \
-  --gradient_checkpointing --save_every 5000 --log_every 50 \
+  --gradient_checkpointing --save_every "$SAVE_EVERY" --log_every 50 \
   --sample_every "${SAMPLE_EVERY:-2000}" --sample_prompts "${SAMPLE_PROMPTS:-pools/sample_prompts.json}" \
   ${WANDB_PROJECT:+--wandb_project "$WANDB_PROJECT" --wandb_run_name "$RUN"}

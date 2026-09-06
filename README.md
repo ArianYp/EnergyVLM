@@ -13,6 +13,14 @@ trajectory only. Two arms, identical in every other respect:
 The scorer needs no text model. The caption enters only through the photograph it was written for,
 so training captions must come from an image-caption corpus (COCO here).
 
+Three more selectors exist for the selection-rule ablation of the report (`--temp` sets T):
+
+| selector | what it trains on | verdict |
+|---|---|---|
+| `boltzmann` | all four candidates, each loss weighted by softmax(S/T); 4 rollouts + 4 student passes per caption | ties `dino_patch` at T=0.04 and 0.08 for 2.3x the compute |
+| `boltzmann_sample` | one candidate drawn from softmax(S/T) on every visit | loses 0.014 to `dino_patch` through target churn |
+| `uniform_visit` | one uniform draw on every visit (vs `random`, which draws once per caption) | 0.008 below `random`: a changing target costs more than a worse one |
+
 ## Layout
 
 ```
@@ -20,7 +28,9 @@ common/      sampling.py (teacher rollout, decode)  distributed.py (torchrun set
 data/        build_pool.py       training captions paired with their photographs
              build_eval_pool.py  T2I-CompBench, GenEval2 and COCO-val prompt pools
              build_candidates.py the candidate cache: 4 trajectories per caption, scored
-train/       distill.py          the trainer (--selector random | dino_patch)
+train/       distill.py          the trainer (--selector random | dino_patch | boltzmann |
+                                 boltzmann_sample | uniform_visit; --accum for larger batches)
+             average_checkpoints.py  uniform average of the last checkpoints of a run
 eval/        generate.py         sample a model on a prompt pool (paired noise per prompt)
              compbench.py        T2I-CompBench with the official evaluators
              geneval2.py         GenEval2 with the official evaluator
@@ -124,23 +134,39 @@ older version, point `GENEVAL2_PYTHON` at a second interpreter that has it.
 ## Results
 
 Paired against the random-selection student on identical prompts. The 3k rows are three training
-seeds with 95% hierarchical bootstrap intervals over seeds and prompts; the 118k rows are one seed
-with weight-averaged checkpoints. Full tables, ablations and the evaluation protocol are in
-`docs/report.pdf` (source `docs/report.tex`).
+seeds with 95% hierarchical bootstrap intervals over seeds and prompts; the 118k rows are three
+training seeds with weight-averaged checkpoints and per-prompt paired tests pooled over seeds. Full
+tables, ablations, figures and the evaluation protocol are in `docs/report.pdf` (source
+`docs/report.tex`, figures from `docs/figs/make_figures.py`).
 
 | setting | selector | T2I-CompBench | GenEval2 (x100) | CMMD |
 |---|---|---|---|---|
 | 3k captions, 6k updates | random | 0.4584 | 20.73 | 0.963 |
 | 3k captions, 6k updates | dino_patch | +0.0140 [+0.0051, +0.0237] | +2.17 [+0.24, +4.08] | 0.893 |
-| 118k captions, 57k updates, averaged | random | 0.4642 | 20.61 | 0.84 |
-| 118k captions, 57k updates, averaged | dino_patch | +0.0222 (p 7e-10) | +1.44 (p 0.11) | 0.78 |
+| 118k captions, 57k updates, averaged, 3 seeds | random | 0.4668 | 20.29 | 0.84 |
+| 118k captions, 57k updates, averaged, 3 seeds | dino_patch | +0.0175 (p 1e-14) | +1.29 (p 0.02) | 0.78 |
+| 118k, official 10-images-per-prompt CompBench | random / dino_patch | 0.4719 / +0.0131 (p 2e-41) | | |
 | teacher, 28 steps, cfg 7 | | 0.5053 | 17.05 | 0.64 |
 
 The scorer reads no text. Selection costs nothing at inference and does not cost fidelity: the
-scored student has lower CMMD and higher precision and recall than the random-selection student in
-both settings. The gain depends on the candidate variance the teacher leaves: with a 28-step
-teacher the offline headroom halves and the trained gain vanishes, so this is a fixed-teacher gain,
-not a substitute for teacher quality.
+scored student has lower CMMD and higher precision and recall than the random-selection student on
+every seed in both settings. What the ablations established:
+
+- **Selection rule.** Exact Boltzmann weighting of all four candidates ties argmax at T=0.04 and
+  T=0.08 (+0.0204 / +0.0190 vs +0.0203 over random, 3k pool, three seeds) at 2.3x the compute;
+  uniform weighting of all four is worth only +0.006, so the gain is the weighting, not the extra
+  trajectories. Sampling one candidate per visit from the same weights loses 0.014 to the exact
+  objective, and a uniform redraw per visit is 0.008 *below* a fixed random draw: target churn,
+  not the softer tilt, is what soft selection pays for. Argmax is the recipe.
+- **Batch size.** Accumulating to 16 captions per update at the same data budget leaves the gap
+  unchanged (+0.0221 vs +0.0223, seed 0) and lifts both arms by +0.005.
+- **Candidates.** Eight candidates instead of four: +0.001 (null), although the offline headroom
+  grows by 16%.
+- **Teacher.** With a 28-step or a 16-step cfg-4.5 teacher the within-caption score spread halves
+  and the trained gain vanishes: this is a fixed-teacher gain, not a substitute for teacher quality.
+- **Not adopted.** Regressing onto the reference photograph (lambda 0.2) costs 0.02-0.03 CompBench;
+  an EMA-of-student teacher collapses at decay 0.999 (its online selection entropy rising to 0.93
+  is the early warning) and is inert at 0.9999.
 
 ## Logging
 

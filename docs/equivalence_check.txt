@@ -1,0 +1,32 @@
+# Release trainer vs experimental trainer, job 134116, 2026-09-06T16:12:13+01:00
+orig trainer sha ce9be820; release trainer sha e3382bfd; release commit 4f15cdd
+orig_dino_a rc=0 265s losses: 94.5 78.7 98.7 100 84.2 93.7 
+orig_dino_b rc=0 52s losses: 94.5 78.7 98.7 100 84.2 93.7 
+orig_random rc=0 48s losses: 94.5 92.5 96.7 73.3 84.6 82.8 
+orig_full rc=0 72s losses: 90.1 87 105 98.8 82.8 90.8 
+orig_cat rc=0 51s losses: 86.4 78.7 98.7 91.8 77.3 93.7 
+orig_uvisit rc=0 52s losses: 86.4 78.7 98.7 91.8 77.5 93.7 
+orig_accum rc=0 50s losses: 78.7 100 93.7 
+new_dino rc=0 52s losses: 94.5 78.7 98.7 100 84.2 93.7 
+new_random rc=0 47s losses: 94.5 92.5 96.7 73.3 84.6 82.8 
+new_full rc=0 72s losses: 90.1 87 105 98.8 82.8 90.8 
+new_cat rc=0 49s losses: 86.4 78.7 98.7 91.8 77.3 93.7 
+new_uvisit rc=0 47s losses: 86.4 78.7 98.7 91.8 77.5 93.7 
+new_accum rc=0 51s losses: 78.7 100 93.7 
+[selection] window=0.4,0.9 K=8 supervised_k=[3, 4, 5, 6, 7] caption->candidate sha256=dbd0d57b2630f5c1
+[selection] window=0.4,0.9 K=8 supervised_k=[3, 4, 5, 6, 7] caption->candidate sha256=fb616280436dc99a
+[selection] window=0.4,0.9 K=8 supervised_k=[3, 4, 5, 6, 7] caption->candidate sha256=dbd0d57b2630f5c1
+[selection] window=0.4,0.9 K=8 supervised_k=[3, 4, 5, 6, 7] caption->candidate sha256=fb616280436dc99a
+[selection] window=0.4,0.9 K=8 supervised_k=[3, 4, 5, 6, 7] caption->candidate sha256=35d2d955f6a591f6
+[selection] window=0.4,0.9 K=8 supervised_k=[3, 4, 5, 6, 7] caption->candidate sha256=6b3ca3bc8e9d5063
+control: orig vs orig (dino_patch)                  : 909/909 tensors identical, max|diff|=0.000e+00
+sanity: dino_patch vs random (must differ)          : 4/909 tensors identical, max|diff|=9.239e-07
+orig vs release: dino_patch                         : 909/909 tensors identical, max|diff|=0.000e+00
+orig vs release: random                             : 909/909 tensors identical, max|diff|=0.000e+00
+orig vs release: boltzmann (exact, T=0.04)          : 909/909 tensors identical, max|diff|=0.000e+00
+orig vs release: boltzmann_sample (T=0.04)          : 909/909 tensors identical, max|diff|=0.000e+00
+orig vs release: uniform_visit                      : 909/909 tensors identical, max|diff|=0.000e+00
+orig vs release: dino_patch + accum 2               : 909/909 tensors identical, max|diff|=0.000e+00
+EQUIV_S4B_RESULT PASS
+# Each pair must be bit-identical on all parameter tensors after 6 optimizer updates; the
+  echo "$(basename "$out") rc=$? $(( $(date +%s) - t0 ))s losses: $(tr '\r' '\n' < "$out.log" | grep -oE 'loss=[0-9.e+-]+' | sed 's/loss=//' | awk 'NR%2==1' | tr '\n' ' ')"
