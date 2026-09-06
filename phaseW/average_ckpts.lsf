@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+#BSUB -J sd-W-ckptavg
+#BSUB -G s10396
+#BSUB -q training-parallel
+#BSUB -gpu "num=1:mode=exclusive_process:gmem=10G"
+#BSUB -W 8:00
+#BSUB -n 4
+#BSUB -R "span[hosts=1]"
+#BSUB -R "select[mem>64000]"
+#BSUB -R "rusage[mem=64000]"
+#BSUB -M 64000
+#BSUB -cwd /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM
+#BSUB -o /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-W-ckptavg-%J.out
+#BSUB -e /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-W-ckptavg-%J.err
+# Uniform average of the last five checkpoints of one 118k run. Default members are the 5k-stride
+# runs' 40k, 45k, 50k, 55k, final; pass STEPS (colon-separated, because `bsub -env` splits on
+# commas, e.g. STEPS=10000:11250:12500:13750:final) for runs saved on another stride.
+set -euo pipefail
+export PATH="/software/cellgen/team361/ha11/envs/nichejepa/bin:$PATH"
+: "${RUN:?set RUN (checkpoint dir)}"
+STEPS=${STEPS:-40000,45000,50000,55000,final}
+STEPS=${STEPS//:/,}
+echo "[avg] run=$RUN steps=$STEPS"
+python3 phaseW/average_checkpoints.py --run "$RUN" --steps "$STEPS" --out "$RUN/checkpoint_avg_last5.pt"

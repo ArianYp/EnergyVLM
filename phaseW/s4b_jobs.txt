@@ -1,0 +1,3 @@
+CD_dinop_full-T0.04 0 132221 132222
+CD_dinop_full-T0.04 1 132223 132224
+CD_dinop_full-T0.04 2 132225 132226

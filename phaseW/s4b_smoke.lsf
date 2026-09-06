@@ -1,0 +1,64 @@
+#!/usr/bin/env bash
+#BSUB -J sd-W-s4b-smoke
+#BSUB -G s10396
+#BSUB -q training-parallel
+#BSUB -n 4
+#BSUB -W 1:30
+#BSUB -R "span[hosts=1]"
+#BSUB -R "select[mem>128000]"
+#BSUB -R "rusage[mem=128000]"
+#BSUB -M 128000
+#BSUB -gpu "num=1:mode=exclusive_process:gmem=78G"
+#BSUB -cwd /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM
+#BSUB -o /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-W-s4b-smoke-%J.out
+#BSUB -e /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-W-s4b-smoke-%J.err
+# S4b gate. Three 30-step runs, S4 config, seed 0, T = 0.04:
+#   A  old frozen S4 trainer,  CD_dinop_cat   (the reference the S4 table was produced with)
+#   B  new frozen S4b trainer, CD_dinop_cat   (must reproduce A step for step: the added code is dead here)
+#   C  new frozen S4b trainer, CD_dinop_full  (must run, finite losses, report s/step for the -W budget)
+# Per-step losses come from the tqdm postfix (--log_every 1) on each run's own stderr file.
+set -euo pipefail
+export PATH="/software/cellgen/team361/ha11/envs/nichejepa/bin:$PATH"
+export HF_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/huggingface
+export TORCH_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/torch
+export XDG_CACHE_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/xdg
+export TOKENIZERS_PARALLELISM=false
+export WANDB_MODE=disabled
+export PYTHONPATH="/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM:${PYTHONPATH:-}"
+source ~/.secrets/hf_token
+J=${LSB_JOBID:-manual}
+run() {  # name trainer variant
+  local name=$1 trainer=$2 variant=$3
+  local err="logs/s4b_smoke_${name}_${J}.err"
+  echo "[$(date --iso-8601=seconds)] run $name: $trainer $variant"
+  python3 "$trainer" --variant "$variant" --coupling fresh --distill_loss x0_huber \
+    --seed 0 --sel_seed 0 --selection_dir phaseN/coco_selection_dinopatch --alpha 1.0 --temp 0.04 \
+    --N 4 --K 8 --cfg 7.0 --student_cfg 0.0 --cfg_mode composed --num_steps 30 --num_warmup_steps 5 --lr 1e-5 \
+    --weight_decay 0.0 --grad_clip 1.0 --height 512 --sched_shift 3.0 --num_train_ts 1000.0 --delta_min 1 --delta_max 3 \
+    --scoring_window 0.4,0.9 --support_m 1 --assign_seed 982451653 --huber_c 0.0 --gradient_checkpointing \
+    --save_every 1000 --log_every 1 --sample_every 0 --no_wandb \
+    --output_dir "checkpoints/phaseW_smoke/s4b_${name}_${J}" 2> "$err"
+  echo "[$name] losses: $(tr '\r' '\n' < "$err" | grep -oE 'loss=[0-9.e+-]+' | sed 's/loss=//' | tr '\n' ' ')"
+  echo "[$name] last rate: $(tr '\r' '\n' < "$err" | grep -oE '[0-9.]+(s/it|it/s)' | tail -1)"
+  rm -rf "checkpoints/phaseW_smoke/s4b_${name}_${J}"
+}
+run A phaseW/train_pilot_frozen_s4.py  CD_dinop_cat
+run B phaseW/train_pilot_frozen_s4b.py CD_dinop_cat
+run C phaseW/train_pilot_frozen_s4b.py CD_dinop_full
+python3 - "$J" <<'EOF'
+import re, sys
+J = sys.argv[1]
+def losses(name):
+    t = open(f"logs/s4b_smoke_{name}_{J}.err").read().replace("\r", "\n")
+    return [float(x) for x in re.findall(r"loss=([0-9.e+-]+)", t)]
+a, b, c = losses("A"), losses("B"), losses("C")
+assert len(a) >= 25 and len(b) >= 25 and len(c) >= 25, (len(a), len(b), len(c))
+n = min(len(a), len(b))
+rel = max(abs(x - y) / max(abs(x), 1e-9) for x, y in zip(a[:n], b[:n]))
+print(f"[gate] A vs B: {n} logged steps, max relative loss difference {rel:.2e}")
+import math
+assert all(math.isfinite(x) for x in c), "Full-N produced a non-finite loss"
+print(f"[gate] C (Full-N) losses finite, mean {sum(c)/len(c):.4g} vs Cat-1 mean {sum(a)/len(a):.4g}")
+assert rel < 1e-2, "new trainer does not reproduce the S4 Cat-1 losses"
+print("S4B_SMOKE_OK")
+EOF

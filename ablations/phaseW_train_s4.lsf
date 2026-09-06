@@ -1,0 +1,94 @@
+#!/usr/bin/env bash
+#BSUB -J sd-W-s4
+#BSUB -G s10396
+#BSUB -q training-parallel
+#BSUB -W 6:00
+#BSUB -n 4
+#BSUB -R "span[hosts=1]"
+#BSUB -R "select[mem>128000]"
+#BSUB -R "rusage[mem=128000]"
+#BSUB -M 128000
+#BSUB -gpu "num=1:mode=exclusive_process:gmem=78G"
+#BSUB -cwd /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM
+#BSUB -o /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-W-s4-%J.out
+#BSUB -e /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-W-s4-%J.err
+#
+# Phase-T: a NON-CIRCULAR scorer for the consistency-distillation paper.
+#
+# The paper's current scored arm (B4) selects by VQAScore, which shares a paradigm with the
+# BLIP-VQA half of T2I-CompBench. CLIP-I is image-image cosine against the caption's real COCO
+# photo -- no text model, no VQA, no overlap with any evaluator we report. It is also the strongest
+# proxy we have measured (+0.0237 CompBench, 3/3 seeds, in the flow-matching branch).
+#
+# Everything runs on phaseN/coco_selection_108348, which carries clip_cos / dino_cos / lpips_neg /
+# energy / endpoint_vqa over the SAME candidate pool as the cache B2/B4 used: prompts, seed_base and
+# random_idx are identical on 3000/3000 records (only the VQA rescoring differs, on 2902/3000).
+# B2 and B4 are re-run here so every arm shares one cache and the comparison is matched.
+#
+# Submit:
+#   bsub -U iclr_2026 -env "all,VARIANT=CD_clip_hard,SEED=0" < ablations/phaseT_clip_cd.lsf
+#   bsub -U iclr_2026 -env "all,VARIANT=W_clip_hard,COUP=teacher,PSIG=1,SEED=0" < ...
+#
+# Config copied verbatim from checkpoints/phaseN/phaseN_B2_a1.0_t1.0_s0_108317/args.json so the new
+# CD arms are comparable to the existing B2/B4 runs. NOTE Kw=5 here (`--scoring_window 0.4,0.9`),
+# which is the B2/B4 setting and differs from Phase-S. `--scoring_window` is hardcoded because
+# `bsub -env` splits values on commas. `--target_schedule` is deliberately NOT passed: a schedule
+# arm bypasses the variant's label entirely (see pick_index), which would silently null the scorer.
+set -euo pipefail
+export PATH="/software/cellgen/team361/ha11/envs/nichejepa/bin:$PATH"
+export HF_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/huggingface
+export TORCH_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/torch
+export XDG_CACHE_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/xdg
+export TOKENIZERS_PARALLELISM=false
+export PYTHONPATH="/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM:${PYTHONPATH:-}"
+source ~/.secrets/hf_token
+
+: "${VARIANT:?set VARIANT}"
+: "${SEED:?set SEED}"
+COUP=${COUP:-fresh}
+PSIG=${PSIG:-0}
+DLOSS=${DLOSS:-x0_huber}
+# The dinopatch manifest is a strict superset of the verifierswap one (it was built by copying those
+# records and adding dino_patch_cos), and prompt/seed_base/random_idx are identical to
+# coco_selection_108348 on 3000/3000. So every arm and the B2 baseline share one candidate pool
+# whichever of the three is named here.
+SELDIR=${SELDIR:-phaseN/coco_selection_dinopatch}
+# TRAINER: the frozen trainer copy. S4 arms ran phaseW/train_pilot_frozen_s4.py (sha 67584aa4); S4b
+# (Boltzmann-Full-N) runs phaseW/train_pilot_frozen_s4b.py, whose only differences are the added
+# CD_dinop_full path and the default-neutral --accum plumbing (diff -w verified additive).
+TRAINER=${TRAINER:-phaseW/train_pilot_frozen_s4.py}
+JOB=${LSB_JOBID:-manual}
+TAG="$VARIANT"
+[ "$COUP" != "fresh" ] && TAG="${TAG}-${COUP}"
+[ "$PSIG" = "1" ] && TAG="${TAG}-psig"
+[ "$DLOSS" != "x0_huber" ] && TAG="${TAG}-${DLOSS}"
+# EXTRA passes additional trainer flags verbatim (no commas: bsub -env splits on them); TAGX names
+# the run for them, e.g. EXTRA="--target_horizon 2" TAGX="-h2".
+[ "${TEMP:-1.0}" != "1.0" ] && TAG="${TAG}-T${TEMP}"
+TAG="${TAG}${TAGX:-}"
+RUN="phaseS4_${TAG}_s${SEED}_${JOB}"
+OUT="checkpoints/phaseS4/${RUN}"
+mkdir -p checkpoints/phaseS4 logs
+
+PSIG_FLAG=""
+[ "$PSIG" = "1" ] && PSIG_FLAG="--paired_sigma"
+
+echo "[$(date --iso-8601=seconds)] Phase-T | variant=$VARIANT coupling=$COUP psig=$PSIG seed=$SEED -> $RUN"
+
+python3 "$TRAINER" \
+  --variant "$VARIANT" --coupling "$COUP" ${PSIG_FLAG} --distill_loss "$DLOSS" \
+  --seed "$SEED" --sel_seed "$SEED" \
+  --selection_dir "$SELDIR" \
+  --alpha 1.0 --temp "${TEMP:-1.0}" \
+  --N 4 --K 8 --cfg 7.0 --student_cfg 0.0 --cfg_mode composed \
+  --num_steps 6000 --num_warmup_steps 300 --lr 1e-5 --weight_decay 0.0 --grad_clip 1.0 \
+  --height 512 --sched_shift 3.0 --num_train_ts 1000.0 \
+  --delta_min 1 --delta_max 3 \
+  --scoring_window 0.4,0.9 \
+  --support_m 1 --assign_seed 982451653 \
+  --huber_c 0.0 --gradient_checkpointing \
+  --save_every 2000 --log_every 10 --sample_every 0 ${EXTRA:-} \
+  --wandb_project sd-phaseW-s4 --wandb_run_name "$RUN" \
+  --output_dir "$OUT"
+
+echo "[$(date --iso-8601=seconds)] Phase-T done: $RUN"

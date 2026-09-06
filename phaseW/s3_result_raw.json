@@ -1,0 +1,29 @@
+{
+ "primary": {
+  "W_CD_dinop_hard_118k-acc4": {
+   "p": 0.2746294006528954,
+   "delta": 0.008376893272585208
+  },
+  "W_CD_dinop_hard_118k (VQAScore, existing)": {
+   "p": 6.280738853941989e-05,
+   "delta": -0.03403143076134797
+  }
+ },
+ "log": [
+  "baseline W_B2_118k-acc4: seeds [0]",
+  "\nW_CD_dinop_hard_118k-acc4 vs W_B2_118k-acc4   seeds [0]",
+  "    PRIMARY UniDet det.    n=  898  delta=+0.0084  per-seed +0.0084  t p=2.746e-01  wilcoxon p=1.207e-01",
+  "    BLIP-VQA               n=  900  delta=+0.0167  per-seed +0.0167  t p=1.497e-02  wilcoxon p=1.033e-01",
+  "    CLIPScore non_spatial  n=  300  delta=+0.0020  per-seed +0.0020  t p=2.366e-02  wilcoxon p=2.949e-02",
+  "    CompBench overall      n= 2398  delta=+0.0113  per-seed +0.0113  t p=3.855e-03  wilcoxon p=9.175e-04",
+  "    GenEval2 (Qwen3-VL)    n=  800  delta=+0.0062  t p=5.185e-01",
+  "\nW_CD_dinop_hard_118k (VQAScore, existing) vs W_B2_118k-acc4   seeds [0, 1, 2]",
+  "    PRIMARY UniDet det.    n=  898  delta=-0.0340  per-seed -0.0340  t p=6.281e-05  wilcoxon p=9.688e-05",
+  "    BLIP-VQA               n=  900  delta=+0.0058  per-seed +0.0058  t p=3.855e-01  wilcoxon p=8.739e-01",
+  "    CLIPScore non_spatial  n=  300  delta=+0.0015  per-seed +0.0015  t p=1.532e-01  wilcoxon p=1.393e-01",
+  "    CompBench overall      n= 2398  delta=-0.0097  per-seed -0.0097  t p=1.922e-02  wilcoxon p=4.983e-02",
+  "    GenEval2 (Qwen3-VL)    n=  800  delta=-0.0010  t p=9.136e-01",
+  "\nHolm correction across the 1 preregistered selector contrasts, alpha=0.05:",
+  "  W_CD_dinop_hard_118k-acc4 delta=+0.0084  p=2.746e-01  alpha=0.0500  fail"
+ ]
+}

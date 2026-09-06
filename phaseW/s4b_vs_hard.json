@@ -1,0 +1,29 @@
+{
+ "primary": {
+  "S4_CD_dinop_full-T0.04": {
+   "p": 0.34265644411214236,
+   "delta": 0.004548041251510157
+  },
+  "S4_B2 (VQAScore, existing)": {
+   "p": 5.523066181345327e-07,
+   "delta": -0.02509075747144604
+  }
+ },
+ "log": [
+  "baseline S4_CD_dinop_hard: seeds [0, 1, 2]",
+  "\nS4_CD_dinop_full-T0.04 vs S4_CD_dinop_hard   seeds [0, 1, 2]",
+  "    PRIMARY UniDet det.    n=  898  delta=+0.0045  per-seed +0.0083/+0.0229/-0.0175  t p=3.427e-01  wilcoxon p=1.250e-01",
+  "    BLIP-VQA               n=  900  delta=-0.0037  per-seed -0.0025/+0.0088/-0.0176  t p=2.717e-01  wilcoxon p=4.578e-01",
+  "    CLIPScore non_spatial  n=  300  delta=+0.0020  per-seed +0.0036/+0.0024/+0.0000  t p=5.588e-04  wilcoxon p=5.449e-04",
+  "    CompBench overall      n= 2398  delta=+0.0000  per-seed +0.0024/+0.0119/-0.0141  t p=9.822e-01  wilcoxon p=4.338e-01",
+  "    GenEval2 (Qwen3-VL)    n=  800  delta=+0.0019  t p=7.252e-01",
+  "\nS4_B2 (VQAScore, existing) vs S4_CD_dinop_hard   seeds [0, 1, 2]",
+  "    PRIMARY UniDet det.    n=  898  delta=-0.0251  per-seed -0.0268/-0.0210/-0.0274  t p=5.523e-07  wilcoxon p=1.797e-07",
+  "    BLIP-VQA               n=  900  delta=-0.0234  per-seed -0.0211/-0.0272/-0.0219  t p=1.314e-09  wilcoxon p=5.326e-12",
+  "    CLIPScore non_spatial  n=  300  delta=-0.0003  per-seed +0.0004/-0.0000/-0.0011  t p=7.085e-01  wilcoxon p=9.308e-01",
+  "    CompBench overall      n= 2398  delta=-0.0203  per-seed -0.0199/-0.0198/-0.0213  t p=2.381e-17  wilcoxon p=4.011e-24",
+  "    GenEval2 (Qwen3-VL)    n=  800  delta=-0.0135  t p=1.413e-02",
+  "\nHolm correction across the 1 preregistered selector contrasts, alpha=0.05:",
+  "  S4_CD_dinop_full-T0.04 delta=+0.0045  p=3.427e-01  alpha=0.0500  fail"
+ ]
+}

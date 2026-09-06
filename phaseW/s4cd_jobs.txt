@@ -1,0 +1,6 @@
+CD_dinop_full-T0.08 0 132354 132355
+CD_dinop_full-T0.08 1 132356 132357
+CD_dinop_full-T0.08 2 132358 132359
+CD_dinop_full-T1e6 0 132360 132361
+CD_dinop_full-T1e6 1 132362 132363
+CD_dinop_full-T1e6 2 132364 132365
