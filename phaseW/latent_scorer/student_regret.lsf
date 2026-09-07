@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+#BSUB -J sd-W-stregret
+#BSUB -G s10396
+#BSUB -q training-parallel
+#BSUB -n 4
+#BSUB -W 4:00
+#BSUB -R "span[hosts=1]"
+#BSUB -R "select[mem>160000]"
+#BSUB -R "rusage[mem=160000]"
+#BSUB -M 160000
+#BSUB -gpu "num=1:mode=exclusive_process:gmem=40G"
+#BSUB -cwd /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM
+#BSUB -o /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-W-stregret-%J.out
+#BSUB -e /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-W-stregret-%J.err
+# R0: projector regret on STUDENT latents (argmax student s0, averaged; naive student s0), and after
+# fine-tuning on half of them; the 8-step teacher as the in-distribution control.
+set -euo pipefail
+export PATH="/software/cellgen/team361/ha11/envs/nichejepa/bin:$PATH"
+export HF_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/huggingface
+export TORCH_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/torch
+export XDG_CACHE_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/xdg
+export TOKENIZERS_PARALLELISM=false
+export PYTHONPATH="/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM:${PYTHONPATH:-}"
+source ~/.secrets/hf_token
+: "${CKPT:?}" ; : "${TAG:?}"
+python3 phaseW/latent_scorer/student_regret.py --ckpt "$CKPT" --n_captions "${NCAP:-500}" --n_seeds 4 \
+  --out "phaseW/latent_scorer/regret_${TAG}.json"

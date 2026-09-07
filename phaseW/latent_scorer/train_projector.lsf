@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+#BSUB -J sd-W-latproj
+#BSUB -G s10396
+#BSUB -q training-parallel
+#BSUB -n 4
+#BSUB -W 4:00
+#BSUB -R "span[hosts=1]"
+#BSUB -R "select[mem>160000]"
+#BSUB -R "rusage[mem=160000]"
+#BSUB -M 160000
+#BSUB -gpu "num=1:mode=exclusive_process:gmem=40G"
+#BSUB -cwd /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM
+#BSUB -o /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-W-latproj-%J.out
+#BSUB -e /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-W-latproj-%J.err
+# Train the latent projector on the generated shards, validate on held-out captions, score the 3k
+# pool into phaseN/coco_selection_dinopatch_latent.
+set -euo pipefail
+export PATH="/software/cellgen/team361/ha11/envs/nichejepa/bin:$PATH"
+export PYTHONPATH="/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM:${PYTHONPATH:-}"
+n=$(ls phaseW/latent_scorer/shards/shard*.pt | wc -l); echo "[latproj] $n shards"
+python3 phaseW/latent_scorer/train_projector.py --shards phaseW/latent_scorer/shards \
+  --out_dir phaseW/latent_scorer/projector --cache_out phaseN/coco_selection_dinopatch_latent \
+  --epochs "${EPOCHS:-30}" --tau "${TAU:-0.04}" --lam "${LAM:-1.0}"

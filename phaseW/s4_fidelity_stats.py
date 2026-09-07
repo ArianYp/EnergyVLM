@@ -16,7 +16,8 @@ from scipy import stats
 
 ARMS = [("S4_B2", "random (fixed draw)"), ("S4_CD_dinop_hard", "argmax"),
         ("S4_CD_dinop_full-T0.04", "Boltzmann T=0.04, exact"), ("S4_CD_dinop_cat-T0.04", "Boltzmann T=0.04, sampled"),
-        ("S4_CD_dinop_catfreeze-T0.04", "Boltzmann T=0.04, frozen draw")]
+        ("S4_CD_dinop_catfreeze-T0.04", "Boltzmann T=0.04, frozen draw"),
+        ("S4_CD_latent_hard", "latent scorer, argmax"), ("S4_CD_latent_full-T0.04", "latent scorer, Boltzmann T=0.04, exact")]
 NAMES = dict(ARMS)
 path = sys.argv[1] if len(sys.argv) > 1 else "phaseW/fidelity_s4_report.md"
 rows = defaultdict(dict)   # (arm, suffix) -> seed -> (fid, cmmd, prec, rec)
@@ -56,7 +57,8 @@ for suffix, title in (("", "raw final checkpoints"), ("-avglast3", "average of t
     print("\n%% LaTeX rows\n" + "\n".join(tex))
     print("\n| contrast | CMMD per seed | mean +- sd (p) | precision mean | recall mean |\n|---|---|---|---|---|")
     for a, b in (("S4_CD_dinop_hard", "S4_B2"), ("S4_CD_dinop_full-T0.04", "S4_CD_dinop_hard"), ("S4_CD_dinop_cat-T0.04", "S4_CD_dinop_hard"),
-                 ("S4_CD_dinop_catfreeze-T0.04", "S4_CD_dinop_hard"), ("S4_CD_dinop_full-T0.04", "S4_CD_dinop_cat-T0.04")):
+                 ("S4_CD_dinop_catfreeze-T0.04", "S4_CD_dinop_hard"), ("S4_CD_dinop_full-T0.04", "S4_CD_dinop_cat-T0.04"),
+                 ("S4_CD_latent_hard", "S4_CD_dinop_hard"), ("S4_CD_latent_full-T0.04", "S4_CD_dinop_full-T0.04"), ("S4_CD_latent_hard", "S4_B2")):
         ra, rb = rows.get((a, suffix)), rows.get((b, suffix))
         if not ra or not rb:
             continue

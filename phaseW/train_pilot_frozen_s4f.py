@@ -493,19 +493,6 @@ def main():
                          "0 disables.")
     ap.add_argument("--real_states", type=int, default=2,
                     help="how many window states per step carry the real-photo term")
-    # --- latent-projector REWARD (phaseW/latent_scorer): -lambda * cos(P(x_hat), e_ref) on the
-    # student's own clean estimates at the least-noisy window inputs; P frozen, or refreshed on
-    # decoded student predictions against the RGB DINO scorer every --reward_refresh_every updates
-    ap.add_argument("--reward_proj", default=None, help="latent projector checkpoint; enables the reward term")
-    ap.add_argument("--reward_lambda", type=float, default=0.0)
-    ap.add_argument("--reward_states", type=int, default=2, help="reward on the predictions from the K least-noisy student inputs")
-    ap.add_argument("--reward_ref", default="phaseW/latent_scorer/ref_emb_3k.pt", help="caption idx -> DINO-patch embedding of the reference photo")
-    ap.add_argument("--reward_refresh_every", type=int, default=0, help="0 = frozen projector; else refresh it every N updates")
-    ap.add_argument("--reward_refresh_steps", type=int, default=4)
-    ap.add_argument("--reward_refresh_lr", type=float, default=1e-4)
-    ap.add_argument("--reward_replay", default="phaseW/latent_scorer/replay_2k.pt", help="teacher-candidate latents replayed during refresh")
-    ap.add_argument("--reward_monitor_every", type=int, default=100, help="decode + RGB-score recent predictions: projector-vs-RGB agreement (hacking monitor)")
-    ap.add_argument("--reward_grad_probe", type=int, default=0, help="smoke: print ||grad CD|| and ||grad reward|| separately for the first N updates")
     ap.add_argument("--ema_no_warmup", action="store_true",
                     help="use --ema_decay from step 0 instead of the (1+s)/(10+s) warm-up; required for "
                          "an evolving teacher warm-started from a trained checkpoint")
@@ -744,26 +731,6 @@ def main():
               f"Kw={len(score_idxs)}", flush=True)
         print(f"[pairing] coupling={args.coupling} paired_sigma={args.paired_sigma} "
               f"assign_seed={args.assign_seed} target_map_sha256={_h.hexdigest()}", flush=True)
-    reward_on = args.reward_proj is not None and args.reward_lambda != 0.0
-    loss_cd_v = None
-    if reward_on:
-        assert world == 1 or args.reward_refresh_every == 0, "projector refresh is implemented for a single GPU"
-        sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "phaseW" / "latent_scorer"))
-        from train_projector import LatentProjector
-        proj = LatentProjector().to(device)
-        proj.load_state_dict(torch.load(args.reward_proj, map_location=device, weights_only=False)["model"]); proj.eval()
-        for _p in proj.parameters():
-            _p.requires_grad_(False)
-        ref_emb = torch.load(args.reward_ref, map_location="cpu", weights_only=False)
-        if scorer is None and (args.reward_refresh_every > 0 or args.reward_monitor_every > 0):
-            scorer = OnlineScorer(pipe.vae, args.score_model, args.height, device)
-        replay = torch.load(args.reward_replay, map_location="cpu", weights_only=False) if args.reward_refresh_every > 0 else None
-        proj_opt = torch.optim.AdamW(proj.parameters(), lr=args.reward_refresh_lr, weight_decay=0.01) if args.reward_refresh_every > 0 else None
-        rbuf = []
-        reward_stats = {"r": 0.0, "n": 0, "rgb": float("nan"), "proj": float("nan"), "corr": float("nan"), "refresh_loss": float("nan")}
-        if is_main:
-            print(f"[reward] projector {args.reward_proj} lambda={args.reward_lambda} states={args.reward_states} "
-                  f"refresh_every={args.reward_refresh_every} monitor_every={args.reward_monitor_every} refs={len(ref_emb)}", flush=True)
     sel_rng = np.random.default_rng(args.sel_seed + 7919 * rank)
     # Running selection diagnostics. `rho_running` is the headroom recovery of the policy this arm
     # is ACTUALLY executing, accumulated over the updates it performs. It is the number that makes
@@ -810,7 +777,7 @@ def main():
             acc["vqa_sel"] += float(_R[sel])
             acc["energy_sel"] += float(_E[sel]) if np.isfinite(_E[sel]) else 0.0
             acc["idx_hist"][sel] += 1.0
-            for _f in ("dino_patch_cos", "latent_cos", "dino_cos", "clip_cos", "endpoint_vqa", "energy",
+            for _f in ("dino_patch_cos", "dino_cos", "clip_cos", "endpoint_vqa", "energy",
                        "pick_score", "imgrwd_score", "lpips_neg"):
                 if _f in rec:
                     _s = np.asarray(rec[_f], dtype=float)
@@ -1096,30 +1063,6 @@ def main():
                     # student's and the teacher's clean-latent estimates inflating TOGETHER
                     xhat_norm = float(x_hat.detach().flatten(1).norm(dim=1).mean())
                     xtea_norm = float(x_tea.flatten(1).norm(dim=1).mean())
-                    if reward_on:
-                        # REWARD TERM through the frozen projector, on the clean estimates from the
-                        # --reward_states least-noisy student inputs (the others are too blurry to score)
-                        _order = sorted(range(n_w), key=lambda i: float(sig_stu[i]))[:args.reward_states]
-                        _xr = x_hat[_order]
-                        _eref = ref_emb[int(rec["idx"])].to(device).float()
-                        with torch.autocast("cuda", torch.bfloat16):
-                            _ehat = proj(_xr).float()
-                        _r = (_ehat * _eref[None]).sum(-1)
-                        _lr = -args.reward_lambda * _r.mean()
-                        if is_main and gstep < args.reward_grad_probe:
-                            _ps = [p for p in student_module.parameters() if p.requires_grad]
-                            _g1 = torch.autograd.grad(loss, _ps, retain_graph=True, allow_unused=True)
-                            _g2 = torch.autograd.grad(_lr, _ps, retain_graph=True, allow_unused=True)
-                            _n1 = float(torch.sqrt(sum((g.float() ** 2).sum() for g in _g1 if g is not None)))
-                            _n2 = float(torch.sqrt(sum((g.float() ** 2).sum() for g in _g2 if g is not None)))
-                            print(f"[reward-probe] step {gstep} ||grad CD||={_n1:.2f} ||grad reward||={_n2:.4f} ratio={_n2 / max(_n1, 1e-9):.4f} r={float(_r.mean()):.4f}", flush=True)
-                            del _g1, _g2
-                        loss_cd_v = float(loss.detach())
-                        loss = loss + _lr
-                        reward_stats["r"] += float(_r.mean()); reward_stats["n"] += 1
-                        rbuf.append((_xr.detach()[:1].clone(), int(rec["idx"])))
-                        if len(rbuf) > 64:
-                            rbuf.pop(0)
             if args.lambda_real > 0:
                 # REAL-PHOTO TERM. The caption's photograph is the one sample we have from the
                 # distribution every scorer points at. Noise its latent along its own straight path
@@ -1230,46 +1173,6 @@ def main():
         gn = torch.nn.utils.clip_grad_norm_(student_module.parameters(), args.grad_clip)
         opt.step(); sched.step()
         gstep += 1; pbar.update(1)
-        if reward_on and is_main and rbuf and ((args.reward_refresh_every and gstep % args.reward_refresh_every == 0)
-                                                or (args.reward_monitor_every and gstep % args.reward_monitor_every == 0)):
-            # HACKING MONITOR: decode the recent predictions and score them with the RGB DINO scorer
-            # against the same references; log both scores and their correlation over the batch
-            _xs = torch.cat([x for x, _ in rbuf[-32:]], 0); _ids = [i for _, i in rbuf[-32:]]
-            with torch.no_grad():
-                _img = vae_decode(pipe.vae, _xs)
-                _u8 = ((_img + 1) / 2 * 255).round().clamp(0, 255).to(torch.uint8)
-                _pil = [scorer.Image.fromarray(x.permute(1, 2, 0).cpu().numpy()) for x in _u8]
-                _et = scorer.embed(_pil)
-                _er = torch.stack([ref_emb[i] for i in _ids]).to(device).float()
-                _rgb = (_et * _er).sum(-1)
-                with torch.autocast("cuda", torch.bfloat16):
-                    _pr = (proj(_xs.float()).float() * _er).sum(-1)
-            reward_stats["rgb"] = float(_rgb.mean()); reward_stats["proj"] = float(_pr.mean())
-            reward_stats["corr"] = float(np.corrcoef(_rgb.cpu().numpy(), _pr.cpu().numpy())[0, 1]) if len(_ids) > 2 else float("nan")
-            if args.reward_refresh_every and gstep % args.reward_refresh_every == 0:
-                # REFRESH: fit the projector to the RGB scorer on the student's own predictions, with
-                # replay of teacher candidates (cosine + ranking KL) so it keeps ranking those too
-                for _p in proj.parameters():
-                    _p.requires_grad_(True)
-                proj.train(); _tot = 0.0
-                _rr = np.random.default_rng(gstep)
-                for _ in range(args.reward_refresh_steps):
-                    with torch.autocast("cuda", torch.bfloat16):
-                        _es = proj(_xs.float()).float()
-                    _ls = (1 - (_es * _et).sum(-1)).mean()
-                    _rb = _rr.choice(replay["z"].shape[0], size=8, replace=False)
-                    _zr = replay["z"][_rb].to(device).float().flatten(0, 1); _ec = replay["e_cand"][_rb].to(device).float().flatten(0, 1)
-                    _rref = replay["e_ref"][_rb].to(device).float(); _cr = replay["cos"][_rb].to(device)
-                    with torch.autocast("cuda", torch.bfloat16):
-                        _ep = proj(_zr).float()
-                    _lrp = (1 - (_ep * _ec).sum(-1)).mean() + F.kl_div(F.log_softmax((_ep.view(len(_rb), 4, -1) * _rref[:, None]).sum(-1) / 0.04, -1),
-                                                                      F.softmax(_cr / 0.04, -1), reduction="batchmean")
-                    _l = _ls + _lrp
-                    proj_opt.zero_grad(); _l.backward(); torch.nn.utils.clip_grad_norm_(proj.parameters(), 1.0); proj_opt.step(); _tot += float(_l)
-                proj.eval()
-                for _p in proj.parameters():
-                    _p.requires_grad_(False)
-                reward_stats["refresh_loss"] = _tot / args.reward_refresh_steps
         if ema_model is not None:
             with torch.no_grad():
                 # The (1+s)/(10+s) warm-up is for an EMA started from an untrained student. For an
@@ -1321,11 +1224,6 @@ def main():
                     payload["train/xhat_norm"] = xhat_norm; payload["train/xtea_norm"] = xtea_norm
                 if loss_real_v is not None:
                     payload["train/loss_real"] = loss_real_v
-                if reward_on:
-                    payload.update({"reward/r_mean": reward_stats["r"] / max(reward_stats["n"], 1), "reward/rgb_score": reward_stats["rgb"],
-                                    "reward/proj_score": reward_stats["proj"], "reward/rgb_proj_corr": reward_stats["corr"],
-                                    "reward/refresh_loss": reward_stats["refresh_loss"], "train/loss_cd": loss_cd_v})
-                    reward_stats["r"] = 0.0; reward_stats["n"] = 0
                 if ema_model is not None:
                     with torch.no_grad():
                         _d2 = sum(float((a - b).float().pow(2).sum()) for a, b in zip(live_params, ema_params))

@@ -34,6 +34,10 @@ ARMS = [  # label prefix, display name, jobs file
     ("S4_CD_dinop_cat-T0.08", "Boltzmann T=0.08, sampled", "phaseW/s4_jobs_done.txt"),
     ("S4_CD_uniform_visit", "uniform-visit, sampled", "phaseW/s4_jobs_done.txt"),
     ("S4_CD_dinop_catfreeze-T0.04", "Boltzmann T=0.04, frozen draw", "phaseW/s4e_jobs.txt"),
+    ("S4_CD_latent_hard", "latent scorer, argmax", "phaseW/s4f_jobs.txt"),
+    ("S4_CD_latent_full-T0.04", "latent scorer, Boltzmann T=0.04, exact", "phaseW/s4f_jobs.txt"),
+    ("S4_CD_dinop_hard-rewF", "argmax + projector reward (frozen)", "phaseW/s4g_jobs.txt"),
+    ("S4_CD_dinop_hard-rewR", "argmax + projector reward (refreshed)", "phaseW/s4g_jobs.txt"),
 ]
 CONTRASTS = [
     ("S4_CD_dinop_hard", "S4_B2"), ("S4_CD_dinop_full-T0.04", "S4_B2"), ("S4_CD_dinop_full-T0.08", "S4_B2"),
@@ -44,6 +48,11 @@ CONTRASTS = [
     ("S4_CD_dinop_catfreeze-T0.04", "S4_CD_dinop_hard"),
     ("S4_CD_dinop_full-T0.04", "S4_CD_dinop_cat-T0.04"), ("S4_CD_dinop_catfreeze-T0.04", "S4_CD_dinop_cat-T0.04"),
     ("S4_CD_dinop_full-T1e6", "S4_CD_uniform_visit"),
+    ("S4_CD_latent_hard", "S4_B2"), ("S4_CD_latent_full-T0.04", "S4_B2"),
+    ("S4_CD_latent_hard", "S4_CD_dinop_hard"), ("S4_CD_latent_full-T0.04", "S4_CD_dinop_hard"),
+    ("S4_CD_latent_full-T0.04", "S4_CD_dinop_full-T0.04"), ("S4_CD_latent_full-T0.04", "S4_CD_latent_hard"),
+    ("S4_CD_dinop_hard-rewF", "S4_CD_dinop_hard"), ("S4_CD_dinop_hard-rewR", "S4_CD_dinop_hard"),
+    ("S4_CD_dinop_hard-rewF", "S4_B2"), ("S4_CD_dinop_hard-rewR", "S4_B2"), ("S4_CD_dinop_hard-rewR", "S4_CD_dinop_hard-rewF"),
 ]
 
 

@@ -1,0 +1,62 @@
+#!/usr/bin/env bash
+#BSUB -J sd-W-s4g-smoke
+#BSUB -G s10396
+#BSUB -q training-parallel
+#BSUB -n 4
+#BSUB -W 1:30
+#BSUB -R "span[hosts=1]"
+#BSUB -R "select[mem>160000]"
+#BSUB -R "rusage[mem=160000]"
+#BSUB -M 160000
+#BSUB -gpu "num=1:mode=exclusive_process:gmem=78G"
+#BSUB -cwd /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM
+#BSUB -o /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-W-s4g-smoke-%J.out
+#BSUB -e /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-W-s4g-smoke-%J.err
+# S4g gate for the projector reward:
+#   A  argmax, no reward (S4g trainer must reproduce the S4 argmax selection map and the usual losses)
+#   B  argmax + reward lambda=1, gradient probe on 8 updates -> ||grad CD|| vs ||grad reward||
+#   C  argmax + reward lambda=1, refresh every 5 updates, monitor every 5 -> exercises decode/DINO/refresh
+# Prints the lambda that puts the reward gradient at 20% of the CD gradient (median over probes).
+set -euo pipefail
+export PATH="/software/cellgen/team361/ha11/envs/nichejepa/bin:$PATH"
+export HF_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/huggingface
+export TORCH_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/torch
+export XDG_CACHE_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/xdg
+export TOKENIZERS_PARALLELISM=false
+export WANDB_MODE=disabled
+export PYTHONPATH="/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM:${PYTHONPATH:-}"
+source ~/.secrets/hf_token
+J=${LSB_JOBID:-manual}
+PROJ=phaseW/latent_scorer/projector/projector.pt
+run() {  # name extra-args...
+  local name=$1; shift
+  local err="logs/s4g_smoke_${name}_${J}.err" out="logs/s4g_smoke_${name}_${J}.out"
+  echo "[$(date --iso-8601=seconds)] run $name: $*"
+  python3 phaseW/train_pilot_frozen_s4g.py --variant CD_dinop_hard --coupling fresh --distill_loss x0_huber \
+    --seed 0 --sel_seed 0 --selection_dir phaseN/coco_selection_dinopatch --alpha 1.0 --temp 1.0 \
+    --N 4 --K 8 --cfg 7.0 --student_cfg 0.0 --cfg_mode composed --num_steps 20 --num_warmup_steps 5 --lr 1e-5 \
+    --weight_decay 0.0 --grad_clip 1.0 --height 512 --sched_shift 3.0 --num_train_ts 1000.0 --delta_min 1 --delta_max 3 \
+    --scoring_window 0.4,0.9 --support_m 1 --assign_seed 982451653 --huber_c 0.0 --gradient_checkpointing \
+    --save_every 1000 --log_every 1 --sample_every 0 --no_wandb "$@" \
+    --output_dir "checkpoints/phaseW_smoke/s4g_${name}_${J}" > "$out" 2> "$err"
+  echo "[$name] losses: $(tr '\r' '\n' < "$err" | grep -oE 'loss=[0-9.e+-]+' | sed 's/loss=//' | awk 'NR%2==1' | tr '\n' ' ')"
+  grep -E "^\[reward" "$out" | head -12 || true
+  rm -rf "checkpoints/phaseW_smoke/s4g_${name}_${J}"
+}
+run A --reward_monitor_every 0
+run B --reward_proj $PROJ --reward_lambda 1.0 --reward_grad_probe 8 --reward_monitor_every 0
+run C --reward_proj $PROJ --reward_lambda 1.0 --reward_refresh_every 5 --reward_monitor_every 5 --reward_refresh_steps 2
+python3 - "$J" <<'EOF'
+import re, sys, statistics
+J = sys.argv[1]
+a = open(f"logs/s4g_smoke_A_{J}.out").read(); b = open(f"logs/s4g_smoke_B_{J}.out").read(); c = open(f"logs/s4g_smoke_C_{J}.out").read()
+assert "target_map_sha256=dbd0d57b2630f5c1" in a, "S4g trainer changed the argmax selection map"
+probes = re.findall(r"\|\|grad CD\|\|=([0-9.]+) \|\|grad reward\|\|=([0-9.]+) ratio=([0-9.]+) r=([0-9.-]+)", b)
+assert len(probes) >= 6, f"only {len(probes)} probes"
+ratios = [float(p[2]) for p in probes]; med = statistics.median(ratios)
+lam = 0.2 / med
+print(f"[gate] probes {len(probes)}: ||grad CD|| median {statistics.median(float(p[0]) for p in probes):.1f}, ||grad reward|| median {statistics.median(float(p[1]) for p in probes):.4f} at lambda=1, ratio median {med:.4f}, r median {statistics.median(float(p[3]) for p in probes):.3f}")
+print(f"[gate] LAMBDA_20PCT={lam:.3f}")
+assert "Traceback" not in open(f"logs/s4g_smoke_C_{J}.err").read(), "refresh path failed"
+print("S4G_SMOKE_OK")
+EOF

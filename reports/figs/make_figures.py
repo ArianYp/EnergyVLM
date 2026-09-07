@@ -72,6 +72,11 @@ def fig_selection_rule(s4):
             st = seed_stats(s4, fz)
             ax.errorbar([kish[fz.replace(suf, "")]], [st[0]], yerr=[st[1]], color="#2ca02c", marker="D", ms=4, lw=0,
                         elinewidth=1.2, capsize=2, label="one draw per caption, kept (frozen)")
+        lat = [(1.0, "S4_CD_latent_hard" + suf), (2.19, "S4_CD_latent_full-T0.04" + suf)]
+        lat = [(x, seed_stats(s4, l)) for x, l in lat if l in s4]
+        if lat:
+            ax.errorbar([x for x, _ in lat], [st[0] for _, st in lat], yerr=[st[1] for _, st in lat], color="#9467bd",
+                        marker="^", ms=4, lw=1.0, ls=":", capsize=2, label="latent scorer (no decode): argmax, exact T=0.04")
         ax.axhline(naive[0], color=C_NAIVE, ls="--", lw=1, label="random selection (fixed draw)")
         ax.axhspan(naive[0] - naive[1], naive[0] + naive[1], color=C_NAIVE, alpha=0.12, lw=0)
         ax.set_xticks([1, 2.19, 2.89, 4.0])

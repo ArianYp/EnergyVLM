@@ -1,0 +1,13 @@
+CD_latent_full-T0.04 0 135704
+CD_latent_full-T0.04-avglast3 0 135705
+CD_latent_full-T0.04 1 135706
+CD_latent_full-T0.04-avglast3 1 135707
+CD_latent_full-T0.04 2 135708
+CD_latent_full-T0.04-avglast3 2 135709
+CD_latent_hard 0 135710
+CD_latent_hard-avglast3 0 135711
+CD_latent_hard 1 135712
+CD_latent_hard-avglast3 1 135713
+CD_latent_hard 2 135714
+CD_latent_hard-avglast3 2 135715
+fidscore 135716
