@@ -16,6 +16,8 @@ absorbed and it is sampled with cfg 1.
 Selectors (the only difference between arms; everything else is identical):
     random            the cached uniform draw `random_idx` (fixed per caption; naive distillation)
     dino_patch        argmax of `dino_patch_cos`: DINOv2 mean-patch cosine to the caption's photograph
+    latent            argmax of `latent_cos`: the decode-free latent scorer (train/latent_scorer.py), a
+                      projector from the terminal latent into DINO space scored against the photograph
     boltzmann         every candidate, its loss weighted by softmax(dino_patch_cos / T); exact soft
                       selection, N rollouts and N student passes per caption (--temp)
     boltzmann_sample  one candidate drawn from softmax(dino_patch_cos / T) on every visit; the
@@ -56,9 +58,10 @@ sys.path.insert(0, str(ROOT))
 from common.distributed import barrier, setup_distributed, teardown  # noqa: E402
 from common.sampling import candidate_noise, encode_prompt, rollout, vae_decode  # noqa: E402
 
-SELECTORS = ("random", "dino_patch", "boltzmann", "boltzmann_sample", "boltzmann_frozen", "boltzmann_mc",
+SELECTORS = ("random", "dino_patch", "latent", "boltzmann", "boltzmann_sample", "boltzmann_frozen", "boltzmann_mc",
              "uniform_visit")
-SCORE = "dino_patch_cos"
+# score field each selector ranks by; the boltzmann selectors take theirs from --score_field
+FIELD = {"dino_patch": "dino_patch_cos", "latent": "latent_cos"}
 
 
 class Records(Dataset):
@@ -72,17 +75,18 @@ class Records(Dataset):
         return self.items[i]
 
 
-def weights(rec: dict, selector: str, temp: float) -> np.ndarray:
+def weights(rec: dict, selector: str, temp: float, field: str = "dino_patch_cos") -> np.ndarray:
     """Weight of each cached candidate: a one-hot for the deterministic selectors, the per-visit
     draw distribution for the sampled ones, the loss weights for `boltzmann`."""
-    n = int(rec["N"]) if "N" in rec else len(rec[SCORE])
+    field = FIELD.get(selector, field)
+    n = int(rec["N"]) if "N" in rec else len(rec[field])
     if selector == "random":
         w = np.zeros(n); w[int(rec["random_idx"])] = 1.0
         return w
     if selector == "uniform_visit":
         return np.full(n, 1.0 / n)
-    s = np.asarray(rec[SCORE], dtype=float)
-    if selector == "dino_patch":
+    s = np.asarray(rec[field], dtype=float)
+    if selector in ("dino_patch", "latent"):
         w = np.zeros(n); w[int(s.argmax())] = 1.0
         return w
     # Boltzmann weights on the RAW score scale (no z-scoring, no floor), computed stably.
@@ -92,12 +96,12 @@ def weights(rec: dict, selector: str, temp: float) -> np.ndarray:
     return q / q.sum()
 
 
-def select(rec: dict, selector: str, temp: float, rng: np.random.Generator, map_seed: int) -> int:
+def select(rec: dict, selector: str, temp: float, rng: np.random.Generator, map_seed: int, field: str = "dino_patch_cos") -> int:
     """The candidate this visit trains on. Deterministic selectors need no draw; the sampled ones
     draw from the weights with the selection generator (private to selection, so the draws do not
     touch the data order or the noise-level stream); boltzmann_frozen draws from a generator
     seeded by (map_seed, caption idx), so its draw is the same on every visit and every rank."""
-    w = weights(rec, selector, temp)
+    w = weights(rec, selector, temp, field)
     if int((w > 0).sum()) == 1:
         return int(w.argmax())
     if selector == "boltzmann_frozen":
@@ -105,7 +109,7 @@ def select(rec: dict, selector: str, temp: float, rng: np.random.Generator, map_
     return int(rng.choice(len(w), p=w))
 
 
-SCORE_FIELDS = ("dino_patch_cos", "dino_cos", "clip_cos", "endpoint_vqa")
+SCORE_FIELDS = ("dino_patch_cos", "latent_cos", "dino_cos", "clip_cos", "endpoint_vqa")
 
 
 @torch.no_grad()
@@ -158,6 +162,8 @@ def main() -> None:
     ap.add_argument("--map_seed", type=int, default=1000003,
                     help="seed of the per-caption draw of boltzmann_frozen (mixed with the caption idx)")
     ap.add_argument("--mc_draws", type=int, default=4, help="draws per visit of boltzmann_mc")
+    ap.add_argument("--score_field", default="dino_patch_cos",
+                    help="cache field the boltzmann selectors rank by (dino_patch_cos, or latent_cos from the latent scorer)")
     ap.add_argument("--K", type=int, default=8, help="teacher steps")
     ap.add_argument("--cfg", type=float, default=7.0, help="teacher guidance")
     ap.add_argument("--window", default="0.4,0.9", help="supervised fraction of the trajectory")
@@ -280,9 +286,9 @@ def main() -> None:
         # is of the weights each caption is drawn from (the draw itself changes per visit)
         h = hashlib.sha256()
         for r in recs:
-            w = weights(r, args.selector, args.temp)
+            w = weights(r, args.selector, args.temp, args.score_field)
             if int((w > 0).sum()) == 1 or args.selector == "boltzmann_frozen":
-                key = select(r, args.selector, args.temp, np.random.default_rng(0), args.map_seed)
+                key = select(r, args.selector, args.temp, np.random.default_rng(0), args.map_seed, args.score_field)
             else:
                 key = np.round(w, 6).tolist()
             h.update(f"{int(r['idx'])}:{key}\n".encode())
@@ -310,11 +316,11 @@ def main() -> None:
                 sampler.set_epoch(epoch)
             data_iter = iter(loader)
             rec = next(data_iter)
-        w = weights(rec, args.selector, args.temp)
+        w = weights(rec, args.selector, args.temp, args.score_field)
         if args.selector == "boltzmann":
             sel = int(w.argmax())                       # diagnostics only; every candidate is trained on
         else:
-            sel = select(rec, args.selector, args.temp, sel_rng, args.map_seed)
+            sel = select(rec, args.selector, args.temp, sel_rng, args.map_seed, args.score_field)
         if args.selector == "boltzmann_mc":
             # M iid draws from the weights this visit; the weights become count / M (the scalar
             # draw above is consumed first, matching the experimental trainer's draw order)

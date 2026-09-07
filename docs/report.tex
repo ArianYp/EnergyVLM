@@ -20,7 +20,7 @@
 \maketitle
 
 \begin{abstract}
-We distil Stable Diffusion 3.5 Medium into a 4-step student with consistency distillation. For every training caption the frozen teacher generates four candidate trajectories from four seeds. A scorer picks one of the four, and the student is trained on that trajectory only. The baseline picks at random. The main scorer is the cosine similarity between DINOv2 mean-pooled patch features of the candidate image and of the real photograph that the caption describes. It uses no text model. On 3,000 COCO captions, three seeds, and 6,000 updates, this selection improves T2I-CompBench by $+0.014$ and GenEval2 by $+2.2$ points over random selection, with 95\% bootstrap intervals that exclude zero, and does not cost fidelity. At 118k captions and 57k updates, three training seeds, with weight averaging of the last five checkpoints, the gain is $+0.0175$ CompBench ($p=10^{-14}$) and $+1.3$ GenEval2; it is $+0.013$ under the official ten-images-per-prompt CompBench protocol ($p=10^{-41}$), and the scored student has better CMMD, precision and recall on every seed. The gain is unchanged by the optimizer batch size, does not grow with eight candidates instead of four, and vanishes with a stronger teacher. Argmax is the selection rule to use: exact Boltzmann weighting of all four candidates shows no detected improvement over it at 2.3 times the compute, softer weightings are worse, and drawing one candidate per visit from the same weights matches exact weighting once checkpoints are averaged. The same pipeline with VQAScore as the scorer gives similar gains but shares a model family with the evaluators. This document gives the full recipe: data, model, scorers, loss, hyperparameters, evaluation protocol, results, ablations and qualitative examples.
+We distil Stable Diffusion 3.5 Medium into a 4-step student with consistency distillation. For every training caption the frozen teacher generates four candidate trajectories from four seeds. A scorer picks one of the four, and the student is trained on that trajectory only. The baseline picks at random. The main scorer is the cosine similarity between DINOv2 mean-pooled patch features of the candidate image and of the real photograph that the caption describes. It uses no text model. On 3,000 COCO captions, three seeds, and 6,000 updates, this selection improves T2I-CompBench by $+0.014$ and GenEval2 by $+2.2$ points over random selection, with 95\% bootstrap intervals that exclude zero, and does not cost fidelity. At 118k captions and 57k updates, three training seeds, with weight averaging of the last five checkpoints, the gain is $+0.0175$ CompBench ($p=10^{-14}$) and $+1.3$ GenEval2; it is $+0.013$ under the official ten-images-per-prompt CompBench protocol ($p=10^{-41}$), and the scored student has better CMMD, precision and recall on every seed. The gain is unchanged by the optimizer batch size, does not grow with eight candidates instead of four, and vanishes with a stronger teacher. Argmax is the selection rule to use: exact Boltzmann weighting of all four candidates shows no detected improvement over it at 2.3 times the compute, softer weightings are worse, and drawing one candidate per visit from the same weights matches exact weighting once checkpoints are averaged. A 6.8M-parameter projector that scores terminal latents against the photograph without decoding recovers about three quarters of the selection gain. The same pipeline with VQAScore as the scorer gives similar gains but shares a model family with the evaluators. This document gives the full recipe: data, model, scorers, loss, hyperparameters, evaluation protocol, results, ablations and qualitative examples.
 \end{abstract}
 
 \tableofcontents
@@ -711,7 +711,7 @@ uniform ($T\to\infty$), exact vs uniform-visit (redraw per visit) & -0.0033 / +0
 
 \begin{table}[ht]
 \centering
-\caption{Fidelity of the $T{=}0.04$ selection-rule arms on 5,000 COCO \texttt{val2017} captions, 4 steps, $w=1$: per seed (s0 / s1 / s2) and seed mean in brackets, for the raw final checkpoints and for the averaged checkpoints. CMMD bootstrap intervals are $\pm0.01$ per model; FID differences below its split-half spread of about 0.5 should not be read.}
+\caption{Fidelity of the $T{=}0.04$ selection-rule arms and the latent-scorer arms on 5,000 COCO \texttt{val2017} captions, 4 steps, $w=1$: per seed (s0 / s1 / s2) and seed mean in brackets, for the raw final checkpoints and for the averaged checkpoints. CMMD bootstrap intervals are $\pm0.01$ per model; FID differences below its split-half spread of about 0.5 should not be read.}
 \label{tab:selfid}
 \resizebox{\textwidth}{!}{%
 \begin{tabular}{l l c c c c}
@@ -723,12 +723,16 @@ argmax & raw final & 31.90 / 30.57 / 29.62 (30.70) & 0.89 / 0.94 / 0.83 (0.89) &
 Boltzmann $T{=}0.04$, exact & raw final & 30.97 / 29.43 / 31.22 (30.54) & 0.85 / 0.87 / 0.85 (0.86) & 0.488 / 0.461 / 0.504 (0.484) & 0.058 / 0.051 / 0.050 (0.053) \\
 Boltzmann $T{=}0.04$, sampled & raw final & 32.90 / 32.01 / 31.40 (32.10) & 0.90 / 1.02 / 0.93 (0.95) & 0.464 / 0.434 / 0.449 (0.449) & 0.040 / 0.040 / 0.043 (0.041) \\
 Boltzmann $T{=}0.04$, one draw per caption, kept & raw final & 32.64 / 33.32 / 32.37 (32.78) & 0.89 / 0.98 / 0.90 (0.92) & 0.445 / 0.444 / 0.443 (0.444) & 0.052 / 0.039 / 0.047 (0.046) \\
+latent scorer, argmax & raw final & 33.09 / 31.08 / 31.66 (31.94) & 0.85 / 0.90 / 0.91 (0.89) & 0.507 / 0.429 / 0.449 (0.462) & 0.053 / 0.048 / 0.042 (0.048) \\
+latent scorer, Boltzmann $T{=}0.04$, exact & raw final & 31.79 / 31.60 / 31.23 (31.54) & 0.81 / 0.83 / 0.85 (0.83) & 0.512 / 0.492 / 0.497 (0.500) & 0.056 / 0.057 / 0.053 (0.055) \\
 \midrule
 random (fixed draw) & averaged & 30.58 / 30.45 / 30.24 (30.42) & 0.79 / 0.85 / 0.87 (0.84) & 0.507 / 0.474 / 0.457 (0.479) & 0.056 / 0.055 / 0.051 (0.054) \\
 argmax & averaged & 30.53 / 29.85 / 29.99 (30.12) & 0.83 / 0.80 / 0.77 (0.80) & 0.489 / 0.495 / 0.484 (0.489) & 0.062 / 0.067 / 0.070 (0.066) \\
 Boltzmann $T{=}0.04$, exact & averaged & 30.37 / 29.81 / 30.75 (30.31) & 0.79 / 0.80 / 0.79 (0.79) & 0.508 / 0.489 / 0.507 (0.501) & 0.066 / 0.069 / 0.059 (0.065) \\
 Boltzmann $T{=}0.04$, sampled & averaged & 29.83 / 30.21 / 30.86 (30.30) & 0.81 / 0.84 / 0.81 (0.82) & 0.484 / 0.457 / 0.486 (0.476) & 0.062 / 0.059 / 0.062 (0.061) \\
 Boltzmann $T{=}0.04$, one draw per caption, kept & averaged & 30.98 / 31.11 / 31.05 (31.05) & 0.84 / 0.81 / 0.84 (0.83) & 0.478 / 0.484 / 0.474 (0.479) & 0.062 / 0.066 / 0.061 (0.063) \\
+latent scorer, argmax & averaged & 31.01 / 29.84 / 30.71 (30.52) & 0.82 / 0.80 / 0.82 (0.81) & 0.495 / 0.475 / 0.485 (0.485) & 0.061 / 0.062 / 0.057 (0.060) \\
+latent scorer, Boltzmann $T{=}0.04$, exact & averaged & 30.23 / 30.68 / 30.47 (30.46) & 0.78 / 0.80 / 0.80 (0.79) & 0.512 / 0.493 / 0.509 (0.505) & 0.067 / 0.066 / 0.067 (0.067) \\
 \bottomrule
 \end{tabular}}
 \end{table}
@@ -787,8 +791,55 @@ batched against single rollout: max state difference, $\cos$ of gradients & 0, 0
 
 Three things follow. The candidate gradients of one caption are only weakly aligned (mean pairwise cosine 0.17 at the trained state), so the one-sample estimator carries a relative variance of order one: its noise power equals the signal power, and Adam's second moment is doubled. Under clipping its expected update is nearly parallel to the exact clipped update (cosine 0.99) but 25\% shorter, so the sampled arm takes systematically smaller steps in the same direction. And the $\Delta$ draw alone, which every arm resamples on every visit, produces gradient noise of the same order (relative squared difference 0.78 between two draws on the same trajectory), so candidate resampling roughly doubles a noise source that is already there rather than introducing a qualitatively new one. Batched and single rollouts give bit-identical states. The sampled estimator is therefore unbiased for the gradient of the weighted loss, and under clipping and AdamW it need not reproduce the exact estimator's optimisation; the measured differences are modest in direction and moderate in magnitude, which is consistent with the small residual gap after averaging and does not require contradictory targets to explain.
 
+\subsection{A decode-free latent scorer}
+\label{sec:latent}
+The scorer of Section~\ref{sec:scorers} needs a VAE decode and a DINOv2 pass per candidate. Both are cheap offline (Section~\ref{sec:cost}), but a scorer that reads the terminal latent directly would remove them and could later be used inside a training loop. A latent scorer was therefore built and tested as a separate design decision from the selection rule. It replaces only the candidate side of the score: a projector $P$ maps the terminal latent $z_K$ to the DINOv2 patch-mean space, and the score is the cosine to the reference photograph's unchanged DINO embedding,
+\begin{equation}
+\hat S_j=\big\langle P(z_K^{(j)}),\,u^{\mathrm{pat}}(x^{\mathrm{ref}})\big\rangle .
+\end{equation}
+$P$ is a five-stage convolutional network with global pooling and a two-layer head (6.8M parameters). It was trained on 22,000 captions of the 118k pool, none of them in the 3k pool, with the terminal latents of their four cached candidates re-rolled from the cached seeds (the recomputed RGB scores match the cache to 0.002), on a cosine loss to the candidate's DINO embedding plus a within-caption ranking term, $\mathrm{KL}\big(\mathrm{softmax}(S/\tau)\,\|\,\mathrm{softmax}(\hat S/\tau)\big)$ at $\tau=0.04$, and validated on 2,000 further held-out captions. Training took five minutes on one GPU. The best epoch was chosen by selection regret on the validation captions, and the 3k pool's candidates were then scored once, offline, so the distillation arms below differ from the RGB arms only in the cache field they rank by.
+
+\begin{table}[ht]
+\centering
+\caption{The latent scorer on the 3k pool, whose captions and photographs it never saw. Regret is the RGB DINO score of the RGB argmax minus that of the latent argmax; headroom is measured against the VQAScore best-of-four oracle as in Table~\ref{tab:headroom}.}
+\label{tab:latent_offline}
+\begin{tabular}{l c c}
+\toprule
+ & latent scorer & RGB DINOv2 patches \\
+\midrule
+top-1 agreement with the RGB argmax & 0.486 (chance 0.25) & 1 \\
+within-caption Spearman with the RGB score & 0.47 & 1 \\
+selection regret (RGB-score units; top-2 margin is 0.049) & 0.029 & 0 \\
+VQAScore of the pick (random 0.843, oracle 0.933) & 0.874 & 0.882 \\
+VQAScore headroom recovered & 34.0\% & 43.6\% \\
+top-1 agreement with the VQAScore oracle & 0.32 & 0.36 \\
+decode + scorer cost per caption & 0 & 61 + 32 ms \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{table}[ht]
+\centering
+\caption{Distillation with the latent scorer, 3k pool, three seeds, same configuration and trainer as Table~\ref{tab:selrule}. CompBench per seed and seed mean $\pm$ sd under both protocols; seed-paired contrasts after averaging.}
+\label{tab:latent_arms}
+\resizebox{\textwidth}{!}{%
+\begin{tabular}{l cc cc c c}
+\toprule
+ & \multicolumn{2}{c}{raw final} & \multicolumn{2}{c}{averaged} & \multicolumn{2}{c}{averaged, seed-paired} \\
+Rule & s0 / s1 / s2 & mean $\pm$ sd & s0 / s1 / s2 & mean $\pm$ sd & vs random & vs the RGB rule \\
+\midrule
+latent scorer, argmax & 0.4528 / 0.4701 / 0.4700 & 0.4643 $\pm$ 0.0100 & 0.4773 / 0.4877 / 0.4871 & 0.4840 $\pm$ 0.0059 & $+0.0103 \pm 0.0075$ & $-0.0033 \pm 0.0047$ \\
+latent scorer, Boltzmann $T{=}0.04$, exact & 0.4732 / 0.4747 / 0.4572 & 0.4684 $\pm$ 0.0097 & 0.4818 / 0.4874 / 0.4731 & 0.4807 $\pm$ 0.0072 & $+0.0070 \pm 0.0076$ & $-0.0032 \pm 0.0045$ \\
+RGB argmax (Table~\ref{tab:selrule}) & 0.4690 / 0.4591 / 0.4825 & 0.4702 $\pm$ 0.0118 & 0.4849 / 0.4861 / 0.4909 & 0.4873 $\pm$ 0.0032 & $+0.0135 \pm 0.0042$ & -- \\
+RGB Boltzmann $T{=}0.04$, exact & 0.4714 / 0.4709 / 0.4684 & 0.4703 $\pm$ 0.0016 & 0.4855 / 0.4859 / 0.4805 & 0.4840 $\pm$ 0.0030 & $+0.0102 \pm 0.0031$ & -- \\
+\bottomrule
+\end{tabular}}
+\end{table}
+
+Table~\ref{tab:latent_arms} gives the distillation result. With the latent scorer, argmax selection is $+0.0103\pm0.0075$ CompBench over random after averaging and $0.0033\pm0.0047$ below RGB argmax; exact Boltzmann weighting is $+0.0070\pm0.0076$ over random and $0.0032\pm0.0045$ below its RGB counterpart, and as before it is not better than argmax. Neither latent arm is distinguishable from its RGB counterpart at three seeds, and the point estimates sit at about three quarters of the RGB gain, which is the fraction of the RGB scorer's offline headroom the projector recovers. Fidelity follows the same pattern (Table~\ref{tab:selfid}): after averaging, CMMD is 0.81 for latent argmax against 0.80 for RGB argmax and 0.79 for both exact arms, with seed-paired differences of $+0.013\pm0.032$ and $0.000\pm0.010$, and precision and recall within 0.006. One property of the projector matters for any use beyond offline selection: it was fitted to rank frozen-teacher candidates, and on the students' own 4-step samples its agreement with the RGB scorer drops (top-1 0.37, Spearman 0.22, against 0.51 and 0.46 on teacher candidates; the students' samples are also half as spread across seeds, 0.042 against 0.078), and fine-tuning it on 1,000 student latents does not restore it. It is a scorer of the teacher's candidate distribution. A scorer that reads the terminal latent therefore carries most of the selection signal at no decode cost, with a projector that trains in minutes; how much of the remaining quarter a larger projector, more training captions or a multi-scale readout would recover was not tested, and the same reference photograph is still required, since only the candidate side of the score moved into latent space.
+
 \subsection{What the evidence supports}
-The practical choice is settled: argmax selection, stored once, is the best rule tested and the cheapest. Exact soft weighting at $T\le0.08$ is not detectably better and costs 2.3 times the compute; softer rules and uniform weighting are worse or level with random. The explanation of why per-visit resampling underperforms is only partly settled. Its raw-checkpoint deficit is largely final-iterate noise, which checkpoint averaging removes; the remainder is of the size the clipping and second-moment effects measured above can produce, and the fixed-versus-resampled controls do not isolate a persistence effect from optimization variance and candidate coverage in this short-training regime. Separating them would take the same-caption Monte-Carlo estimator (which halves or quarters the sampling variance at single-caption compute) and more seeds; neither was run because the practical conclusion does not depend on it. A decode-free scorer that ranks candidates in latent space is a separate question that these results do not touch; it would be judged by its selection regret against the DINOv2 ranking, and the cost measurements of Section~\ref{sec:cost} (decoding and scoring are under 10\% of the selection pipeline, and the pipeline is offline) put it low on the list.
+The practical choice is settled: argmax selection, stored once, is the best rule tested and the cheapest. Exact soft weighting at $T\le0.08$ is not detectably better and costs 2.3 times the compute; softer rules and uniform weighting are worse or level with random. The explanation of why per-visit resampling underperforms is only partly settled. Its raw-checkpoint deficit is largely final-iterate noise, which checkpoint averaging removes; the remainder is of the size the clipping and second-moment effects measured above can produce, and the fixed-versus-resampled controls do not isolate a persistence effect from optimization variance and candidate coverage in this short-training regime. Separating them would take the same-caption Monte-Carlo estimator (which halves or quarters the sampling variance at single-caption compute) and more seeds; neither was run because the practical conclusion does not depend on it. A decode-free scorer that ranks candidates in latent space is a separate design decision from the selection rule, and Section~\ref{sec:latent} measures it: a small projector on the terminal latent recovers about three quarters of the RGB scorer's selection value offline and in trained students, at no decode cost; since decoding and scoring are under 10\% of the offline selection pipeline (Section~\ref{sec:cost}), its value is as a scorer that could run inside a training loop rather than as a saving.
 
 \clearpage
 \section{Ablations}
@@ -893,7 +944,7 @@ Figures~\ref{fig:qual_cb} and~\ref{fig:qual_ge} show prompts on which the scored
 \clearpage
 \section{Cost}
 \label{sec:cost}
-Per training caption the candidate pool costs 64 teacher forward passes (4 candidates, 8 steps, two guidance branches), four VAE decodes and five DINOv2 forward passes. Measured on one H100 at $512\times512$, generation takes 789 ms per caption, the four decodes 61 ms, DINOv2 scoring 32 ms, CLIP-I 48 ms and VQAScore 280 ms. End to end, DINOv2 selection costs 0.95 s per caption and VQAScore selection 1.19 s; candidate generation dominates and no scorer avoids it. Training costs 16 teacher passes and five student forward-backward passes per caption. A 3k run takes 1.6 hours on one H200; the 118k run takes 12.5 hours on four H200s. The DINOv2 scorer needs no text model and no large VLM at selection time, which is its practical advantage over VQAScore, ImageReward and PickScore. The exact Boltzmann arm of Section~\ref{sec:selrule}, which rolls out and trains on all four candidates, takes 2.6 s per update against 1.15 s for the single-candidate trainer (3.5 h against 1.2 h for a 3k run) for no detected gain over argmax.
+Per training caption the candidate pool costs 64 teacher forward passes (4 candidates, 8 steps, two guidance branches), four VAE decodes and five DINOv2 forward passes. Measured on one H100 at $512\times512$, generation takes 789 ms per caption, the four decodes 61 ms, DINOv2 scoring 32 ms, CLIP-I 48 ms and VQAScore 280 ms. End to end, DINOv2 selection costs 0.95 s per caption and VQAScore selection 1.19 s; candidate generation dominates and no scorer avoids it. Training costs 16 teacher passes and five student forward-backward passes per caption. A 3k run takes 1.6 hours on one H200; the 118k run takes 12.5 hours on four H200s. The DINOv2 scorer needs no text model and no large VLM at selection time, which is its practical advantage over VQAScore, ImageReward and PickScore. The exact Boltzmann arm of Section~\ref{sec:selrule}, which rolls out and trains on all four candidates, takes 2.6 s per update against 1.15 s for the single-candidate trainer (3.5 h against 1.2 h for a 3k run) for no detected gain over argmax. The latent scorer of Section~\ref{sec:latent} removes the decode and the DINO pass on the candidate (93 ms of the 950 ms per caption) at the price of a 24k-caption latent set (about 7 GPU-hours to generate) and a five-minute projector training.
 
 \section{Design choices}
 \begin{itemize}
@@ -909,7 +960,7 @@ Per training caption the candidate pool costs 64 teacher forward passes (4 candi
 
 \section{Limitations}
 \begin{itemize}
-\item \textbf{The scorer needs a reference photograph.} DINOv2 selection is only possible where each caption has a real image. It cannot be applied to synthetic prompt sets without one.
+\item \textbf{The scorer needs a reference photograph.} DINOv2 selection, and the latent scorer distilled from it, are only possible where each caption has a real image. They cannot be applied to synthetic prompt sets without one.
 \item \textbf{Grids do not nest.} The 4-step inference grid shares only its endpoints with the 8-step training grid, so the student is deployed at $\sigma=0.858$ and $0.602$, which it never saw as training inputs, and is never trained at $\sigma=0.009$ (the last step is scaled by 0.009 and is immaterial). Grids with $K\in\{7,10,13,16,\dots\}$ nest exactly; this was not used here.
 \item \textbf{Duplicate student inputs.} With five independent $\Delta_k$ draws, 81\% of updates contain at least one repeated input state and the expected number of distinct inputs is 3.9 of 5. This does not change the objective, only its variance, and wastes about 22\% of student passes.
 \item \textbf{Seeds.} Every headline number is three training seeds. The single-seed contrasts (the VQAScore arm at 118k, the batch-size row, the evolving-teacher runs) are marked as such and resolve about 0.01 CompBench.
@@ -921,7 +972,7 @@ Per training caption the candidate pool costs 64 teacher forward passes (4 candi
 \end{itemize}
 
 \section{Reproducibility}
-The release code is the \texttt{scored-consistency-distillation} branch of the project repository. It contains the pool builder, the candidate scorer, the trainer with the \texttt{random}, \texttt{dino\_patch}, \texttt{boltzmann}, \texttt{boltzmann\_sample}, \texttt{boltzmann\_frozen}, \texttt{boltzmann\_mc} and \texttt{uniform\_visit} selectors, gradient accumulation, the gradient diagnostic, the checkpoint averager, the evaluation scripts (CompBench with the one- and ten-image protocols, GenEval2, COCO VQAScore, FID, reference CMMD, precision and recall), the figure script and the LSF launch scripts. The release trainer was verified to be bit-identical to the experimental trainer that produced every number in this document, on all 909 parameter tensors after six optimizer updates under deterministic kernels, for every selector and for gradient accumulation, with an original-versus-original control at exactly zero. Every evaluation writes a pinned record with evaluator commits, package versions, pool hashes and the checkpoint hash, and fails hard on missing images. Training runs log per-state losses, selection statistics, throughput, sample grids and a source snapshot to Weights \& Biases.
+The release code is the \texttt{scored-consistency-distillation} branch of the project repository. It contains the pool builder, the candidate scorer, the trainer with the \texttt{random}, \texttt{dino\_patch}, \texttt{boltzmann}, \texttt{boltzmann\_sample}, \texttt{boltzmann\_frozen}, \texttt{boltzmann\_mc} and \texttt{uniform\_visit} selectors, gradient accumulation, the gradient diagnostic, the latent scorer (latent generation, projector training, the \texttt{latent} selector), the checkpoint averager, the evaluation scripts (CompBench with the one- and ten-image protocols, GenEval2, COCO VQAScore, FID, reference CMMD, precision and recall), the figure script and the LSF launch scripts. The release trainer was verified to be bit-identical to the experimental trainer that produced every number in this document, on all 909 parameter tensors after six optimizer updates under deterministic kernels, for every selector and for gradient accumulation, with an original-versus-original control at exactly zero. Every evaluation writes a pinned record with evaluator commits, package versions, pool hashes and the checkpoint hash, and fails hard on missing images. Training runs log per-state losses, selection statistics, throughput, sample grids and a source snapshot to Weights \& Biases.
 
 \begin{thebibliography}{9}
 \bibitem{sd3} P. Esser et al. Scaling rectified flow transformers for high-resolution image synthesis. ICML 2024.

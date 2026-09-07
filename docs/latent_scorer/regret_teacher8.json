@@ -1,0 +1,56 @@
+{
+ "ckpt": "teacher8",
+ "n_captions": 500,
+ "n_seeds": 4,
+ "frozen": {
+  "top1_agree": 0.5059999823570251,
+  "spearman": 0.4552,
+  "regret_rgb": 0.02706078253686428,
+  "rgb_of_proj_pick": 0.5651895999908447,
+  "rgb_of_rgb_pick": 0.5922503471374512,
+  "rgb_of_random_pick": 0.5108247399330139,
+  "rgb_mean": 0.5109439492225647,
+  "within_std": 0.07777757942676544,
+  "emb_cos": 0.5557132363319397
+ },
+ "frozen_on_test_half": {
+  "top1_agree": 0.48399999737739563,
+  "spearman": 0.46,
+  "regret_rgb": 0.02787698246538639,
+  "rgb_of_proj_pick": 0.5635186433792114,
+  "rgb_of_rgb_pick": 0.5913956165313721,
+  "rgb_of_random_pick": 0.5111381411552429,
+  "rgb_mean": 0.5130771398544312,
+  "within_std": 0.07463520765304565
+ },
+ "finetuned_on_test_half": {
+  "top1_agree": 0.46000000834465027,
+  "spearman": 0.43679999999999997,
+  "regret_rgb": 0.03249816223978996,
+  "rgb_of_proj_pick": 0.5588974356651306,
+  "rgb_of_rgb_pick": 0.5913956165313721,
+  "rgb_of_random_pick": 0.5089908838272095,
+  "rgb_mean": 0.5130771398544312,
+  "within_std": 0.07463520765304565
+ },
+ "teacher_candidates_frozen": {
+  "top1_agree": 0.48399999737739563,
+  "spearman": 0.452,
+  "regret_rgb": 0.030369136482477188,
+  "rgb_of_proj_pick": 0.5654363632202148,
+  "rgb_of_rgb_pick": 0.5958054661750793,
+  "rgb_of_random_pick": 0.5193853974342346,
+  "rgb_mean": 0.5175192356109619,
+  "within_std": 0.07653656601905823
+ },
+ "teacher_candidates_finetuned": {
+  "top1_agree": 0.47200000286102295,
+  "spearman": 0.42679999999999996,
+  "regret_rgb": 0.03126911818981171,
+  "rgb_of_proj_pick": 0.5645363926887512,
+  "rgb_of_rgb_pick": 0.5958054661750793,
+  "rgb_of_random_pick": 0.5204686522483826,
+  "rgb_mean": 0.5175192356109619,
+  "within_std": 0.07653656601905823
+ }
+}

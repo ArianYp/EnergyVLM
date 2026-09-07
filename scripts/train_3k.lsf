@@ -32,7 +32,7 @@ source scripts/env.sh
 #   SELECTOR=boltzmann_mc TEMP=0.04 MCD=4      four draws per visit, count-weighted losses
 # The boltzmann runs roll out and train on all four candidates (about 3.5 h instead of 1.2 h).
 
-: "${SELECTOR:?set SELECTOR (random | dino_patch | boltzmann | boltzmann_sample | boltzmann_frozen | boltzmann_mc | uniform_visit)}"
+: "${SELECTOR:?set SELECTOR (random | dino_patch | latent | boltzmann | boltzmann_sample | boltzmann_frozen | boltzmann_mc | uniform_visit)}"
 SEED=${SEED:-0}
 CACHE=${CACHE:-cache/train_3k}
 STEPS=${STEPS:-6000}
@@ -41,15 +41,16 @@ WARMUP=${WARMUP:-300}
 TEMP=${TEMP:-0.04}
 MAP_SEED=${MAP_SEED:-1000003}
 MCD=${MCD:-4}
+SCORE_FIELD=${SCORE_FIELD:-dino_patch_cos}
 RUN="${SELECTOR}"
-case "$SELECTOR" in boltzmann*) RUN="${RUN}-T${TEMP}";; esac
+case "$SELECTOR" in boltzmann*) RUN="${RUN}-T${TEMP}"; [ "$SCORE_FIELD" != "dino_patch_cos" ] && RUN="${RUN}-${SCORE_FIELD%_cos}";; esac
 RUN="${RUN}_3k_s${SEED}"
 mkdir -p checkpoints logs
 echo "selector=$SELECTOR seed=$SEED captions=$(cat "$CACHE"/selection_rank*.jsonl | wc -l) gpus=1 steps=$STEPS lr=$LR warmup=$WARMUP temp=$TEMP"
 
 torchrun --standalone --nproc-per-node=1 train/distill.py \
   --selector "$SELECTOR" --cache_dir "$CACHE" --output_dir "checkpoints/$RUN" \
-  --seed "$SEED" --num_steps "$STEPS" --num_warmup_steps "$WARMUP" --lr "$LR" --temp "$TEMP" --map_seed "$MAP_SEED" --mc_draws "$MCD" \
+  --seed "$SEED" --num_steps "$STEPS" --num_warmup_steps "$WARMUP" --lr "$LR" --temp "$TEMP" --map_seed "$MAP_SEED" --mc_draws "$MCD" --score_field "$SCORE_FIELD" \
   --K 8 --cfg 7.0 --window 0.4,0.9 --delta_min 1 --delta_max 3 --height 512 \
   --gradient_checkpointing --save_every 2000 --log_every 10 \
   --sample_every "${SAMPLE_EVERY:-0}" --sample_prompts "${SAMPLE_PROMPTS:-pools/sample_prompts.json}" \

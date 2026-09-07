@@ -22,6 +22,7 @@ Three more selectors exist for the selection-rule ablation of the report (`--tem
 | `boltzmann_frozen` | one softmax(S/T) draw per caption (`--map_seed`), fixed for the run | 0.002 below `dino_patch` after averaging; 0.003 above `boltzmann_sample` |
 | `boltzmann_mc` | `--mc_draws` iid draws per visit, losses weighted by count / draws | same expected gradient as `boltzmann_sample`, variance / draws; implemented, not run |
 | `uniform_visit` | one uniform draw on every visit (vs `random`, which draws once per caption) | level with `random` after averaging |
+| `latent` | argmax of `latent_cos`: a 6.8M-parameter projector from the terminal latent into DINO space, scored against the photograph, no decode (`data/build_latents.py`, `train/latent_scorer.py`) | recovers ~3/4 of the `dino_patch` gain (offline headroom 34% vs 44%; trained +0.010 vs +0.014 over random, 3 seeds); `boltzmann --score_field latent_cos` behaves the same |
 
 ## Layout
 
