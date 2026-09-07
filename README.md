@@ -17,9 +17,11 @@ Three more selectors exist for the selection-rule ablation of the report (`--tem
 
 | selector | what it trains on | verdict |
 |---|---|---|
-| `boltzmann` | all four candidates, each loss weighted by softmax(S/T); 4 rollouts + 4 student passes per caption | ties `dino_patch` at T=0.04 and 0.08 for 2.3x the compute |
-| `boltzmann_sample` | one candidate drawn from softmax(S/T) on every visit | loses 0.014 to `dino_patch` through target churn |
-| `uniform_visit` | one uniform draw on every visit (vs `random`, which draws once per caption) | 0.008 below `random`: a changing target costs more than a worse one |
+| `boltzmann` | all four candidates, each loss weighted by softmax(S/T); 4 rollouts + 4 student passes per caption | no detected improvement over `dino_patch` at T=0.04 or 0.08, 2.3x the compute |
+| `boltzmann_sample` | one candidate drawn from softmax(S/T) on every visit | 0.004 below `dino_patch` after checkpoint averaging (0.014 on raw finals: final-iterate noise) |
+| `boltzmann_frozen` | one softmax(S/T) draw per caption (`--map_seed`), fixed for the run | 0.002 below `dino_patch` after averaging; 0.003 above `boltzmann_sample` |
+| `boltzmann_mc` | `--mc_draws` iid draws per visit, losses weighted by count / draws | same expected gradient as `boltzmann_sample`, variance / draws; implemented, not run |
+| `uniform_visit` | one uniform draw on every visit (vs `random`, which draws once per caption) | level with `random` after averaging |
 
 ## Layout
 
@@ -29,7 +31,8 @@ data/        build_pool.py       training captions paired with their photographs
              build_eval_pool.py  T2I-CompBench, GenEval2 and COCO-val prompt pools
              build_candidates.py the candidate cache: 4 trajectories per caption, scored
 train/       distill.py          the trainer (--selector random | dino_patch | boltzmann |
-                                 boltzmann_sample | uniform_visit; --accum for larger batches)
+                                 boltzmann_sample | boltzmann_frozen | boltzmann_mc |
+                                 uniform_visit; --accum for larger batches)
              average_checkpoints.py  uniform average of the last checkpoints of a run
 eval/        generate.py         sample a model on a prompt pool (paired noise per prompt)
              compbench.py        T2I-CompBench with the official evaluators
@@ -152,12 +155,19 @@ The scorer reads no text. Selection costs nothing at inference and does not cost
 scored student has lower CMMD and higher precision and recall than the random-selection student on
 every seed in both settings. What the ablations established:
 
-- **Selection rule.** Exact Boltzmann weighting of all four candidates ties argmax at T=0.04 and
-  T=0.08 (+0.0204 / +0.0190 vs +0.0203 over random, 3k pool, three seeds) at 2.3x the compute;
-  uniform weighting of all four is worth only +0.006, so the gain is the weighting, not the extra
-  trajectories. Sampling one candidate per visit from the same weights loses 0.014 to the exact
-  objective, and a uniform redraw per visit is 0.008 *below* a fixed random draw: target churn,
-  not the softer tilt, is what soft selection pays for. Argmax is the recipe.
+- **Selection rule** (3k pool, three seeds, every arm evaluated on its raw final checkpoint and on
+  the average of its 2k/4k/6k checkpoints, uncertainty at the level of training runs). Argmax over
+  random is the one contrast established at seed level (+0.0203 +- 0.0008 raw, +0.0135 +- 0.0042
+  averaged). Exact Boltzmann weighting of all four candidates shows no detected improvement over
+  argmax at T=0.04 or 0.08 and costs 2.3x; uniform weighting is level with random, so the weighting
+  toward the best candidate is what matters. Sampling one candidate per visit from the same weights
+  is 0.014 below argmax on raw finals but 0.004 after averaging (the resampled arm's final iterate
+  is four times noisier across seeds), and a uniform redraw per visit is level with a fixed draw
+  after averaging; a frozen per-caption draw is 0.003 above the resampled arm. A gradient
+  diagnostic on held-out captions shows why the estimators can differ under clipping and AdamW
+  (candidate gradients nearly orthogonal, one-sample relative variance ~1, clipped one-sample
+  update 25% shorter and parallel). Argmax is the recipe; "target churn" is not established as a
+  separate mechanism.
 - **Batch size.** Accumulating to 16 captions per update at the same data budget leaves the gap
   unchanged (+0.0221 vs +0.0223, seed 0) and lifts both arms by +0.005.
 - **Candidates.** Eight candidates instead of four: +0.001 (null), although the offline headroom

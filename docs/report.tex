@@ -20,7 +20,7 @@
 \maketitle
 
 \begin{abstract}
-We distil Stable Diffusion 3.5 Medium into a 4-step student with consistency distillation. For every training caption the frozen teacher generates four candidate trajectories from four seeds. A scorer picks one of the four, and the student is trained on that trajectory only. The baseline picks at random. The main scorer is the cosine similarity between DINOv2 mean-pooled patch features of the candidate image and of the real photograph that the caption describes. It uses no text model. On 3,000 COCO captions, three seeds, and 6,000 updates, this selection improves T2I-CompBench by $+0.014$ and GenEval2 by $+2.2$ points over random selection, with 95\% bootstrap intervals that exclude zero, and does not cost fidelity. At 118k captions and 57k updates, three training seeds, with weight averaging of the last five checkpoints, the gain is $+0.0175$ CompBench ($p=10^{-14}$) and $+1.3$ GenEval2; it is $+0.013$ under the official ten-images-per-prompt CompBench protocol ($p=10^{-41}$), and the scored student has better CMMD, precision and recall on every seed. The gain is unchanged by the optimizer batch size, does not grow with eight candidates instead of four, and vanishes with a stronger teacher. Argmax is the right selection rule: exact Boltzmann weighting of all four candidates ties it at 2.3 times the compute, and drawing one candidate from the same weights loses most of the gain through target churn. The same pipeline with VQAScore as the scorer gives similar gains but shares a model family with the evaluators. This document gives the full recipe: data, model, scorers, loss, hyperparameters, evaluation protocol, results, ablations and qualitative examples.
+We distil Stable Diffusion 3.5 Medium into a 4-step student with consistency distillation. For every training caption the frozen teacher generates four candidate trajectories from four seeds. A scorer picks one of the four, and the student is trained on that trajectory only. The baseline picks at random. The main scorer is the cosine similarity between DINOv2 mean-pooled patch features of the candidate image and of the real photograph that the caption describes. It uses no text model. On 3,000 COCO captions, three seeds, and 6,000 updates, this selection improves T2I-CompBench by $+0.014$ and GenEval2 by $+2.2$ points over random selection, with 95\% bootstrap intervals that exclude zero, and does not cost fidelity. At 118k captions and 57k updates, three training seeds, with weight averaging of the last five checkpoints, the gain is $+0.0175$ CompBench ($p=10^{-14}$) and $+1.3$ GenEval2; it is $+0.013$ under the official ten-images-per-prompt CompBench protocol ($p=10^{-41}$), and the scored student has better CMMD, precision and recall on every seed. The gain is unchanged by the optimizer batch size, does not grow with eight candidates instead of four, and vanishes with a stronger teacher. Argmax is the selection rule to use: exact Boltzmann weighting of all four candidates shows no detected improvement over it at 2.3 times the compute, softer weightings are worse, and drawing one candidate per visit from the same weights matches exact weighting once checkpoints are averaged. The same pipeline with VQAScore as the scorer gives similar gains but shares a model family with the evaluators. This document gives the full recipe: data, model, scorers, loss, hyperparameters, evaluation protocol, results, ablations and qualitative examples.
 \end{abstract}
 
 \tableofcontents
@@ -141,7 +141,7 @@ A scorer assigns a number $S_j$ to each candidate. Selection is hard:
 \begin{equation}
 j^\star=\argmax_{j\in\{1,\dots,4\}}S_j.
 \end{equation}
-The index $j^\star$ is computed once, offline, and stored in a manifest keyed by caption. No gradient ever flows through a scorer. Section~\ref{sec:selrule} compares this rule with Boltzmann-weighted and sampled selection; argmax is the best of them. The random baseline replaces $j^\star$ by a uniform draw that is also stored in the manifest and is therefore identical across training seeds.
+The index $j^\star$ is computed once, offline, and stored in a manifest keyed by caption. No gradient ever flows through a scorer. Section~\ref{sec:selrule} compares this rule with Boltzmann-weighted and sampled selection; none of them is detectably better than argmax. The random baseline replaces $j^\star$ by a uniform draw that is also stored in the manifest and is therefore identical across training seeds.
 
 \subsection{DINOv2 mean-pooled patches (main scorer)}
 We use DINOv2-B (\texttt{facebook/dinov2-base}, $d=768$) with its standard preprocessing: resize the short side to 256, centre-crop to $224\times224$, ImageNet normalisation. The model returns one CLS token and $P=256$ patch tokens $h_1,\dots,h_P$ (a $16\times16$ grid, patch size 14). We drop the CLS token, average the patch tokens and normalise:
@@ -575,20 +575,20 @@ Argmax selection is one point on a family of rules. The natural alternative weig
 \begin{equation}
 \pi_j=\frac{\exp(S_j/T)}{\sum_{l=1}^{4}\exp(S_l/T)},
 \end{equation}
-which recovers argmax as $T\to0$ and uniform weighting as $T\to\infty$. Two estimators of the weighted objective $\sum_j\pi_j\mathcal{L}_j$ were trained, and they differ in cost. \emph{Exact} weighting rolls out all four candidates and back-propagates each candidate's loss with weight $\pi_j$: four teacher rollouts and four student passes per caption, 2.3 times the wall-clock of the single-candidate trainer, at the same peak memory because candidates are back-propagated one at a time. \emph{Sampled} weighting draws one candidate from $\pi$ on every visit of the caption and trains on it alone, at single-candidate cost. The sampled estimator has the same expected gradient but a different target on each visit. Two controls complete the design: the random baseline, which draws once per caption and keeps that draw, and a \emph{uniform-visit} arm that draws uniformly on every visit, which isolates target persistence from label quality.
+which recovers argmax as $T\to0$ and uniform weighting as $T\to\infty$. Two estimators of the weighted objective $\sum_j\pi_j\mathcal{L}_j$ were trained. \emph{Exact} weighting rolls out all four candidates and back-propagates each candidate's loss with weight $\pi_j$: four teacher rollouts and four student passes per caption, 2.3 times the wall-clock of the single-candidate trainer (3.5 h against 1.2 h per 3k run on one H200), at the same peak memory because candidates are back-propagated one at a time. \emph{Sampled} weighting draws one candidate $J\sim\pi$ on every visit of the caption and trains on it alone at single-candidate cost. Every candidate is evaluated at its own trajectory, so neither estimator regresses onto an averaged target; the two have the same expected gradient, $\mathbb{E}[g_J]=\sum_j\pi_jg_j=g_F$, but not the same optimizer update (Section~\ref{sec:graddiag}). Three controls complete the design: the random baseline, which draws one candidate per caption uniformly and keeps it; a \emph{uniform-visit} arm that redraws uniformly on every visit; and a \emph{frozen} Boltzmann arm that draws $J_c\sim\pi_c$ once per caption and keeps it, which has the sampled arm's selection distribution without per-visit resampling. A same-caption Monte-Carlo estimator ($M$ independent draws per visit, losses weighted by their counts, one clipped step) is implemented in the release code and was not run.
 
 \subsection{Selection entropy and effective sample size}
-The temperature is calibrated on the scores themselves. Figure~\ref{fig:entropy} and Table~\ref{tab:scorestats} summarise the DINOv2 patch score over the four candidates of a caption. Within a caption the scores have a standard deviation of 0.070 (range 0.18, margin between the best and the second-best candidate 0.05); between captions the mean score varies twice as much (0.14), which is why scores are only ever compared within a caption. The selection distribution of a caption is characterised by its normalised entropy $H(\pi)/\log 4$ and its effective sample size $\mathrm{ESS}=\exp H(\pi)$. At $T=0.04$ the median ESS is 2.5 (mean entropy 0.62, mean weight of the argmax candidate 0.63); at $T=0.08$ it is 3.3 (entropy 0.82). The 3k and 118k pools have the same statistics, so a temperature calibrated on one transfers to the other. Stronger teachers compress the candidates: on the 16-step $w=4.5$ and 28-step caches the within-caption spread almost halves (0.041 and 0.038) and the entropy at a fixed temperature rises (0.75 and 0.76 at $T=0.04$). This is the offline face of the vanishing selection gain of Section~\ref{sec:k28}.
+The temperature is calibrated on the scores themselves. Figure~\ref{fig:entropy} and Table~\ref{tab:scorestats} summarise the DINOv2 patch score over the four candidates of a caption. Within a caption the scores have a standard deviation of 0.070 (range 0.18, margin between the best and the second-best candidate 0.05); between captions the mean score varies twice as much (0.14), which is why scores are only ever compared within a caption. Two effective-count summaries of the weights are used and they are not interchangeable: the entropy count $N_H=\exp H(\pi)$ and the Kish count $N_K=1/\sum_j\pi_j^2$. At $T=0.04$ the median $N_H$ is 2.5 and the median $N_K$ is 2.2, with a mean argmax weight of 0.63; at $T=0.08$ they are 3.3 and 3.0. The Kish count is the one tied to resampling: the probability that two independent visits train on different candidates is $1-\sum_j\pi_j^2=1-1/N_K$, 0.49 at $T=0.04$ and 0.63 at $T=0.08$, and in the two visits per caption of the 3k configuration the sampled arm sees on average 1.48 (1.63) distinct candidates of the four that the exact arm sees on every visit. The 3k and 118k pools have the same statistics, so a temperature calibrated on one transfers to the other. Stronger teachers compress the candidates: on the 16-step $w=4.5$ and 28-step caches the within-caption spread almost halves (0.041 and 0.038) and the entropy at a fixed temperature rises (0.75 and 0.76 at $T=0.04$). This is the offline face of the vanishing selection gain of Section~\ref{sec:k28}.
 
 \begin{table}[ht]
 \centering
-\caption{DINOv2 patch score statistics per candidate cache ($N=4$): within-caption standard deviation, mean range, mean margin between the two best candidates, and the mean normalised entropy and median effective sample size of the Boltzmann weights at the two temperatures used in training.}
+\caption{DINOv2 patch score statistics per candidate cache ($N=4$): within-caption standard deviation, mean range, mean margin between the two best candidates, and the mean normalised entropy and median entropy count $N_H$ of the Boltzmann weights at the two temperatures used in training. On the 3k cache the median Kish count $N_K$ is 2.2 at $T=0.04$ and 3.0 at $T=0.08$.}
 \label{tab:scorestats}
 \resizebox{\textwidth}{!}{%
 \begin{tabular}{l r c c c cc cc}
 \toprule
  & & & & & \multicolumn{2}{c}{$T=0.04$} & \multicolumn{2}{c}{$T=0.08$} \\
-Cache (teacher) & captions & within std & range & top-2 margin & entropy & ESS & entropy & ESS \\
+Cache (teacher) & captions & within std & range & top-2 margin & entropy & $N_H$ & entropy & $N_H$ \\
 \midrule
 3k, 8 steps, $w=7$ & 3,000 & 0.069 & 0.175 & 0.049 & 0.63 & 2.54 & 0.82 & 3.33 \\
 118k, 8 steps, $w=7$ & 113,948 & 0.070 & 0.179 & 0.051 & 0.62 & 2.52 & 0.81 & 3.32 \\
@@ -601,52 +601,194 @@ Cache (teacher) & captions & within std & range & top-2 margin & entropy & ESS &
 \begin{figure}[ht]
 \centering
 \includegraphics[width=\textwidth]{figs/score_entropy.pdf}
-\caption{Left: distribution over captions of the normalised selection entropy at three temperatures (118k pool). Middle: within-caption spread of the DINOv2 patch score for the four caches; stronger teachers leave less to select on. Right: median effective sample size of the Boltzmann weights as a function of temperature; the two temperatures used in training are marked.}
+\caption{Left: distribution over captions of the normalised selection entropy at three temperatures (118k pool). Middle: within-caption spread of the DINOv2 patch score for the four caches; stronger teachers leave less to select on. Right: median entropy count $N_H$ of the Boltzmann weights as a function of temperature; the two temperatures used in training are marked.}
 \label{fig:entropy}
 \end{figure}
 
+\subsection{Protocol and statistics}
+\label{sec:selstats}
+All arms were trained on the 3k pool with the 3k configuration, three seeds each, from one frozen copy of the trainer; the random and argmax arms were retrained alongside the new ones so that every contrast is a one-factor change. Their absolute level is 0.008 below the earlier runs of Table~\ref{tab:main3k} (a different launch, within the seed spread), so contrasts are read within this section. Every arm is evaluated under two protocols: the raw final checkpoint, and the uniform average of the checkpoints saved at 2,000, 4,000 and 6,000 updates, applied with the same rule to every arm. The averaging is the 3k analogue of the last-five average that the 118k results require (Section~\ref{sec:averaging}); it raises every arm by 0.014 to 0.027 CompBench, and it matters for the comparison below because arms differ in how much their final iterate wanders.
+
+Uncertainty is reported at the level of training runs. For a contrast between arms A and B the three seed-paired differences (seed $s$ of A minus seed $s$ of B; at equal seed the arms share the caption order and the $\Delta$ draws) give a mean, a standard deviation, a 95\% $t$-interval and a one-sample $t$-test with two degrees of freedom. Three seeds resolve a difference of about 0.01 CompBench and nothing on GenEval2, whose seed spread is 1 to 2 points. The prompt-level $p$-values of the paired tests used elsewhere in this document describe uncertainty over prompts for the seed-mean model, not over repeated training, and are not used to compare selection rules. A non-significant contrast is reported as ``no detected improvement''; none of the tests here is an equivalence test.
+
 \subsection{Result}
-All eight arms of Table~\ref{tab:selrule} were trained on the 3k pool with the 3k configuration, three seeds each, from one frozen copy of the trainer, so every contrast in the table is a one-factor change. The random and argmax arms were retrained alongside the new ones. Their absolute level is 0.008 below the earlier runs of Table~\ref{tab:main3k} (a different launch, three seeds each, within the seed spread of 0.011), and the argmax gain replicates at $+0.0203$; contrasts should be read within this table.
+Tables~\ref{tab:selrule} to~\ref{tab:selcontrasts_avg} and Figure~\ref{fig:selrule} give the result.
 
 \begin{table}[ht]
 \centering
-\caption{Selection rule, 3k pool, three seeds. CompBench and GenEval2$\times100$ seed means; paired deltas against the random baseline and against argmax. \emph{exact}: every candidate's loss weighted by $\pi_j$. \emph{sampled}: one draw from $\pi$ per visit. ESS is the median effective sample size of the weights.}
+\caption{Selection rule, 3k pool, three seeds. CompBench per seed (s0 / s1 / s2) and mean $\pm$ standard deviation over seeds, for the raw final checkpoint and for the uniform average of the checkpoints at 2k, 4k and 6k updates; GenEval2$\times100$ seed means under both protocols; GPU-hours per training run on one H200. \emph{exact}: every candidate's loss weighted by $\pi_j$; \emph{sampled}: one draw from $\pi$ per visit; \emph{kept}: one draw from $\pi$ per caption, fixed for the run.}
 \label{tab:selrule}
 \resizebox{\textwidth}{!}{%
-\begin{tabular}{l l c c c c c c}
+\begin{tabular}{l cc cc cc c}
 \toprule
-Rule & Estimator & ESS & CompBench & $\Delta$ vs random ($p$) & $\Delta$ vs argmax ($p$) & GenEval2 & $\Delta$ vs random ($p$) \\
+ & \multicolumn{2}{c}{CompBench, raw final} & \multicolumn{2}{c}{CompBench, averaged} & \multicolumn{2}{c}{GenEval2} & \\
+Rule & s0 / s1 / s2 & mean $\pm$ sd & s0 / s1 / s2 & mean $\pm$ sd & raw & avg. & GPU-h \\
 \midrule
-random (fixed draw) & -- & 1 & 0.4499 & -- & $-0.0203$ ($2\times10^{-17}$) & 21.12 & -- \\
-argmax & -- & 1 & \textbf{0.4702} & $+0.0203$ ($2\times10^{-17}$) & -- & 22.46 & $+1.35$ (0.014) \\
+random (fixed draw) & 0.4491 / 0.4393 / 0.4612 & 0.4499 $\pm$ 0.0110 & 0.4756 / 0.4724 / 0.4732 & 0.4738 $\pm$ 0.0017 & 21.12 & 22.53 & 1.2 \\
+argmax & 0.4690 / 0.4591 / 0.4825 & \textbf{0.4702 $\pm$ 0.0118} & 0.4849 / 0.4861 / 0.4909 & \textbf{0.4873 $\pm$ 0.0032} & 22.46 & 23.73 & 1.2 \\
 \midrule
-Boltzmann $T=0.04$ & exact & 2.5 & \textbf{0.4703} & $+0.0204$ ($4\times10^{-17}$) & $+0.0000$ (0.98) & \textbf{22.65} & $+1.53$ (0.011) \\
-Boltzmann $T=0.08$ & exact & 3.3 & 0.4689 & $+0.0190$ ($3\times10^{-15}$) & $-0.0013$ (0.56) & 22.17 & $+1.06$ (0.07) \\
-uniform ($T\to\infty$) & exact & 4 & 0.4557 & $+0.0058$ (0.012) & $-0.0145$ ($6\times10^{-10}$) & 21.28 & $+0.16$ (0.77) \\
+Boltzmann $T{=}0.04$, exact & 0.4714 / 0.4709 / 0.4684 & 0.4703 $\pm$ 0.0016 & 0.4855 / 0.4859 / 0.4805 & 0.4840 $\pm$ 0.0030 & 22.65 & 23.66 & 3.5 \\
+Boltzmann $T{=}0.08$, exact & 0.4687 / 0.4688 / 0.4693 & 0.4689 $\pm$ 0.0003 & 0.4751 / 0.4862 / 0.4686 & 0.4766 $\pm$ 0.0089 & 22.17 & 23.45 & 3.6 \\
+uniform ($T\to\infty$), exact & 0.4586 / 0.4536 / 0.4550 & 0.4557 $\pm$ 0.0025 & 0.4710 / 0.4803 / 0.4710 & 0.4741 $\pm$ 0.0054 & 21.28 & 23.50 & 3.6 \\
 \midrule
-Boltzmann $T=0.04$ & sampled & 2.5 & 0.4562 & $+0.0063$ (0.009) & $-0.0140$ ($3\times10^{-9}$) & 21.18 & $+0.07$ (0.90) \\
-Boltzmann $T=0.08$ & sampled & 3.3 & 0.4517 & $+0.0019$ (0.44) & $-0.0185$ ($2\times10^{-13}$) & 22.37 & $+1.26$ (0.03) \\
-uniform-visit & sampled & 4 & 0.4422 & $-0.0077$ (0.002) & $-0.0280$ ($10^{-27}$) & 20.59 & $-0.52$ (0.35) \\
+Boltzmann $T{=}0.04$, sampled & 0.4489 / 0.4451 / 0.4745 & 0.4562 $\pm$ 0.0160 & 0.4820 / 0.4795 / 0.4878 & 0.4831 $\pm$ 0.0043 & 21.18 & 23.87 & 1.2 \\
+Boltzmann $T{=}0.08$, sampled & 0.4459 / 0.4389 / 0.4704 & 0.4517 $\pm$ 0.0165 & 0.4785 / 0.4824 / 0.4810 & 0.4806 $\pm$ 0.0020 & 22.37 & 23.50 & 1.2 \\
+uniform-visit (redraw per visit) & 0.4520 / 0.4290 / 0.4456 & 0.4422 $\pm$ 0.0118 & 0.4744 / 0.4723 / 0.4780 & 0.4749 $\pm$ 0.0029 & 20.59 & 22.16 & 1.2 \\
+\midrule
+Boltzmann $T{=}0.04$, one draw per caption, kept & 0.4699 / 0.4405 / 0.4804 & 0.4636 $\pm$ 0.0207 & 0.4842 / 0.4840 / 0.4894 & 0.4858 $\pm$ 0.0030 & 21.77 & 24.17 & 1.2 \\
 \bottomrule
 \end{tabular}}
 \end{table}
 
+
+\begin{table}[ht]
+\centering
+\caption{Seed-paired CompBench contrasts between selection rules, raw final checkpoints (seed $s$ of the first arm minus seed $s$ of the second; the arms share caption order and $\Delta$ draws at equal seed): per-seed differences, mean $\pm$ standard deviation over seeds, 95\% $t$-interval and the seed-level $t$-test with $n=3$.}
+\label{tab:selcontrasts}
+\resizebox{\textwidth}{!}{%
+\begin{tabular}{l c c}
+\toprule
+Contrast & per seed & mean $\pm$ sd [95\% CI] ($p$) \\
+\midrule
+\multicolumn{3}{l}{\emph{against the random baseline}} \\
+argmax vs random (fixed draw) & +0.0199 / +0.0198 / +0.0213 & $+0.0203 \pm 0.0008$ [$+0.018$, $+0.022$] ($p=0.001$) \\
+Boltzmann $T{=}0.04$, exact vs random (fixed draw) & +0.0223 / +0.0317 / +0.0072 & $+0.0204 \pm 0.0124$ [$-0.010$, $+0.051$] ($p=0.10$) \\
+Boltzmann $T{=}0.08$, exact vs random (fixed draw) & +0.0195 / +0.0295 / +0.0080 & $+0.0190 \pm 0.0107$ [$-0.008$, $+0.046$] ($p=0.09$) \\
+uniform ($T\to\infty$), exact vs random (fixed draw) & +0.0094 / +0.0144 / -0.0063 & $+0.0058 \pm 0.0108$ [$-0.021$, $+0.033$] ($p=0.45$) \\
+Boltzmann $T{=}0.04$, sampled vs random (fixed draw) & -0.0002 / +0.0059 / +0.0132 & $+0.0063 \pm 0.0067$ [$-0.010$, $+0.023$] ($p=0.25$) \\
+Boltzmann $T{=}0.08$, sampled vs random (fixed draw) & -0.0032 / -0.0003 / +0.0092 & $+0.0019 \pm 0.0065$ [$-0.014$, $+0.018$] ($p=0.67$) \\
+uniform-visit (redraw per visit) vs random (fixed draw) & +0.0028 / -0.0102 / -0.0157 & $-0.0077 \pm 0.0095$ [$-0.031$, $+0.016$] ($p=0.30$) \\
+Boltzmann $T{=}0.04$, one draw per caption, kept vs random (fixed draw) & +0.0208 / +0.0013 / +0.0192 & $+0.0138 \pm 0.0109$ [$-0.013$, $+0.041$] ($p=0.16$) \\
+\midrule
+\multicolumn{3}{l}{\emph{against argmax}} \\
+Boltzmann $T{=}0.04$, exact vs argmax & +0.0024 / +0.0119 / -0.0141 & $+0.0001 \pm 0.0131$ [$-0.033$, $+0.033$] ($p=1.00$) \\
+Boltzmann $T{=}0.08$, exact vs argmax & -0.0004 / +0.0097 / -0.0132 & $-0.0013 \pm 0.0115$ [$-0.030$, $+0.027$] ($p=0.86$) \\
+uniform ($T\to\infty$), exact vs argmax & -0.0105 / -0.0054 / -0.0276 & $-0.0145 \pm 0.0116$ [$-0.043$, $+0.014$] ($p=0.16$) \\
+Boltzmann $T{=}0.04$, sampled vs argmax & -0.0201 / -0.0140 / -0.0080 & $-0.0140 \pm 0.0060$ [$-0.029$, $+0.001$] ($p=0.06$) \\
+Boltzmann $T{=}0.04$, one draw per caption, kept vs argmax & +0.0009 / -0.0186 / -0.0021 & $-0.0066 \pm 0.0105$ [$-0.033$, $+0.019$] ($p=0.39$) \\
+\midrule
+\multicolumn{3}{l}{\emph{estimator and persistence}} \\
+Boltzmann $T{=}0.04$, exact vs Boltzmann $T{=}0.04$, sampled & +0.0225 / +0.0258 / -0.0061 & $+0.0141 \pm 0.0175$ [$-0.029$, $+0.058$] ($p=0.30$) \\
+Boltzmann $T{=}0.04$, one draw per caption, kept vs Boltzmann $T{=}0.04$, sampled & +0.0210 / -0.0046 / +0.0060 & $+0.0075 \pm 0.0129$ [$-0.025$, $+0.039$] ($p=0.42$) \\
+uniform ($T\to\infty$), exact vs uniform-visit (redraw per visit) & +0.0066 / +0.0246 / +0.0094 & $+0.0135 \pm 0.0097$ [$-0.011$, $+0.038$] ($p=0.14$) \\
+\bottomrule
+\end{tabular}}
+\end{table}
+
+\begin{table}[ht]
+\centering
+\caption{Seed-paired CompBench contrasts between selection rules, averaged checkpoints (2k, 4k and 6k updates) (seed $s$ of the first arm minus seed $s$ of the second; the arms share caption order and $\Delta$ draws at equal seed): per-seed differences, mean $\pm$ standard deviation over seeds, 95\% $t$-interval and the seed-level $t$-test with $n=3$.}
+\label{tab:selcontrasts_avg}
+\resizebox{\textwidth}{!}{%
+\begin{tabular}{l c c}
+\toprule
+Contrast & per seed & mean $\pm$ sd [95\% CI] ($p$) \\
+\midrule
+\multicolumn{3}{l}{\emph{against the random baseline}} \\
+argmax vs random (fixed draw) & +0.0092 / +0.0137 / +0.0177 & $+0.0135 \pm 0.0042$ [$+0.003$, $+0.024$] ($p=0.03$)  \\
+Boltzmann $T{=}0.04$, exact vs random (fixed draw) & +0.0099 / +0.0135 / +0.0073 & $+0.0102 \pm 0.0031$ [$+0.002$, $+0.018$] ($p=0.03$)  \\
+Boltzmann $T{=}0.08$, exact vs random (fixed draw) & -0.0006 / +0.0138 / -0.0046 & $+0.0029 \pm 0.0097$ [$-0.021$, $+0.027$] ($p=0.66$)  \\
+uniform ($T\to\infty$), exact vs random (fixed draw) & -0.0046 / +0.0079 / -0.0022 & $+0.0004 \pm 0.0067$ [$-0.016$, $+0.017$] ($p=0.93$)  \\
+Boltzmann $T{=}0.04$, sampled vs random (fixed draw) & +0.0063 / +0.0071 / +0.0146 & $+0.0093 \pm 0.0046$ [$-0.002$, $+0.021$] ($p=0.07$)  \\
+Boltzmann $T{=}0.08$, sampled vs random (fixed draw) & +0.0029 / +0.0100 / +0.0077 & $+0.0069 \pm 0.0036$ [$-0.002$, $+0.016$] ($p=0.08$)  \\
+uniform-visit (redraw per visit) vs random (fixed draw) & -0.0013 / -0.0001 / +0.0048 & $+0.0012 \pm 0.0032$ [$-0.007$, $+0.009$] ($p=0.60$)  \\
+Boltzmann $T{=}0.04$, one draw per caption, kept vs random (fixed draw) & +0.0085 / +0.0116 / +0.0162 & $+0.0121 \pm 0.0038$ [$+0.003$, $+0.022$] ($p=0.03$)  \\
+\midrule
+\multicolumn{3}{l}{\emph{against argmax}} \\
+Boltzmann $T{=}0.04$, exact vs argmax & +0.0006 / -0.0001 / -0.0104 & $-0.0033 \pm 0.0062$ [$-0.019$, $+0.012$] ($p=0.45$)  \\
+Boltzmann $T{=}0.08$, exact vs argmax & -0.0098 / +0.0001 / -0.0223 & $-0.0107 \pm 0.0112$ [$-0.039$, $+0.017$] ($p=0.24$)  \\
+uniform ($T\to\infty$), exact vs argmax & -0.0139 / -0.0058 / -0.0199 & $-0.0132 \pm 0.0071$ [$-0.031$, $+0.004$] ($p=0.08$)  \\
+Boltzmann $T{=}0.04$, sampled vs argmax & -0.0029 / -0.0066 / -0.0031 & $-0.0042 \pm 0.0021$ [$-0.009$, $+0.001$] ($p=0.07$)  \\
+Boltzmann $T{=}0.04$, one draw per caption, kept vs argmax & -0.0007 / -0.0021 / -0.0016 & $-0.0015 \pm 0.0007$ [$-0.003$, $+0.000$] ($p=0.07$)  \\
+\midrule
+\multicolumn{3}{l}{\emph{estimator and persistence}} \\
+Boltzmann $T{=}0.04$, exact vs Boltzmann $T{=}0.04$, sampled & +0.0036 / +0.0065 / -0.0073 & $+0.0009 \pm 0.0073$ [$-0.017$, $+0.019$] ($p=0.85$)  \\
+Boltzmann $T{=}0.04$, one draw per caption, kept vs Boltzmann $T{=}0.04$, sampled & +0.0022 / +0.0045 / +0.0015 & $+0.0028 \pm 0.0016$ [$-0.001$, $+0.007$] ($p=0.09$)  \\
+uniform ($T\to\infty$), exact vs uniform-visit (redraw per visit) & -0.0033 / +0.0080 / -0.0070 & $-0.0008 \pm 0.0078$ [$-0.020$, $+0.019$] ($p=0.88$)  \\
+\bottomrule
+\end{tabular}}
+\end{table}
+
+\begin{table}[ht]
+\centering
+\caption{Fidelity of the $T{=}0.04$ selection-rule arms on 5,000 COCO \texttt{val2017} captions, 4 steps, $w=1$: per seed (s0 / s1 / s2) and seed mean in brackets, for the raw final checkpoints and for the averaged checkpoints. CMMD bootstrap intervals are $\pm0.01$ per model; FID differences below its split-half spread of about 0.5 should not be read.}
+\label{tab:selfid}
+\resizebox{\textwidth}{!}{%
+\begin{tabular}{l l c c c c}
+\toprule
+Rule & checkpoint & FID $\downarrow$ & CMMD $\downarrow$ & Precision $\uparrow$ & Recall $\uparrow$ \\
+\midrule
+random (fixed draw) & raw final & 32.91 / 33.16 / 31.17 (32.41) & 0.91 / 0.96 / 0.97 (0.95) & 0.456 / 0.436 / 0.414 (0.435) & 0.045 / 0.046 / 0.037 (0.043) \\
+argmax & raw final & 31.90 / 30.57 / 29.62 (30.70) & 0.89 / 0.94 / 0.83 (0.89) & 0.455 / 0.450 / 0.485 (0.463) & 0.052 / 0.047 / 0.060 (0.053) \\
+Boltzmann $T{=}0.04$, exact & raw final & 30.97 / 29.43 / 31.22 (30.54) & 0.85 / 0.87 / 0.85 (0.86) & 0.488 / 0.461 / 0.504 (0.484) & 0.058 / 0.051 / 0.050 (0.053) \\
+Boltzmann $T{=}0.04$, sampled & raw final & 32.90 / 32.01 / 31.40 (32.10) & 0.90 / 1.02 / 0.93 (0.95) & 0.464 / 0.434 / 0.449 (0.449) & 0.040 / 0.040 / 0.043 (0.041) \\
+Boltzmann $T{=}0.04$, one draw per caption, kept & raw final & 32.64 / 33.32 / 32.37 (32.78) & 0.89 / 0.98 / 0.90 (0.92) & 0.445 / 0.444 / 0.443 (0.444) & 0.052 / 0.039 / 0.047 (0.046) \\
+\midrule
+random (fixed draw) & averaged & 30.58 / 30.45 / 30.24 (30.42) & 0.79 / 0.85 / 0.87 (0.84) & 0.507 / 0.474 / 0.457 (0.479) & 0.056 / 0.055 / 0.051 (0.054) \\
+argmax & averaged & 30.53 / 29.85 / 29.99 (30.12) & 0.83 / 0.80 / 0.77 (0.80) & 0.489 / 0.495 / 0.484 (0.489) & 0.062 / 0.067 / 0.070 (0.066) \\
+Boltzmann $T{=}0.04$, exact & averaged & 30.37 / 29.81 / 30.75 (30.31) & 0.79 / 0.80 / 0.79 (0.79) & 0.508 / 0.489 / 0.507 (0.501) & 0.066 / 0.069 / 0.059 (0.065) \\
+Boltzmann $T{=}0.04$, sampled & averaged & 29.83 / 30.21 / 30.86 (30.30) & 0.81 / 0.84 / 0.81 (0.82) & 0.484 / 0.457 / 0.486 (0.476) & 0.062 / 0.059 / 0.062 (0.061) \\
+Boltzmann $T{=}0.04$, one draw per caption, kept & averaged & 30.98 / 31.11 / 31.05 (31.05) & 0.84 / 0.81 / 0.84 (0.83) & 0.478 / 0.484 / 0.474 (0.479) & 0.062 / 0.066 / 0.061 (0.063) \\
+\bottomrule
+\end{tabular}}
+\end{table}
+
+
 \begin{figure}[ht]
 \centering
-\includegraphics[width=0.92\textwidth]{figs/selection_rule.pdf}
-\caption{The two estimators of Boltzmann-weighted selection as a function of the effective sample size of the weights (three seeds, bars are seed standard deviations, grey band is the random baseline). Exact weighting is flat from argmax to $\mathrm{ESS}=3.3$ and drops only at uniform weighting; sampling one candidate per visit falls monotonically from argmax.}
+\includegraphics[width=\textwidth]{figs/selection_rule.pdf}
+\caption{CompBench of the selection rules as a function of the Kish count of their weights, raw final checkpoints (left) and the average of the 2k, 4k and 6k checkpoints (right). Points are seed means, bars are seed standard deviations, the grey band is the random baseline. On raw checkpoints the sampled arms fall away from argmax while the exact arms stay flat; after identical averaging the two estimators coincide and the ordering follows the weight on the best candidate.}
 \label{fig:selrule}
 \end{figure}
 
-Four conclusions follow.
 \begin{itemize}
-\item \textbf{Exact Boltzmann weighting ties argmax.} At $T=0.04$ and $T=0.08$ the exactly weighted objective matches argmax within 0.001 on CompBench and within the seed spread on GenEval2 ($p=0.98$ and $0.56$). There is no temperature at which soft selection beats hard selection, and the soft arm costs 2.3 times the compute. Argmax is the recipe.
-\item \textbf{The sampled estimator loses through target churn, not through the softer tilt.} At the same weights, sampling one candidate per visit is $0.0141$ below exact weighting ($p=3\times10^{-9}$), which is the whole of its deficit to argmax ($0.0140$). The uniform-visit control shows the mechanism directly: redrawing the target on every visit is $0.008$ \emph{worse} than a fixed random draw ($p=0.002$). A consistency target that changes between visits of a caption costs more than a worse but stable target. The monotone decline of the sampled arms with temperature is a property of the estimator, not of soft selection.
-\item \textbf{The gain is weighting toward the best candidate, not exposure to more trajectories.} Uniform exact weighting trains on all four candidates of every caption, at four times the rollout cost, with a fixed target set and no selection. It is worth at most $+0.006$ of the $+0.020$; the remaining $+0.014$ ($p=6\times10^{-10}$ against argmax) comes from the weights.
-\item \textbf{Seed spread.} The exact-weighted arms have a seed standard deviation of 0.002 CompBench against 0.011 for the single-candidate arms: averaging the loss over four trajectories per caption also stabilises training, in line with the batch-size result of Section~\ref{sec:batch}.
+\item \textbf{Argmax over random is the one contrast established at the level of training runs:} $+0.0203\pm0.0008$ on raw checkpoints ($p=0.001$) and $+0.0135\pm0.0042$ after averaging ($p=0.03$).
+\item \textbf{Exact Boltzmann weighting shows no detected improvement over argmax} at either temperature: $T=0.04$ is $+0.0001\pm0.013$ raw and $-0.003\pm0.006$ averaged; $T=0.08$ is $-0.001\pm0.012$ raw and $-0.011\pm0.011$ averaged. The averaged $T=0.04$ interval is $\pm0.015$, so a soft rule within 0.01 of argmax is not excluded; one that is better is not supported, and it costs 2.3 times the compute.
+\item \textbf{Score-informed weighting is what matters.} At the same exact compute, $T=0.04$ is ahead of uniform weighting by $0.0145$ on raw checkpoints (positive on every seed) and by $+0.010$ (per seed $+0.015$, $+0.006$, $+0.010$) after averaging, and uniform weighting of all four candidates is within noise of the random baseline under both protocols. Exposure to more trajectories per caption is worth little on its own.
+\item \textbf{The sampled estimator's deficit is mostly a property of its final iterate.} On raw checkpoints the sampled $T=0.04$ arm is $0.014\pm0.006$ below argmax and $0.014\pm0.018$ below exact weighting; after averaging the gaps are $0.004\pm0.002$ and $-0.001\pm0.007$. The sampled arm's raw checkpoints vary four times more across seeds than its averaged weights (0.016 against 0.004). What remains after averaging is of the size the optimizer-level differences of Section~\ref{sec:graddiag} can produce and is not resolved at three seeds.
+\item \textbf{Persistence of the selected candidate is not established as a separate effect.} Redrawing uniformly on every visit is $0.008\pm0.010$ below the fixed random draw on raw checkpoints but $+0.001\pm0.003$ after averaging. The frozen Boltzmann arm, which keeps one draw from $\pi$ per caption, is $+0.008\pm0.013$ above the resampled arm on raw checkpoints and $+0.003\pm0.002$ after averaging (positive on all three seeds, $p=0.09$), and $0.0015\pm0.0007$ below argmax after averaging. Its raw checkpoints vary the most of all arms across seeds (0.021), since each seed also carries its own selection map; averaging removes that as well. Switching candidates changes the input trajectory and its target together, and in the two visits per caption of this configuration the sampled arm sees 1.5 distinct candidates on average, so target churn, candidate coverage and optimization variance are not separated by these controls.
+\item \textbf{Stability.} On raw checkpoints the exact arms vary far less across seeds than the single-candidate arms (standard deviation 0.0016 and 0.0003 against 0.011 to 0.017); after averaging the difference is gone (0.003 and 0.009 against 0.002 to 0.004). Averaging four trajectories per update stabilises the iterate, not the solution.
+\item \textbf{Fidelity.} Table~\ref{tab:selfid} gives FID, CMMD, precision and recall for the $T{=}0.04$ arms. On raw final checkpoints the exact arm has the best fidelity (CMMD 0.86 against 0.89 for argmax and 0.95 for both random and the resampled arm) and the resampled arm sits at the random level; after averaging every arm improves by about 0.1 CMMD and the differences shrink to within the seed spread (exact minus argmax $-0.007\pm0.031$, resampled minus argmax $+0.020\pm0.035$, frozen minus argmax $+0.030\pm0.035$). The one fidelity contrast that keeps its sign on every seed after averaging is exact against resampled, $-0.027\pm0.012$ CMMD and $+0.026$ precision ($p=0.06$): weighting all four candidates gives a slightly better distribution match than sampling one, with no alignment difference.
+\item \textbf{GenEval2} does not separate any two selection rules at three seeds.
 \end{itemize}
 
-A decode-free variant that scores in latent space was not pursued. Decoding four candidates costs 61 ms per caption (Section~\ref{sec:cost}), and the scorer needs the decoded image.
+\subsection{Gradient diagnostic}
+\label{sec:graddiag}
+Equal expected gradients do not give equal optimizer updates. The trainer clips the global gradient norm to $\gamma=1$ and then applies AdamW, and clipping does not commute with expectation: $\mathbb{E}[C(g_J)]\neq C(\mathbb{E}[g_J])$ for $C(g)=g\min(1,\gamma/\lVert g\rVert)$, while Adam's second moment sees $\mathbb{E}[g_J\odot g_J]=g_F\odot g_F+\mathrm{Var}(g_J)$. To measure how large these effects are for this loss, all four candidate gradients of a caption were computed at two frozen model states, the pretrained initialisation and the argmax student of seed 0, on 48 held-out captions of the 118k pool (none in the 3k pool), with one $\Delta$ draw shared by the four candidates. Everything below is a function of the $4\times4$ Gram matrix of the candidate gradients and $\pi$ at $T=0.04$:
+\begin{equation}
+V_c=\sum_j\pi_j\lVert g_j-g_F\rVert^2,\qquad
+B_c=\Big\lVert\sum_j\pi_jC(g_j)-C(g_F)\Big\rVert .
+\end{equation}
+Two references are computed per caption: the argmax candidate's gradient under a second $\Delta$ draw on the same trajectory, which is the gradient noise every arm carries, and the argmax candidate rolled out alone instead of in the four-candidate batch, which checks that batch shape is not a confound.
+
+\begin{table}[ht]
+\centering
+\caption{Gradient diagnostic at $T=0.04$, 48 held-out captions, means over captions (medians in brackets). Every gradient is clipped: norms are 300 to 650 against $\gamma=1$. $g_F$ is the exact weighted gradient, $g_J$ the one-sample gradient, $C$ the clip.}
+\label{tab:graddiag}
+\resizebox{\textwidth}{!}{%
+\begin{tabular}{l c c}
+\toprule
+ & argmax student (seed 0) & pretrained init \\
+\midrule
+mean pairwise cosine of the four candidate gradients & 0.17 [0.14] & 0.43 [0.43] \\
+$\cos(g_{j^\star},g_F)$, argmax candidate against the exact gradient & 0.87 [0.92] & 0.91 [0.94] \\
+candidate-sampling variance $V_c/\lVert g_F\rVert^2$ & 0.99 [0.76] & 0.51 [0.42] \\
+Adam second-moment ratio $\sum_j\pi_j\lVert g_j\rVert^2/\lVert g_F\rVert^2$ & 1.99 [1.76] & 1.51 [1.42] \\
+clipping difference $B_c/\lVert C(g_F)\rVert$ & 0.27 [0.27] & 0.17 [0.15] \\
+$\cos\big(\mathbb{E}[C(g_J)],\,C(g_F)\big)$ & 0.990 [0.997] & 0.995 [0.998] \\
+$\lVert\mathbb{E}[C(g_J)]\rVert/\lVert C(g_F)\rVert$ & 0.75 [0.75] & 0.85 [0.86] \\
+\midrule
+same candidate, second $\Delta$ draw: $\lVert g-g'\rVert^2/\lVert g\rVert^2$ & 0.78 [0.70] & 1.05 [0.59] \\
+same candidate, second $\Delta$ draw: $\cos(g,g')$ & 0.67 & 0.65 \\
+batched against single rollout: max state difference, $\cos$ of gradients & 0, 0.99999 & 0, 0.99999 \\
+\bottomrule
+\end{tabular}}
+\end{table}
+
+Three things follow. The candidate gradients of one caption are only weakly aligned (mean pairwise cosine 0.17 at the trained state), so the one-sample estimator carries a relative variance of order one: its noise power equals the signal power, and Adam's second moment is doubled. Under clipping its expected update is nearly parallel to the exact clipped update (cosine 0.99) but 25\% shorter, so the sampled arm takes systematically smaller steps in the same direction. And the $\Delta$ draw alone, which every arm resamples on every visit, produces gradient noise of the same order (relative squared difference 0.78 between two draws on the same trajectory), so candidate resampling roughly doubles a noise source that is already there rather than introducing a qualitatively new one. Batched and single rollouts give bit-identical states. The sampled estimator is therefore unbiased for the gradient of the weighted loss, and under clipping and AdamW it need not reproduce the exact estimator's optimisation; the measured differences are modest in direction and moderate in magnitude, which is consistent with the small residual gap after averaging and does not require contradictory targets to explain.
+
+\subsection{What the evidence supports}
+The practical choice is settled: argmax selection, stored once, is the best rule tested and the cheapest. Exact soft weighting at $T\le0.08$ is not detectably better and costs 2.3 times the compute; softer rules and uniform weighting are worse or level with random. The explanation of why per-visit resampling underperforms is only partly settled. Its raw-checkpoint deficit is largely final-iterate noise, which checkpoint averaging removes; the remainder is of the size the clipping and second-moment effects measured above can produce, and the fixed-versus-resampled controls do not isolate a persistence effect from optimization variance and candidate coverage in this short-training regime. Separating them would take the same-caption Monte-Carlo estimator (which halves or quarters the sampling variance at single-caption compute) and more seeds; neither was run because the practical conclusion does not depend on it. A decode-free scorer that ranks candidates in latent space is a separate question that these results do not touch; it would be judged by its selection regret against the DINOv2 ranking, and the cost measurements of Section~\ref{sec:cost} (decoding and scoring are under 10\% of the selection pipeline, and the pipeline is offline) put it low on the list.
 
 \clearpage
 \section{Ablations}
@@ -751,12 +893,12 @@ Figures~\ref{fig:qual_cb} and~\ref{fig:qual_ge} show prompts on which the scored
 \clearpage
 \section{Cost}
 \label{sec:cost}
-Per training caption the candidate pool costs 64 teacher forward passes (4 candidates, 8 steps, two guidance branches), four VAE decodes and five DINOv2 forward passes. Measured on one H100 at $512\times512$, generation takes 789 ms per caption, the four decodes 61 ms, DINOv2 scoring 32 ms, CLIP-I 48 ms and VQAScore 280 ms. End to end, DINOv2 selection costs 0.95 s per caption and VQAScore selection 1.19 s; candidate generation dominates and no scorer avoids it. Training costs 16 teacher passes and five student forward-backward passes per caption. A 3k run takes 1.6 hours on one H200; the 118k run takes 12.5 hours on four H200s. The DINOv2 scorer needs no text model and no large VLM at selection time, which is its practical advantage over VQAScore, ImageReward and PickScore. The exact Boltzmann arm of Section~\ref{sec:selrule}, which rolls out and trains on all four candidates, takes 2.6 s per update against 1.15 s for the single-candidate trainer (3.5 h against 1.2 h for a 3k run) for no gain over argmax.
+Per training caption the candidate pool costs 64 teacher forward passes (4 candidates, 8 steps, two guidance branches), four VAE decodes and five DINOv2 forward passes. Measured on one H100 at $512\times512$, generation takes 789 ms per caption, the four decodes 61 ms, DINOv2 scoring 32 ms, CLIP-I 48 ms and VQAScore 280 ms. End to end, DINOv2 selection costs 0.95 s per caption and VQAScore selection 1.19 s; candidate generation dominates and no scorer avoids it. Training costs 16 teacher passes and five student forward-backward passes per caption. A 3k run takes 1.6 hours on one H200; the 118k run takes 12.5 hours on four H200s. The DINOv2 scorer needs no text model and no large VLM at selection time, which is its practical advantage over VQAScore, ImageReward and PickScore. The exact Boltzmann arm of Section~\ref{sec:selrule}, which rolls out and trains on all four candidates, takes 2.6 s per update against 1.15 s for the single-candidate trainer (3.5 h against 1.2 h for a 3k run) for no detected gain over argmax.
 
 \section{Design choices}
 \begin{itemize}
 \item \textbf{Fixed teacher targets, no EMA.} Every target is a function of the frozen teacher's trajectory. There is no bootstrapping and no target drift. Consistency models use an EMA or stop-gradient student copy; we do not.
-\item \textbf{Hard selection, stored once.} One candidate per caption, chosen offline. The trainer rolls out one trajectory per caption for every arm, so compute is identical across arms. Exact Boltzmann weighting of all four candidates ties argmax at 2.3 times the cost, and drawing one candidate per visit from soft weights loses through target churn (Section~\ref{sec:selrule}). Four candidates are enough; eight add nothing (Section~\ref{sec:n8}).
+\item \textbf{Hard selection, stored once.} One candidate per caption, chosen offline. The trainer rolls out one trajectory per caption for every arm, so compute is identical across arms. Exact Boltzmann weighting of all four candidates is not detectably better than argmax at 2.3 times the cost, and the one-sample estimator of the same objective matches it after checkpoint averaging (Section~\ref{sec:selrule}). Four candidates are enough; eight add nothing (Section~\ref{sec:n8}).
 \item \textbf{Guidance internalised.} The student trains with one conditional pass against guided teacher trajectories and is sampled at $w=1$. This halves the student's inference cost relative to a guided sampler.
 \item \textbf{Re-roll instead of store.} Trajectories are re-rolled from integer seeds. The cache holds only seeds, scores and indices.
 \item \textbf{Reference photograph squashed to a square.} Cropping discards captioned content; see the aspect ablation.
@@ -771,6 +913,7 @@ Per training caption the candidate pool costs 64 teacher forward passes (4 candi
 \item \textbf{Grids do not nest.} The 4-step inference grid shares only its endpoints with the 8-step training grid, so the student is deployed at $\sigma=0.858$ and $0.602$, which it never saw as training inputs, and is never trained at $\sigma=0.009$ (the last step is scaled by 0.009 and is immaterial). Grids with $K\in\{7,10,13,16,\dots\}$ nest exactly; this was not used here.
 \item \textbf{Duplicate student inputs.} With five independent $\Delta_k$ draws, 81\% of updates contain at least one repeated input state and the expected number of distinct inputs is 3.9 of 5. This does not change the objective, only its variance, and wastes about 22\% of student passes.
 \item \textbf{Seeds.} Every headline number is three training seeds. The single-seed contrasts (the VQAScore arm at 118k, the batch-size row, the evolving-teacher runs) are marked as such and resolve about 0.01 CompBench.
+\item \textbf{Selection-rule contrasts are three-seed contrasts.} They resolve about 0.01 CompBench at the level of training runs. ``No detected improvement'' over argmax is the claim; equivalence is not.
 \item \textbf{Checkpoint averaging is part of the method at scale.} Without it the 118k gap is $+0.007$ instead of $+0.0175$. Averaging is applied identically to every arm, but the reported 118k numbers are for averaged weights.
 \item \textbf{Selection gain depends on candidate variance.} With a 28-step or a 16-step $w=4.5$ teacher the within-caption score spread halves and the gain vanishes. Scored selection is a fixed-teacher gain, not a substitute for teacher quality.
 \item \textbf{VQAScore is circular.} Its gains share a model family with the BLIP-VQA categories of CompBench and the VLM judge of GenEval2. It is included as a reference, not as the proposed method.
@@ -778,7 +921,7 @@ Per training caption the candidate pool costs 64 teacher forward passes (4 candi
 \end{itemize}
 
 \section{Reproducibility}
-The release code is the \texttt{scored-consistency-distillation} branch of the project repository. It contains the pool builder, the candidate scorer, the trainer with the \texttt{random}, \texttt{dino\_patch}, \texttt{boltzmann}, \texttt{boltzmann\_sample} and \texttt{uniform\_visit} selectors and gradient accumulation, the checkpoint averager, the evaluation scripts (CompBench with the one- and ten-image protocols, GenEval2, COCO VQAScore, FID, reference CMMD, precision and recall), the figure script and the LSF launch scripts. The release trainer was verified to be bit-identical to the experimental trainer that produced every number in this document, on all 909 parameter tensors after six optimizer updates under deterministic kernels, for every selector and for gradient accumulation, with an original-versus-original control at exactly zero. Every evaluation writes a pinned record with evaluator commits, package versions, pool hashes and the checkpoint hash, and fails hard on missing images. Training runs log per-state losses, selection statistics, throughput, sample grids and a source snapshot to Weights \& Biases.
+The release code is the \texttt{scored-consistency-distillation} branch of the project repository. It contains the pool builder, the candidate scorer, the trainer with the \texttt{random}, \texttt{dino\_patch}, \texttt{boltzmann}, \texttt{boltzmann\_sample}, \texttt{boltzmann\_frozen}, \texttt{boltzmann\_mc} and \texttt{uniform\_visit} selectors, gradient accumulation, the gradient diagnostic, the checkpoint averager, the evaluation scripts (CompBench with the one- and ten-image protocols, GenEval2, COCO VQAScore, FID, reference CMMD, precision and recall), the figure script and the LSF launch scripts. The release trainer was verified to be bit-identical to the experimental trainer that produced every number in this document, on all 909 parameter tensors after six optimizer updates under deterministic kernels, for every selector and for gradient accumulation, with an original-versus-original control at exactly zero. Every evaluation writes a pinned record with evaluator commits, package versions, pool hashes and the checkpoint hash, and fails hard on missing images. Training runs log per-state losses, selection statistics, throughput, sample grids and a source snapshot to Weights \& Biases.
 
 \begin{thebibliography}{9}
 \bibitem{sd3} P. Esser et al. Scaling rectified flow transformers for high-resolution image synthesis. ICML 2024.

@@ -20,6 +20,12 @@ Selectors (the only difference between arms; everything else is identical):
                       selection, N rollouts and N student passes per caption (--temp)
     boltzmann_sample  one candidate drawn from softmax(dino_patch_cos / T) on every visit; the
                       one-sample estimator of `boltzmann` at single-candidate cost (--temp, --sel_seed)
+    boltzmann_frozen  one candidate drawn from softmax(dino_patch_cos / T) ONCE per caption by a
+                      per-caption generator (--map_seed) and kept for the whole run: the soft
+                      selection distribution without per-visit resampling
+    boltzmann_mc      --mc_draws iid draws from softmax(dino_patch_cos / T) per visit, losses
+                      weighted by count / draws, one clipped step: the same expected gradient as
+                      boltzmann_sample with the candidate-sampling variance divided by the draws
     uniform_visit     one candidate drawn uniformly on every visit (the control that separates
                       target persistence from label quality; `random` draws once per caption)
 
@@ -50,7 +56,8 @@ sys.path.insert(0, str(ROOT))
 from common.distributed import barrier, setup_distributed, teardown  # noqa: E402
 from common.sampling import candidate_noise, encode_prompt, rollout, vae_decode  # noqa: E402
 
-SELECTORS = ("random", "dino_patch", "boltzmann", "boltzmann_sample", "uniform_visit")
+SELECTORS = ("random", "dino_patch", "boltzmann", "boltzmann_sample", "boltzmann_frozen", "boltzmann_mc",
+             "uniform_visit")
 SCORE = "dino_patch_cos"
 
 
@@ -85,13 +92,16 @@ def weights(rec: dict, selector: str, temp: float) -> np.ndarray:
     return q / q.sum()
 
 
-def select(rec: dict, selector: str, temp: float, rng: np.random.Generator) -> int:
+def select(rec: dict, selector: str, temp: float, rng: np.random.Generator, map_seed: int) -> int:
     """The candidate this visit trains on. Deterministic selectors need no draw; the sampled ones
     draw from the weights with the selection generator (private to selection, so the draws do not
-    touch the data order or the noise-level stream)."""
+    touch the data order or the noise-level stream); boltzmann_frozen draws from a generator
+    seeded by (map_seed, caption idx), so its draw is the same on every visit and every rank."""
     w = weights(rec, selector, temp)
     if int((w > 0).sum()) == 1:
         return int(w.argmax())
+    if selector == "boltzmann_frozen":
+        return int(np.random.default_rng([int(map_seed), int(rec["idx"])]).choice(len(w), p=w))
     return int(rng.choice(len(w), p=w))
 
 
@@ -145,6 +155,9 @@ def main() -> None:
     ap.add_argument("--temp", type=float, default=0.04, help="T of the boltzmann selectors")
     ap.add_argument("--sel_seed", type=int, default=None,
                     help="seed of the selection draws of the sampled selectors (default: --seed)")
+    ap.add_argument("--map_seed", type=int, default=1000003,
+                    help="seed of the per-caption draw of boltzmann_frozen (mixed with the caption idx)")
+    ap.add_argument("--mc_draws", type=int, default=4, help="draws per visit of boltzmann_mc")
     ap.add_argument("--K", type=int, default=8, help="teacher steps")
     ap.add_argument("--cfg", type=float, default=7.0, help="teacher guidance")
     ap.add_argument("--window", default="0.4,0.9", help="supervised fraction of the trajectory")
@@ -189,7 +202,8 @@ def main() -> None:
     if not recs:
         raise SystemExit(f"no records under {args.cache_dir}")
     if is_main:
-        print(f"[r{rank}] selector={args.selector} temp={args.temp} accum={args.accum} | {len(recs)} captions", flush=True)
+        print(f"[r{rank}] selector={args.selector} temp={args.temp} accum={args.accum} map_seed={args.map_seed} "
+              f"mc_draws={args.mc_draws} | {len(recs)} captions", flush=True)
 
     from diffusers import StableDiffusion3Pipeline
     pipe = StableDiffusion3Pipeline.from_pretrained(args.model_id, torch_dtype=torch.bfloat16).to(device)
@@ -222,7 +236,7 @@ def main() -> None:
     lo, hi = (float(x) for x in args.window.split(","))
     score_idxs = list(range(max(1, round(lo * K)), min(K - 1, round(hi * K)) + 1))
     n_w = len(score_idxs)
-    exact_soft = args.selector == "boltzmann"
+    exact_soft = args.selector in ("boltzmann", "boltzmann_mc")     # all candidates rolled out, weighted losses
 
     with torch.no_grad():
         neg_emb, neg_pool = encode_prompt(pipe, "", device)
@@ -267,7 +281,11 @@ def main() -> None:
         h = hashlib.sha256()
         for r in recs:
             w = weights(r, args.selector, args.temp)
-            h.update(f"{int(r['idx'])}:{int(w.argmax()) if int((w > 0).sum()) == 1 else np.round(w, 6).tolist()}\n".encode())
+            if int((w > 0).sum()) == 1 or args.selector == "boltzmann_frozen":
+                key = select(r, args.selector, args.temp, np.random.default_rng(0), args.map_seed)
+            else:
+                key = np.round(w, 6).tolist()
+            h.update(f"{int(r['idx'])}:{key}\n".encode())
         print(f"[selection] window={args.window} K={K} supervised_k={score_idxs} "
               f"caption->candidate sha256={h.hexdigest()[:16]}", flush=True)
 
@@ -293,7 +311,15 @@ def main() -> None:
             data_iter = iter(loader)
             rec = next(data_iter)
         w = weights(rec, args.selector, args.temp)
-        sel = select(rec, args.selector, args.temp, sel_rng) if not exact_soft else int(w.argmax())
+        if args.selector == "boltzmann":
+            sel = int(w.argmax())                       # diagnostics only; every candidate is trained on
+        else:
+            sel = select(rec, args.selector, args.temp, sel_rng, args.map_seed)
+        if args.selector == "boltzmann_mc":
+            # M iid draws from the weights this visit; the weights become count / M (the scalar
+            # draw above is consumed first, matching the experimental trainer's draw order)
+            counts = np.bincount(sel_rng.choice(len(w), size=args.mc_draws, p=w), minlength=len(w))
+            w = counts / float(args.mc_draws)
         if is_main:
             for f in SCORE_FIELDS:                     # what this arm's choice buys under each scorer
                 if f in rec:

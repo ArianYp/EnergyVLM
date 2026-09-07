@@ -30,7 +30,7 @@
 set -euo pipefail
 source scripts/env.sh
 
-: "${SELECTOR:?set SELECTOR (random | dino_patch | boltzmann | boltzmann_sample | uniform_visit)}"
+: "${SELECTOR:?set SELECTOR (random | dino_patch | boltzmann | boltzmann_sample | boltzmann_frozen | boltzmann_mc | uniform_visit)}"
 SEED=${SEED:-0}
 CACHE=${CACHE:-cache/train}
 GPUS=${GPUS:-4}
@@ -39,6 +39,8 @@ LR=${LR:-2e-5}
 WARMUP=${WARMUP:-1000}
 ACCUM=${ACCUM:-1}
 TEMP=${TEMP:-0.04}
+MAP_SEED=${MAP_SEED:-1000003}
+MCD=${MCD:-4}
 SAVE_EVERY=${SAVE_EVERY:-5000}
 NREC=$(cat "$CACHE"/selection_rank*.jsonl | wc -l)
 STEPS=${STEPS:-$(python3 -c "print(int(round($EPOCHS * $NREC / ($GPUS * $ACCUM))))")}
@@ -52,7 +54,7 @@ echo "selector=$SELECTOR seed=$SEED captions=$NREC gpus=$GPUS accum=$ACCUM epoch
 torchrun --standalone --nproc-per-node="$GPUS" train/distill.py \
   --selector "$SELECTOR" --cache_dir "$CACHE" --output_dir "checkpoints/$RUN" \
   --seed "$SEED" --num_steps "$STEPS" --num_warmup_steps "$WARMUP" --lr "$LR" \
-  --accum "$ACCUM" --temp "$TEMP" \
+  --accum "$ACCUM" --temp "$TEMP" --map_seed "$MAP_SEED" --mc_draws "$MCD" \
   --K 8 --cfg 7.0 --window 0.4,0.9 --delta_min 1 --delta_max 3 --height 512 \
   --gradient_checkpointing --save_every "$SAVE_EVERY" --log_every 50 \
   --sample_every "${SAMPLE_EVERY:-2000}" --sample_prompts "${SAMPLE_PROMPTS:-pools/sample_prompts.json}" \
