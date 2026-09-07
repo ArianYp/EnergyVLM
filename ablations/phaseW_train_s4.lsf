@@ -85,7 +85,7 @@ python3 "$TRAINER" \
   --height 512 --sched_shift 3.0 --num_train_ts 1000.0 \
   --delta_min 1 --delta_max 3 \
   --scoring_window 0.4,0.9 \
-  --support_m 1 --assign_seed 982451653 \
+  --support_m 1 --assign_seed "${ASSIGN_SEED:-982451653}" \
   --huber_c 0.0 --gradient_checkpointing \
   --save_every 2000 --log_every 10 --sample_every 0 ${EXTRA:-} \
   --wandb_project sd-phaseW-s4 --wandb_run_name "$RUN" \

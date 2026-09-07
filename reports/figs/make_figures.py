@@ -50,29 +50,35 @@ def seed_stats(rows, label):
 
 # ----------------------------------------------------------------------------- selection rule
 def fig_selection_rule(s4):
-    """CompBench vs effective sample size of the selection weights, exact vs one-sample."""
-    ess = {"S4_CD_dinop_hard": 1.0, "S4_CD_dinop_full-T0.04": 2.54, "S4_CD_dinop_full-T0.08": 3.33,
-           "S4_CD_dinop_full-T1e6": 4.0, "S4_CD_dinop_cat-T0.04": 2.54, "S4_CD_dinop_cat-T0.08": 3.33,
-           "S4_CD_uniform_visit": 4.0}
+    """CompBench vs Kish count of the selection weights, exact vs one-sample estimators, raw final
+    checkpoints and the average of the 2k/4k/6k checkpoints (same rule for every arm)."""
+    kish = {"S4_CD_dinop_hard": 1.0, "S4_CD_dinop_full-T0.04": 2.19, "S4_CD_dinop_full-T0.08": 2.89,
+            "S4_CD_dinop_full-T1e6": 4.0, "S4_CD_dinop_cat-T0.04": 2.19, "S4_CD_dinop_cat-T0.08": 2.89,
+            "S4_CD_uniform_visit": 4.0, "S4_CD_dinop_catfreeze-T0.04": 2.19}
     exact = ["S4_CD_dinop_hard", "S4_CD_dinop_full-T0.04", "S4_CD_dinop_full-T0.08", "S4_CD_dinop_full-T1e6"]
     sampled = ["S4_CD_dinop_hard", "S4_CD_dinop_cat-T0.04", "S4_CD_dinop_cat-T0.08", "S4_CD_uniform_visit"]
-    naive = seed_stats(s4, "S4_B2")
-    fig, axes = plt.subplots(1, 2, figsize=(7.2, 2.8))
-    for ax, col in zip(axes, (0, 2)):
+    fig, axes = plt.subplots(1, 2, figsize=(7.4, 2.9), sharey=True)
+    for ax, suf, title in zip(axes, ("", "-avglast3"), ("raw final checkpoint", "average of the 2k, 4k, 6k checkpoints")):
+        if "S4_B2" + suf not in s4:
+            continue
+        naive = seed_stats(s4, "S4_B2" + suf)
         for labs, color, name, mk in ((exact, C_EXACT, "exact weighting (all four candidates)", "o"),
                                       (sampled, C_SAMPLED, "one sampled candidate per visit", "s")):
-            xs = [ess[l] for l in labs]
-            st = [seed_stats(s4, l) for l in labs]
-            ys = [s[col] for s in st]; es = [s[col + 1] for s in st]
-            ax.errorbar(xs, ys, yerr=es, color=color, marker=mk, ms=4, lw=1.2, capsize=2, label=name)
-        ax.axhline(naive[col], color=C_NAIVE, ls="--", lw=1, label="random selection (fixed draw)")
-        ax.axhspan(naive[col] - naive[col + 1], naive[col] + naive[col + 1], color=C_NAIVE, alpha=0.12, lw=0)
-        ax.set_xticks([1, 2.54, 3.33, 4.0])
-        ax.set_xticklabels(["argmax\nESS 1", "T=0.04\nESS 2.5", "T=0.08\nESS 3.3", "uniform\nESS 4"])
-        ax.set_xlabel("selection distribution over the four candidates")
+            pts = [(kish[l], seed_stats(s4, l + suf)) for l in labs if l + suf in s4]
+            ax.errorbar([x for x, _ in pts], [st[0] for _, st in pts], yerr=[st[1] for _, st in pts],
+                        color=color, marker=mk, ms=4, lw=1.2, capsize=2, label=name)
+        fz = "S4_CD_dinop_catfreeze-T0.04" + suf
+        if fz in s4:
+            st = seed_stats(s4, fz)
+            ax.errorbar([kish[fz.replace(suf, "")]], [st[0]], yerr=[st[1]], color="#2ca02c", marker="D", ms=4, lw=0,
+                        elinewidth=1.2, capsize=2, label="one draw per caption, kept (frozen)")
+        ax.axhline(naive[0], color=C_NAIVE, ls="--", lw=1, label="random selection (fixed draw)")
+        ax.axhspan(naive[0] - naive[1], naive[0] + naive[1], color=C_NAIVE, alpha=0.12, lw=0)
+        ax.set_xticks([1, 2.19, 2.89, 4.0])
+        ax.set_xticklabels(["argmax\n$N_K$ 1", "T=0.04\n$N_K$ 2.2", "T=0.08\n$N_K$ 2.9", "uniform\n$N_K$ 4"])
+        ax.set_title(title, fontsize=9)
     axes[0].set_ylabel("T2I-CompBench")
-    axes[1].set_ylabel("GenEval2 ($\\times$100)")
-    axes[0].legend(fontsize=7, loc="lower left", frameon=False)
+    axes[0].legend(fontsize=6.5, loc="lower left", frameon=False)
     fig.savefig(os.path.join(OUT, "selection_rule.pdf")); fig.savefig(os.path.join(OUT, "selection_rule.png"), dpi=110)
     plt.close(fig)
 
@@ -126,10 +132,10 @@ def fig_score_entropy(caches):
         n = Sc.shape[1]
         ess = [np.median(np.exp(entropy_norm(Sc, T)[0] * np.log(n))) for T in Ts]
         ax.plot(Ts, ess, marker="o", ms=3, lw=1.2, color=color, label=name)
-    ax.set_xscale("log"); ax.set_xlabel("temperature T"); ax.set_ylabel("median effective sample size")
+    ax.set_xscale("log"); ax.set_xlabel("temperature T"); ax.set_ylabel("median entropy count $N_H$")
     ax.axvline(0.04, color="k", lw=0.6, ls=":"); ax.axvline(0.08, color="k", lw=0.6, ls=":")
     ax.legend(fontsize=6.5, frameon=False)
-    ax.set_title("ESS of the Boltzmann weights", fontsize=9)
+    ax.set_title("entropy count of the Boltzmann weights", fontsize=9)
     fig.savefig(os.path.join(OUT, "score_entropy.pdf")); fig.savefig(os.path.join(OUT, "score_entropy.png"), dpi=110)
     plt.close(fig)
 

@@ -1,0 +1,75 @@
+#!/usr/bin/env bash
+#BSUB -J sd-W-s4e-smoke
+#BSUB -G s10396
+#BSUB -q training-parallel
+#BSUB -n 4
+#BSUB -W 1:30
+#BSUB -R "span[hosts=1]"
+#BSUB -R "select[mem>128000]"
+#BSUB -R "rusage[mem=128000]"
+#BSUB -M 128000
+#BSUB -gpu "num=1:mode=exclusive_process:gmem=78G"
+#BSUB -cwd /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM
+#BSUB -o /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-W-s4e-smoke-%J.out
+#BSUB -e /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-W-s4e-smoke-%J.err
+# S4e gate. 30-step runs, S4 config, seed 0, T = 0.04:
+#   A  S4b frozen trainer,  CD_dinop_cat        (the trainer the S4b/c/d arms ran on)
+#   B  S4e frozen trainer,  CD_dinop_cat        (must reproduce A: the added code is dead here)
+#   C  S4e frozen trainer,  CD_dinop_catfreeze  (must run; prints the frozen map hash)
+#   D  S4e frozen trainer,  CD_dinop_catfreeze, another ASSIGN_SEED (hash must differ from C)
+#   E  S4e frozen trainer,  CD_dinop_mc         (must run with finite losses)
+set -euo pipefail
+export PATH="/software/cellgen/team361/ha11/envs/nichejepa/bin:$PATH"
+export HF_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/huggingface
+export TORCH_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/torch
+export XDG_CACHE_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/xdg
+export TOKENIZERS_PARALLELISM=false
+export WANDB_MODE=disabled
+export PYTHONPATH="/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM:${PYTHONPATH:-}"
+source ~/.secrets/hf_token
+J=${LSB_JOBID:-manual}
+run() {  # name trainer variant assign_seed
+  local name=$1 trainer=$2 variant=$3 aseed=$4
+  local err="logs/s4e_smoke_${name}_${J}.err" out="logs/s4e_smoke_${name}_${J}.out"
+  echo "[$(date --iso-8601=seconds)] run $name: $trainer $variant assign_seed=$aseed"
+  python3 "$trainer" --variant "$variant" --coupling fresh --distill_loss x0_huber \
+    --seed 0 --sel_seed 0 --selection_dir phaseN/coco_selection_dinopatch --alpha 1.0 --temp 0.04 \
+    --N 4 --K 8 --cfg 7.0 --student_cfg 0.0 --cfg_mode composed --num_steps 30 --num_warmup_steps 5 --lr 1e-5 \
+    --weight_decay 0.0 --grad_clip 1.0 --height 512 --sched_shift 3.0 --num_train_ts 1000.0 --delta_min 1 --delta_max 3 \
+    --scoring_window 0.4,0.9 --support_m 1 --assign_seed "$aseed" --huber_c 0.0 --gradient_checkpointing \
+    --save_every 1000 --log_every 1 --sample_every 0 --no_wandb \
+    --output_dir "checkpoints/phaseW_smoke/s4e_${name}_${J}" > "$out" 2> "$err"
+  echo "[$name] losses: $(tr '\r' '\n' < "$err" | grep -oE 'loss=[0-9.e+-]+' | sed 's/loss=//' | awk 'NR%2==1' | tr '\n' ' ')"
+  echo "[$name] map: $(grep -oE 'target_map_sha256=[0-9a-f]{16}' "$out" | head -1)"
+  rm -rf "checkpoints/phaseW_smoke/s4e_${name}_${J}"
+}
+run A phaseW/train_pilot_frozen_s4b.py CD_dinop_cat       982451653
+run B phaseW/train_pilot_frozen_s4e.py CD_dinop_cat       982451653
+run C phaseW/train_pilot_frozen_s4e.py CD_dinop_catfreeze 1000003
+run D phaseW/train_pilot_frozen_s4e.py CD_dinop_catfreeze 1000004
+run E phaseW/train_pilot_frozen_s4e.py CD_dinop_mc        982451653
+python3 - "$J" <<'EOF'
+import re, sys, math
+J = sys.argv[1]
+def losses(name):
+    t = open(f"logs/s4e_smoke_{name}_{J}.err").read().replace("\r", "\n")
+    return [float(x) for x in re.findall(r"loss=([0-9.e+-]+)", t)][::2]
+def maphash(name):
+    m = re.search(r"target_map_sha256=([0-9a-f]{16})", open(f"logs/s4e_smoke_{name}_{J}.out").read())
+    return m.group(1) if m else None
+a, b, c, d, e = (losses(n) for n in "ABCDE")
+assert min(len(a), len(b), len(c), len(d), len(e)) >= 25, [len(x) for x in (a, b, c, d, e)]
+n = min(len(a), len(b))
+rel = max(abs(x - y) / max(abs(x), 1e-9) for x, y in zip(a[:n], b[:n]))
+print(f"[gate] A vs B (Cat-1, old vs new trainer): max relative loss difference {rel:.2e} over {n} steps")
+# tolerance: without deterministic kernels two runs of the SAME code drift apart over 30 steps
+# (flash-attention backward), and the losses are printed at 3 significant digits; job 134633
+# measured 2.4e-2 with identical selection maps. Bit-exactness is proved separately under
+# deterministic kernels by phaseW/_equiv/equiv_s4b.lsf.
+assert rel < 3e-2, "new trainer does not reproduce the S4b Cat-1 losses"
+assert all(math.isfinite(x) for x in c + d + e), "non-finite loss"
+print(f"[gate] catfreeze maps: C {maphash('C')} D {maphash('D')} (must differ)")
+assert maphash("C") and maphash("D") and maphash("C") != maphash("D"), "frozen maps do not depend on assign_seed"
+print(f"[gate] mean losses: cat {sum(a)/len(a):.4g}  catfreeze {sum(c)/len(c):.4g}  mc {sum(e)/len(e):.4g}")
+print("S4E_SMOKE_OK")
+EOF

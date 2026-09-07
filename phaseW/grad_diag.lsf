@@ -1,0 +1,29 @@
+#!/usr/bin/env bash
+#BSUB -J sd-W-graddiag
+#BSUB -G s10396
+#BSUB -q training-parallel
+#BSUB -n 4
+#BSUB -W 5:00
+#BSUB -R "span[hosts=1]"
+#BSUB -R "select[mem>200000]"
+#BSUB -R "rusage[mem=200000]"
+#BSUB -M 200000
+#BSUB -gpu "num=1:mode=exclusive_process:gmem=78G"
+#BSUB -cwd /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM
+#BSUB -o /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-W-graddiag-%J.out
+#BSUB -e /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-W-graddiag-%J.err
+# Gradient diagnostic (phaseW/grad_diag.py) at two frozen model states: the pretrained init and the
+# S4 argmax student (seed 0, final). 48 held-out captions each, T = 0.04.
+set -euo pipefail
+export PATH="/software/cellgen/team361/ha11/envs/nichejepa/bin:$PATH"
+export HF_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/huggingface
+export TORCH_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/torch
+export XDG_CACHE_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/xdg
+export TOKENIZERS_PARALLELISM=false
+export PYTHONPATH="/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM:${PYTHONPATH:-}"
+source ~/.secrets/hf_token
+N=${N_CAPTIONS:-48}
+python3 phaseW/grad_diag.py --ckpt checkpoints/phaseS4/phaseS4_CD_dinop_hard_s0_130455/checkpoint_final.pt \
+  --n_captions "$N" --temp 0.04 --out phaseW/grad_diag_hard_s0.json
+python3 phaseW/grad_diag.py --ckpt base --n_captions "$N" --temp 0.04 --out phaseW/grad_diag_base.json
+echo "GRAD_DIAG_DONE"

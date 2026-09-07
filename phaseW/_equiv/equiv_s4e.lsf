@@ -1,0 +1,80 @@
+#!/usr/bin/env bash
+#BSUB -J sd-W-equiv-s4e
+#BSUB -G s10396
+#BSUB -q training-parallel
+#BSUB -n 4
+#BSUB -W 3:00
+#BSUB -R "span[hosts=1]"
+#BSUB -R "select[mem>128000]"
+#BSUB -R "rusage[mem=128000]"
+#BSUB -M 128000
+#BSUB -gpu "num=1:mode=exclusive_process:gmem=78G"
+#BSUB -cwd /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM
+#BSUB -o /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-W-equiv-s4e-%J.out
+#BSUB -e /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-W-equiv-s4e-%J.err
+# Second equivalence round after the S4e trainer changes: release trainer vs phaseC/train_pilot.py
+# (= phaseW/train_pilot_frozen_s4e.py) under deterministic kernels for the sampled Boltzmann arm
+# (its code path was touched), the frozen-draw arm and the same-caption MC arm, plus a control.
+set -uo pipefail
+export PATH="/software/cellgen/team361/ha11/envs/nichejepa/bin:$PATH"
+export HF_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/huggingface
+export TORCH_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/torch
+export XDG_CACHE_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/xdg
+export TOKENIZERS_PARALLELISM=false
+export WANDB_MODE=disabled
+export CUBLAS_WORKSPACE_CONFIG=:4096:8
+source ~/.secrets/hf_token
+REPO=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM
+DET=$REPO/phaseW/_equiv/det
+CLEAN=$REPO/phaseW/_equiv/clean-tree
+OUT=$REPO/phaseW/_equiv/out_s4e
+rm -rf "$OUT"; mkdir -p "$OUT"
+CACHE=$REPO/phaseN/coco_selection_dinopatch
+STEPS=6
+COMMON_ORIG="--coupling fresh --distill_loss x0_huber --seed 0 --sel_seed 0 --selection_dir $CACHE \
+  --alpha 1.0 --N 4 --K 8 --cfg 7.0 --student_cfg 0.0 --cfg_mode composed \
+  --num_warmup_steps 300 --lr 1e-5 --weight_decay 0.0 --grad_clip 1.0 --height 512 \
+  --sched_shift 3.0 --num_train_ts 1000.0 --delta_min 1 --delta_max 3 --scoring_window 0.4,0.9 \
+  --support_m 1 --huber_c 0.0 --gradient_checkpointing --save_every 100000 \
+  --log_every 1 --sample_every 0 --no_wandb --num_steps $STEPS"
+COMMON_NEW="--cache_dir $CACHE --seed 0 --sel_seed 0 --num_warmup_steps 300 --lr 1e-5 --K 8 --cfg 7.0 \
+  --window 0.4,0.9 --delta_min 1 --delta_max 3 --height 512 --gradient_checkpointing --save_every 100000 --log_every 1 --num_steps $STEPS"
+echo "orig trainer sha $(sha256sum $REPO/phaseC/train_pilot.py | cut -c1-8) (frozen s4e $(sha256sum $REPO/phaseW/train_pilot_frozen_s4e.py | cut -c1-8)); release trainer sha $(sha256sum $CLEAN/train/distill.py | cut -c1-8); release commit $(git -C $CLEAN rev-parse --short HEAD)"
+
+run () {
+  local out="$OUT/$1"; shift
+  local t0=$(date +%s)
+  ( "$@" --output_dir "$out" ) > "$out.log" 2>&1
+  echo "$(basename "$out") rc=$? $(( $(date +%s) - t0 ))s losses: $(tr '\r' '\n' < "$out.log" | grep -oE 'loss=[0-9.e+-]+' | sed 's/loss=//' | awk 'NR%2==1' | tr '\n' ' ')"
+}
+cd "$REPO"
+O="env PYTHONPATH=$DET:$REPO python3 phaseC/train_pilot.py"
+run orig_cat_a     $O --variant CD_dinop_cat       --temp 0.04 --assign_seed 982451653 $COMMON_ORIG
+run orig_cat_b     $O --variant CD_dinop_cat       --temp 0.04 --assign_seed 982451653 $COMMON_ORIG
+run orig_frozen    $O --variant CD_dinop_catfreeze --temp 0.04 --assign_seed 1000003   $COMMON_ORIG
+run orig_mc        $O --variant CD_dinop_mc        --temp 0.04 --assign_seed 982451653 --mc_draws 4 $COMMON_ORIG
+cd "$CLEAN"
+N="env PYTHONPATH=$DET:$CLEAN python3 train/distill.py"
+run new_cat        $N --selector boltzmann_sample --temp 0.04 $COMMON_NEW
+run new_frozen     $N --selector boltzmann_frozen --temp 0.04 --map_seed 1000003 $COMMON_NEW
+run new_mc         $N --selector boltzmann_mc     --temp 0.04 --mc_draws 4 $COMMON_NEW
+cd "$REPO"
+echo "=== selection hashes ==="; grep -h "sha256" "$OUT"/*.log | cut -c1-140
+
+OUT="$OUT" python3 - <<'PY'
+import os, torch
+OUT = os.environ["OUT"]
+def sd(p): return torch.load(p, map_location="cpu", weights_only=False)["model"]
+def cmp(a, b, label):
+    A, B = sd(f"{OUT}/{a}/checkpoint_final.pt"), sd(f"{OUT}/{b}/checkpoint_final.pt")
+    mx = max(float((A[k].float() - B[k].float()).abs().max()) for k in A)
+    same = sum(int(torch.equal(A[k], B[k])) for k in A)
+    print(f"{label:52s}: {same}/{len(A)} tensors identical, max|diff|={mx:.3e}")
+    return mx
+ok = cmp("orig_cat_a", "orig_cat_b", "control: orig vs orig (boltzmann_sample)") == 0.0
+different = cmp("orig_cat_a", "orig_frozen", "sanity: sampled vs frozen (must differ)") > 0.0
+for a, b, lab in (("orig_cat_a", "new_cat", "boltzmann_sample (T=0.04)"), ("orig_frozen", "new_frozen", "boltzmann_frozen (T=0.04, map 1000003)"),
+                  ("orig_mc", "new_mc", "boltzmann_mc (T=0.04, 4 draws)")):
+    ok &= cmp(a, b, f"orig vs release: {lab}") == 0.0
+print("EQUIV_S4E_RESULT", "PASS" if (ok and different) else "FAIL")
+PY

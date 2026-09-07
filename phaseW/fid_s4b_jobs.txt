@@ -1,0 +1,19 @@
+B2-avglast3 0 134744
+B2-avglast3 1 134745
+B2-avglast3 2 134746
+CD_dinop_hard-avglast3 0 134747
+CD_dinop_hard-avglast3 1 134748
+CD_dinop_hard-avglast3 2 134749
+CD_dinop_full-T0.04-avglast3 0 134750
+CD_dinop_full-T0.04-avglast3 1 134751
+CD_dinop_full-T0.04-avglast3 2 134752
+CD_dinop_cat-T0.04-avglast3 0 134753
+CD_dinop_cat-T0.04-avglast3 1 134754
+CD_dinop_cat-T0.04-avglast3 2 134755
+CD_dinop_catfreeze-T0.04 0 134756
+CD_dinop_catfreeze-T0.04-avglast3 0 134757
+CD_dinop_catfreeze-T0.04 1 134758
+CD_dinop_catfreeze-T0.04-avglast3 1 134759
+CD_dinop_catfreeze-T0.04 2 134760
+CD_dinop_catfreeze-T0.04-avglast3 2 134761
+fidscore 134762

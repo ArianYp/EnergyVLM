@@ -1,0 +1,3 @@
+CD_dinop_catfreeze-T0.04 0 134652 134653
+CD_dinop_catfreeze-T0.04 1 134654 134655
+CD_dinop_catfreeze-T0.04 2 134656 134657

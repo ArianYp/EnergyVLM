@@ -1,0 +1,13 @@
+B2 0 134635
+B2 1 134636
+B2 2 134637
+CD_dinop_hard 0 134638
+CD_dinop_hard 1 134639
+CD_dinop_hard 2 134640
+CD_dinop_full-T0.04 0 134641
+CD_dinop_full-T0.04 1 134642
+CD_dinop_full-T0.04 2 134643
+CD_dinop_cat-T0.04 0 134644
+CD_dinop_cat-T0.04 1 134645
+CD_dinop_cat-T0.04 2 134646
+fidscore 134647
