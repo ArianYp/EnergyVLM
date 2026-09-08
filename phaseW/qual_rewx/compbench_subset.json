@@ -1,0 +1,62 @@
+[
+ {
+  "idx": 2099,
+  "category": "numeracy",
+  "prompt": "one drum"
+ },
+ {
+  "idx": 1177,
+  "category": "spatial",
+  "prompt": "a person on the left of a vase"
+ },
+ {
+  "idx": 996,
+  "category": "spatial",
+  "prompt": "a chair on the right of a giraffe"
+ },
+ {
+  "idx": 33,
+  "category": "color",
+  "prompt": "a red banana and a green suitcase"
+ },
+ {
+  "idx": 1293,
+  "category": "3d_spatial",
+  "prompt": "a backpack hidden by a butterfly"
+ },
+ {
+  "idx": 2184,
+  "category": "numeracy",
+  "prompt": "two pillows and one microphone"
+ },
+ {
+  "idx": 163,
+  "category": "color",
+  "prompt": "a gold backpack and a blue clock"
+ },
+ {
+  "idx": 754,
+  "category": "texture",
+  "prompt": "a metallic keychain and wooden chopsticks"
+ },
+ {
+  "idx": 1050,
+  "category": "spatial",
+  "prompt": "a butterfly next to a train"
+ },
+ {
+  "idx": 926,
+  "category": "spatial",
+  "prompt": "a bird on the top of a balloon"
+ },
+ {
+  "idx": 760,
+  "category": "texture",
+  "prompt": "a metallic knife and a glass jar"
+ },
+ {
+  "idx": 2242,
+  "category": "numeracy",
+  "prompt": "two sinks and one helicopter"
+ }
+]

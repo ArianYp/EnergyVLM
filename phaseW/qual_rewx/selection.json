@@ -1,0 +1,246 @@
+{
+ "compbench": [
+  {
+   "idx": 2099,
+   "prompt": "one drum",
+   "category": "numeracy",
+   "margin": 1.0,
+   "random": 1.0,
+   "argmax": 0.0,
+   "reward": 1.0,
+   "panel": "gain"
+  },
+  {
+   "idx": 1177,
+   "prompt": "a person on the left of a vase",
+   "category": "spatial",
+   "margin": 0.993896484375,
+   "random": 0.0,
+   "argmax": 0.0,
+   "reward": 0.993896484375,
+   "panel": "gain"
+  },
+  {
+   "idx": 996,
+   "prompt": "a chair on the right of a giraffe",
+   "category": "spatial",
+   "margin": 0.99267578125,
+   "random": 0.9293387437589387,
+   "argmax": 0.0,
+   "reward": 0.99267578125,
+   "panel": "gain"
+  },
+  {
+   "idx": 33,
+   "prompt": "a red banana and a green suitcase",
+   "category": "color",
+   "margin": 0.8935000000000001,
+   "random": 0.8907,
+   "argmax": 0.0579,
+   "reward": 0.9514,
+   "panel": "gain"
+  },
+  {
+   "idx": 1293,
+   "prompt": "a backpack hidden by a butterfly",
+   "category": "3d_spatial",
+   "margin": 0.7853733672644917,
+   "random": 0.2298583984375,
+   "argmax": 0.0516815185546875,
+   "reward": 0.8370548858191792,
+   "panel": "gain"
+  },
+  {
+   "idx": 2184,
+   "prompt": "two pillows and one microphone",
+   "category": "numeracy",
+   "margin": 0.75,
+   "random": 0.25,
+   "argmax": 0.25,
+   "reward": 1.0,
+   "panel": "gain"
+  },
+  {
+   "idx": 163,
+   "prompt": "a gold backpack and a blue clock",
+   "category": "color",
+   "margin": 0.7439,
+   "random": 0.0844,
+   "argmax": 0.2103,
+   "reward": 0.9542,
+   "panel": "gain"
+  },
+  {
+   "idx": 754,
+   "prompt": "a metallic keychain and wooden chopsticks",
+   "category": "texture",
+   "margin": 0.6845,
+   "random": 0.4488,
+   "argmax": 0.1065,
+   "reward": 0.791,
+   "panel": "gain"
+  },
+  {
+   "idx": 1050,
+   "prompt": "a butterfly next to a train",
+   "category": "spatial",
+   "margin": -0.992431640625,
+   "random": 0.96875,
+   "argmax": 0.992431640625,
+   "reward": 0.0,
+   "panel": "loss"
+  },
+  {
+   "idx": 926,
+   "prompt": "a bird on the top of a balloon",
+   "category": "spatial",
+   "margin": -0.9918212890625,
+   "random": 0.985595703125,
+   "argmax": 0.9918212890625,
+   "reward": 0.0,
+   "panel": "loss"
+  },
+  {
+   "idx": 760,
+   "prompt": "a metallic knife and a glass jar",
+   "category": "texture",
+   "margin": -0.755,
+   "random": 0.605,
+   "argmax": 0.9064,
+   "reward": 0.1514,
+   "panel": "loss"
+  },
+  {
+   "idx": 2242,
+   "prompt": "two sinks and one helicopter",
+   "category": "numeracy",
+   "margin": -0.75,
+   "random": 0.75,
+   "argmax": 1.0,
+   "reward": 0.25,
+   "panel": "loss"
+  }
+ ],
+ "geneval2": [
+  {
+   "idx": 56,
+   "prompt": "a monkey behind a penguin",
+   "category": "geneval2",
+   "margin": 0.996774656435118,
+   "random": 0.038200823405794566,
+   "argmax": 0.00014362052592396804,
+   "reward": 0.996918276961042,
+   "panel": "gain"
+  },
+  {
+   "idx": 6,
+   "prompt": "four brown monkeys",
+   "category": "geneval2",
+   "margin": 0.9577361077644582,
+   "random": 0.018321143485819827,
+   "argmax": 0.04213467766796952,
+   "reward": 0.9998707854324277,
+   "panel": "gain"
+  },
+  {
+   "idx": 29,
+   "prompt": "four blue dogs",
+   "category": "geneval2",
+   "margin": 0.9438107859172297,
+   "random": 0.8945379992441413,
+   "argmax": 0.00902459428317134,
+   "reward": 0.952835380200401,
+   "panel": "gain"
+  },
+  {
+   "idx": 196,
+   "prompt": "a glass toy and a spotted croissant",
+   "category": "geneval2",
+   "margin": 0.9248973829874101,
+   "random": 0.02286762890118311,
+   "argmax": 0.03307100344537896,
+   "reward": 0.957968386432789,
+   "panel": "gain"
+  },
+  {
+   "idx": 67,
+   "prompt": "five glass monkeys",
+   "category": "geneval2",
+   "margin": 0.888713716706202,
+   "random": 0.9195942217271139,
+   "argmax": 0.1093467474208001,
+   "reward": 0.9980604641270021,
+   "panel": "gain"
+  },
+  {
+   "idx": 359,
+   "prompt": "three yellow monkeys on top of a green clock",
+   "category": "geneval2",
+   "margin": 0.8737864261791399,
+   "random": 0.21500875037092346,
+   "argmax": 0.1262030818171801,
+   "reward": 0.99998950799632,
+   "panel": "gain"
+  },
+  {
+   "idx": 94,
+   "prompt": "four red bears",
+   "category": "geneval2",
+   "margin": 0.857643860783374,
+   "random": 0.0012540575778973925,
+   "argmax": 0.06124887981862197,
+   "reward": 0.9188927406019959,
+   "panel": "gain"
+  },
+  {
+   "idx": 267,
+   "prompt": "a plastic car to the right of a plastic dog",
+   "category": "geneval2",
+   "margin": 0.8134535116528877,
+   "random": 0.23089400741806201,
+   "argmax": 0.06322039344895526,
+   "reward": 0.876673905101843,
+   "panel": "gain"
+  },
+  {
+   "idx": 53,
+   "prompt": "three red rabbits",
+   "category": "geneval2",
+   "margin": -0.9804758821288192,
+   "random": 0.9999594625575172,
+   "argmax": 0.9922728010313571,
+   "reward": 0.011796918902537916,
+   "panel": "loss"
+  },
+  {
+   "idx": 123,
+   "prompt": "a cat under a donut, and a croissant",
+   "category": "geneval2",
+   "margin": -0.971596257639828,
+   "random": 0.15882834663021322,
+   "argmax": 0.9955816547168438,
+   "reward": 0.0239853970770157,
+   "panel": "loss"
+  },
+  {
+   "idx": 54,
+   "prompt": "six black penguins",
+   "category": "geneval2",
+   "margin": -0.9350969894118898,
+   "random": 0.08978784643834128,
+   "argmax": 0.9471282559483324,
+   "reward": 0.01203126653644255,
+   "panel": "loss"
+  },
+  {
+   "idx": 58,
+   "prompt": "three metal mushrooms",
+   "category": "geneval2",
+   "margin": -0.9109607645593921,
+   "random": 0.9985329774676953,
+   "argmax": 0.9962097289209408,
+   "reward": 0.08524896436154869,
+   "panel": "loss"
+  }
+ ]
+}

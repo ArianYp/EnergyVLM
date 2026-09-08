@@ -1,0 +1,62 @@
+[
+ {
+  "idx": 56,
+  "category": "geneval2",
+  "prompt": "a monkey behind a penguin"
+ },
+ {
+  "idx": 6,
+  "category": "geneval2",
+  "prompt": "four brown monkeys"
+ },
+ {
+  "idx": 29,
+  "category": "geneval2",
+  "prompt": "four blue dogs"
+ },
+ {
+  "idx": 196,
+  "category": "geneval2",
+  "prompt": "a glass toy and a spotted croissant"
+ },
+ {
+  "idx": 67,
+  "category": "geneval2",
+  "prompt": "five glass monkeys"
+ },
+ {
+  "idx": 359,
+  "category": "geneval2",
+  "prompt": "three yellow monkeys on top of a green clock"
+ },
+ {
+  "idx": 94,
+  "category": "geneval2",
+  "prompt": "four red bears"
+ },
+ {
+  "idx": 267,
+  "category": "geneval2",
+  "prompt": "a plastic car to the right of a plastic dog"
+ },
+ {
+  "idx": 53,
+  "category": "geneval2",
+  "prompt": "three red rabbits"
+ },
+ {
+  "idx": 123,
+  "category": "geneval2",
+  "prompt": "a cat under a donut, and a croissant"
+ },
+ {
+  "idx": 54,
+  "category": "geneval2",
+  "prompt": "six black penguins"
+ },
+ {
+  "idx": 58,
+  "category": "geneval2",
+  "prompt": "three metal mushrooms"
+ }
+]
