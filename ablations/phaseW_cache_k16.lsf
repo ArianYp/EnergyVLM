@@ -1,0 +1,40 @@
+#!/usr/bin/env bash
+#BSUB -J sd-W-cache-k16
+#BSUB -G s10396
+#BSUB -q training-parallel
+#BSUB -n 16
+#BSUB -W 12:00
+#BSUB -R "span[hosts=1]"
+#BSUB -R "select[mem>256000 && hname!='farm-gpu0504']"
+#BSUB -R "rusage[mem=256000]"
+#BSUB -M 256000
+#BSUB -gpu "num=4:mode=exclusive_process:gmem=78G"
+#BSUB -cwd /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM
+#BSUB -o /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-W-cache-k28-%J.out
+#BSUB -e /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-W-cache-k28-%J.err
+#
+# Teacher-quality ablation: the SAME 3,000 captions and the SAME seeds as coco_selection_108348,
+# but candidates sampled with a 16-step CFG-4.5 guided teacher (the model-card guidance, nested 4-step grid) instead of 8 steps at CFG 7. Scored with VQAScore,
+# DINO (CLS + mean-patch) and CLIP-I so every existing arm can be re-run on it. The trainer must
+# then roll K=28 as well (the seed->image map depends on K), see ablations/phaseW_train_k28.lsf.
+set -euo pipefail
+export PATH="/software/cellgen/team361/ha11/envs/nichejepa/bin:$PATH"
+export HF_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/huggingface
+export TORCH_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/torch
+export XDG_CACHE_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/xdg
+export TOKENIZERS_PARALLELISM=false
+export PYTHONPATH="/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM:${PYTHONPATH:-}"
+source ~/.secrets/hf_token
+OUT=phaseN/coco_selection_k16
+mkdir -p "$OUT" logs
+torchrun --standalone --nproc-per-node=4 phaseN/build_coco_selection.py \
+  --pool_manifest phaseN/coco_selection_108348/pool_manifest.json --out_root "$OUT" \
+  --N 4 --K 16 --cfg 4.5 --height 512 --seed 0 --baselines dino,clip
+python3 - <<PY
+import json, glob
+n = sum(1 for f in glob.glob("$OUT/selection_rank*.jsonl") for _ in open(f))
+json.dump({"K": 16, "cfg": 4.5, "N": 4, "n_prompts": n, "scores": True,
+           "note": "16-step CFG-4.5 teacher candidates on the coco_selection_108348 captions/seeds"},
+          open("$OUT/cache_meta.json", "w"), indent=1)
+print("records:", n)
+PY

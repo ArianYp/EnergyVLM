@@ -1,0 +1,218 @@
+#!/usr/bin/env bash
+#BSUB -J sd-repa-v2
+#BSUB -G s10396
+#BSUB -U conf_july_2026
+#BSUB -q training-parallel
+#BSUB -n 16
+#BSUB -W 24:00
+#BSUB -R "span[hosts=1]"
+#BSUB -R "select[mem>256000 && hname!='farm-gpu0504']"
+#BSUB -R "rusage[mem=256000]"
+#BSUB -M 256000
+#BSUB -gpu "num=4:mode=exclusive_process:gmodel=NVIDIAH200"
+#BSUB -cwd /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM
+#BSUB -o /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-repa-v2-%J.out
+#BSUB -e /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-repa-v2-%J.err
+#
+# PHASE R v2 — REPA auxiliary loss on the M1 recipe. RELAUNCH of job 91058, which produced an
+# unusable model (step-10000 ckpt: CMMD 502.1 / VQAScore 0.2519 at 4 steps, vs M1's 69.7 / 0.7848;
+# samples are flat saturated primary-colour blocks at every step count).
+#
+# WHAT WENT WRONG IN 91058 — it was not the experiment its own header claimed
+# ---------------------------------------------------------------------------
+# repa_full.lsf said: "EXACT M1 CONTROL ... The ONLY difference from M1 is --lambda_repa 0.5
+# --repa_layer 8." Diffing the two args.json files shows FOUR live hyperparameters also moved,
+# because the command passed none of them and instead inherited the PARSER DEFAULTS, which have
+# drifted away from what M1 was actually launched with:
+#
+#   flag                M1 (CMMD 69.7)   91058 default (CMMD 502)   what it controls
+#   --freeze_teacher    True             False                      frozen vs live EMA teacher
+#   --guidance_scale    7.0              0.0  (no CFG)              teacher target quality
+#   --scoring_window    0.4,0.9          0.3,0.7                    score_idxs [3-7] vs [2-6]
+#   --delta_max         3                2                          student's timestep gap Δ
+#   (+ inert under --latent_matching_baseline: feature_encoder clip->dino,
+#      reward_detach_projector True->False)
+#
+# The header listed "ema 0.999" among the copied hyperparameters — true, but for M1 ema_decay is a
+# DEAD parameter because --freeze_teacher skips update_ema entirely. Copying the inert knob while
+# dropping the live one is exactly how this happened. Lesson encoded below: the flag set is defined
+# ONCE in a shell array, and a gate diffs the resulting args.json against M1's before the long run.
+#
+# --freeze_teacher is the one with a documented history. This repo's 15-run divergence campaign
+# (reports/self_distill_campaign_summary.md) established a frozen teacher as the only configuration
+# with a fixed point; every live-EMA run degraded. The same eval that judged 91058 reproduces the
+# split cleanly on that single flag:
+#       frozen teacher : M1 69.7   M2 69.1     (usable)
+#       live EMA 0.999 : K1 467.1  REPA 502.1  (garbage)
+#
+# WHAT IS *NOT* THE CAUSE — checked, so it is not re-litigated
+# -----------------------------------------------------------
+# NOT the output-scale runaway from the earlier campaign. Measured from 91058's W&B history:
+# xhat_norm 209 -> ~390 with xtea tracking it at ratio 0.985-1.00, while M1 itself oscillates
+# 258-396 over its own run. The scale ranges OVERLAP; there is no co-inflation to 11,000 here.
+# Whatever destroyed the model, it was not that, and the "watercolor = divergence signature" story
+# does not apply. Which of the four deltas dominates is NOT established — this run does not attempt
+# to attribute it, it restores the control.
+#
+# WHY IT RAN 10 HOURS AND 15,000 STEPS LOOKING HEALTHY
+# ----------------------------------------------------
+# Two blind spots, both fixed below:
+#  1. With teacher = EMA(student), the consistency loss d measures the student against its own
+#     running average, so damage that moves BOTH is invisible. 91058's d sat at 20-42 — LOWER than
+#     M1's 40-92 — while the model was being destroyed. A frozen teacher makes d absolute again:
+#     if REPA damages the student, d must rise.
+#  2. --log_image_samples was off (sample_every 0), so no student image ever reached W&B. The one
+#     signal that would have shown saturated blocks inside the first hour was not enabled. M1 had
+#     it on at 2500; this run uses 500.
+#
+# NO CODE CHANGE — and one attempted change REVERTED, recorded so it is not retried
+# ---------------------------------------------------------------------------------
+# The REPA term runs a SECOND forward through the DDP-wrapped student and is folded into total_loss
+# for a SINGLE backward. That looks like the pattern the L_fm block ~40 lines lower documents as
+# unsupported under find_unused_parameters=False, so v2 initially "fixed" it to L_fm's separate
+# forward+backward. That was WRONG and the smoke gate caught it on step 1 of the first attempt
+# (job 91327, all four ranks):
+#     RuntimeError: Expected to have finished reduction in the prior iteration before starting a
+#     new one. This error indicates that your module has parameters that were not used in
+#     producing loss.
+# L_repa is read off a HOOK at block repa_layer (8 of 24), so it gradients only blocks 1-8; blocks
+# 9-24 / norm_out / proj_out get nothing from it. A backward covering only part of the module never
+# finishes its reduction. Folding L_repa into total_loss is precisely what makes every parameter
+# covered — the consistency term supplies the rest of the network. L_fm can use a separate backward
+# because it depends on the full network OUTPUT (velocity), not an intermediate activation. The same
+# constraint is already guarded at startup for the encoder projector (train_self_distill.py:1111).
+# ⇒ Two forwards before one backward is REQUIRED here, and is safe: each parameter's AccumulateGrad
+# node still fires exactly once, after both subgraphs have contributed. Rationale is now in the code.
+# This run is therefore a PURE CONFIG fix: train_self_distill.py is functionally identical to what
+# ran 91058, apart from that explanatory comment.
+#
+# PRE-REGISTERED READ (unchanged from 91058, now actually testable against M1 as a control)
+#   CMMD < 69.7 and VQA >= 0.7848 -> representation alignment closes part of the 15.6 CMMD gap.
+#   CMMD ~ 69.7 (within noise)    -> REPA does not transfer to few-step distillation. Negative.
+#   VQA < 0.7848                  -> moved ALONG the trade-off, not beat it. Failure, not partial.
+# Caveat: CMMD on 640 images is an internal gate, NOT publication FID (needs 5-10k).
+#
+# Wall clock: M1 measured 1.99 s/step at CFG 7 => ~11 h for 20k, +40 min sampling, +10 min smoke,
+# +35 min eval. -W 24:00 leaves headroom.
+set -euo pipefail
+export PATH="/software/cellgen/team361/ha11/envs/nichejepa/bin:$PATH"
+export HF_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/huggingface
+export TORCH_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/torch
+export XDG_CACHE_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/xdg
+export TOKENIZERS_PARALLELISM=false
+export NCCL_NVLS_ENABLE=0
+source ~/.secrets/hf_token
+
+M1=checkpoints/method/M1_pure_consistency_20260624_065127_55187
+JOB=${LSB_JOBID:-local}
+RUN=repa_v2_$(date +%Y%m%d_%H%M%S)_${JOB}
+echo "[`date`] Phase R v2 | Host: $(hostname) | RUN=${RUN}"
+
+# ── The flag set, defined ONCE so the smoke gate and the real run cannot drift apart.
+#    Every value here is read off ${M1}/args.json. Do not rely on a parser default for any
+#    hyperparameter that M1 set explicitly — that is what broke 91058.
+COMMON=(
+  --coco_split train2017 --latent_matching_baseline
+  --freeze_teacher --guidance_scale 7.0
+  --scoring_window 0.4,0.9 --delta_min 1 --delta_max 3
+  --lambda_repa 0.5 --repa_layer 8
+  --N_traj 4 --K_steps 8 --distance pseudo_huber --huber_c 0.0
+  --lr 1e-5 --projector_lr 1e-4 --weight_decay 0.0
+  --ema_decay 0.999 --grad_clip 1.0 --projector_grad_clip 5.0
+  --feature_encoder clip --reward_detach_projector
+  --gradient_checkpointing --height 512 --seed 0
+)
+
+# ─────────────────────────────────────────────────────────────────────────────
+# GATE 0 — 300-step smoke on the PRODUCTION flag set, then an args.json diff against M1.
+# Both gates fail in ~10 minutes rather than after 11 hours of training.
+# Validates: the REPA separate-backward change; the hook firing under --freeze_teacher + CFG 7 +
+# scoring window [3-7] (never exercised together); L_repa descending; and that this really is a
+# single-treatment control.
+# ─────────────────────────────────────────────────────────────────────────────
+SMOKE_DIR=checkpoints/phaseR/${RUN}_smoke
+SMOKE_LOG=logs/repa_v2_smoke_${JOB}.log
+echo "[`date`] GATE 0: 300-step smoke -> ${SMOKE_LOG}"
+torchrun --standalone --nproc-per-node=4 train_self_distill.py \
+  "${COMMON[@]}" \
+  --num_steps 300 --num_warmup_steps 50 \
+  --output_dir "${SMOKE_DIR}" \
+  --save_every 100000 --log_every 10 \
+  --no_wandb 2>&1 | tee "${SMOKE_LOG}"
+
+python3 - "${SMOKE_LOG}" <<'PY'
+import re, sys, math
+raw = open(sys.argv[1], errors="replace").read().replace("\r", "\n")
+def series(key):
+    return [float(x) for x in re.findall(rf"{key}=([0-9eE.+-]+)", raw)
+            if re.fullmatch(r"[0-9eE.+-]+", x)]
+lrepa, d = series("Lrepa"), series(r"\bd")
+assert len(lrepa) >= 5, f"GATE 0 FAIL: only {len(lrepa)} Lrepa readings; REPA may not have fired"
+assert all(math.isfinite(v) for v in lrepa), "GATE 0 FAIL: non-finite L_repa"
+assert d and all(math.isfinite(v) for v in d), "GATE 0 FAIL: non-finite consistency loss d"
+first, last = sum(lrepa[:5]) / 5, sum(lrepa[-5:]) / 5
+print(f"GATE 0: L_repa {first:.4f} -> {last:.4f} over {len(lrepa)} logs; "
+      f"d in [{min(d):.3g}, {max(d):.3g}]")
+assert last < first, (
+    f"GATE 0 FAIL: L_repa did not descend ({first:.4f} -> {last:.4f}). The projector is fitting a "
+    "fixed frozen-DINOv2 target, so it must. Suspect the hook, the token-grid match, or a severed "
+    "gradient path.")
+print("GATE 0 PASS: REPA loss active and descending")
+PY
+
+# GATE 1 — this must be an M1 control in the only sense that matters: the args.json the trainer
+# actually wrote differs from M1's in nothing but the treatment. Compared on the SMOKE's args.json
+# because COMMON is shared verbatim with the real run, so any hyperparameter drift shows up here.
+python3 - "${M1}/args.json" "${SMOKE_DIR}/args.json" <<'PY'
+import json, sys
+m1, new = (json.load(open(p)) for p in sys.argv[1:3])
+treatment = {"lambda_repa", "repa_layer"}
+# run identity, schedule length (smoke), and pure-diagnostic knobs
+ignore = {"output_dir", "wandb_project", "wandb_run_name", "no_wandb",
+          "num_steps", "num_warmup_steps", "log_every", "save_every",
+          "sample_every", "sample_inference_steps", "sample_steps_list",
+          "log_image_samples", "save_train_images_every", "probe_every",
+          "compbench_prompts_dir", "dino_cache_path", "gpu"} | treatment
+diff = {k: {"M1": m1.get(k), "new": new.get(k)}
+        for k in set(m1) | set(new) if k not in ignore and m1.get(k) != new.get(k)}
+print("args.json diff vs M1 outside the treatment:", json.dumps(diff, indent=2) if diff else "NONE")
+assert not diff, f"GATE 1 FAIL: not an M1 control -- {len(diff)} unexpected difference(s): {diff}"
+for k, want in [("freeze_teacher", True), ("guidance_scale", 7.0),
+                ("scoring_window", "0.4,0.9"), ("delta_max", 3)]:
+    assert new.get(k) == want, f"GATE 1 FAIL: the 91058 bug is back -- {k}={new.get(k)!r} != {want!r}"
+assert new.get("lambda_repa") == 0.5 and new.get("repa_layer") == 8, "GATE 1 FAIL: treatment missing"
+print("GATE 1 PASS: single treatment = lambda_repa 0.5, repa_layer 8")
+PY
+rm -rf "${SMOKE_DIR}"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# THE RUN — M1's recipe exactly, + REPA as the single treatment.
+# ─────────────────────────────────────────────────────────────────────────────
+echo "[`date`] TRAINING 20k steps -> checkpoints/phaseR/${RUN}"
+torchrun --standalone --nproc-per-node=4 train_self_distill.py \
+  "${COMMON[@]}" \
+  --num_steps 20000 --num_warmup_steps 500 \
+  --output_dir checkpoints/phaseR/${RUN} \
+  --save_every 5000 --log_every 20 \
+  --log_image_samples --sample_every 500 --sample_steps_list 4,28 \
+  --wandb_project sd-phaseR-repa --wandb_run_name "${RUN}"
+echo "[`date`] TRAINING DONE -> checkpoints/phaseR/${RUN}"
+
+# ── evaluate on the SAME Phase-A pool M1's 69.7 / 0.7848 came from ────────────
+CK=checkpoints/phaseR/${RUN}/checkpoint_final.pt
+python3 -c "
+import torch
+ck = torch.load('$CK', map_location='cpu', weights_only=False)
+print('  ckpt keys:', sorted(ck.keys()), 'step:', ck.get('step'))
+assert 'model' in ck, 'no model key'"
+torchrun --standalone --nproc-per-node=4 exp0/phaseA_generate.py \
+  --label REPAv2 --checkpoint "$CK" --cfg 1 --steps_list 4,8,28 --per_category 80
+torchrun --standalone --nproc-per-node=4 exp0/phaseA_score.py --labels REPAv2 --steps_list 4,8,28
+python3 exp0/fidelity_cmmd.py --steps 4,8,28 --out phaseA/fidelity_report_repa_v2.md
+echo "=== REPAv2 @20k vs M1 @20k — the pre-registered, like-for-like comparison ==="
+# --out is REQUIRED: repa_compare.py defaults to phaseA/repa_compare.json, so two runs that
+# both omit it silently overwrite each other's comparison. That happened once (REPAv2's file
+# was clobbered by the m1_mse run and had to be regenerated).
+python3 exp0/repa_compare.py --fidelity_md phaseA/fidelity_report_repa_v2.md \
+  --labels REPAv2,M1 --steps 4,8,28 --out phaseA/repa_compare_repav2.json
+echo "[`date`] DONE"

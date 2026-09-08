@@ -1,0 +1,58 @@
+#!/usr/bin/env bash
+#BSUB -J sd-phaseC-eval-score-ext
+#BSUB -G s10396
+#BSUB -q training-parallel
+#BSUB -n 8
+#BSUB -W 24:00
+#BSUB -R "span[hosts=1]"
+#BSUB -R "select[mem>128000 && hname!='farm-gpu0504']"
+#BSUB -R "rusage[mem=128000]"
+#BSUB -M 128000
+#BSUB -gpu "num=1:mode=exclusive_process:gmodel=NVIDIAH200"
+#BSUB -cwd /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM
+#BSUB -o /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-phaseC-eval-score-ext-%J.out
+#BSUB -e /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-phaseC-eval-score-ext-%J.err
+
+# Phase C1 — the two categories the original 6-category eval-score job could not do:
+#   non_spatial -> CLIPScore   (official evaluator for this category; CLIPScore is
+#                               pre-registration §3 *secondary*, so it is reported but
+#                               kept out of the pooled primary — Deviation 2)
+#   complex     -> 3-in-1      (BLIP-VQA + UniDet-2D-complex + CLIPScore-complex,
+#                               composed with the official per-prompt weighting;
+#                               composition proven identical to upstream 3_in_1.py)
+# Images are the ones the val-gen job already produced; this adds only scoring, taking
+# the pre-registered primary from 6/7 to 7/7 categories. Then re-runs the verdict.
+set -euo pipefail
+export PATH="/software/cellgen/team361/ha11/envs/nichejepa/bin:$PATH"
+export HF_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/huggingface
+export TORCH_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/torch
+export XDG_CACHE_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/xdg
+export TOKENIZERS_PARALLELISM=false
+source ~/.secrets/hf_token
+echo "[`date`] Phase C1 eval-score-ext | Host: $(hostname)"
+
+echo "=== 3-in-1 composition identity vs upstream (guard: re-checked every run) ==="
+python3 phaseC/test_3in1_identity.py
+
+for MODEL in M1 B2 B4; do
+  for STEP in 4 8 28; do
+    for CAT in non_spatial complex; do
+      D=phaseC/eval_scores/${MODEL}_s${STEP}_${CAT}
+      [ -f "$D/scores.json" ] && { echo "skip $D (done)"; continue; }
+      python3 phaseC/compbench_eval.py stage --images phaseC/eval/images/${MODEL} \
+        --prompts phaseC/eval/prompts.json --steps ${STEP} --categories ${CAT} --out "$D"
+      # --skip_done makes an interrupted 3-in-1 resume at the sub-evaluator it died on
+      python3 phaseC/compbench_eval.py run     --dir "$D" --skip_done
+      # val images -> val routing lists
+      python3 phaseC/compbench_eval.py collect --dir "$D" --routing_split val
+    done
+  done
+done
+
+echo "=== VERDICT (all categories now available) ==="
+for STEP in 4 8 28; do
+  python3 phaseC/eval_analyze.py --scores_dir phaseC/eval_scores --step ${STEP} \
+    --models B4,B2,M1 --out phaseC/eval_verdict_s${STEP}.md
+done
+echo "[`date`] DONE -> phaseC/eval_verdict_s{4,8,28}.md"
+if command -v my-job-stats >/dev/null 2>&1; then my-job-stats -a -n -s; fi

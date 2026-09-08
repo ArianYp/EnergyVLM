@@ -1,0 +1,55 @@
+#!/usr/bin/env bash
+#BSUB -J sd-phaseJ-compare
+#BSUB -G s10396
+#BSUB -q training-parallel
+#BSUB -n 2
+#BSUB -W 1:00
+#BSUB -R "span[hosts=1]"
+#BSUB -R "select[mem>16000]"
+#BSUB -R "rusage[mem=16000]"
+#BSUB -M 16000
+#BSUB -gpu "num=1:mode=exclusive_process"
+#BSUB -cwd /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM
+#BSUB -o /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-phaseJ-compare-%J.out
+#BSUB -e /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-phaseJ-compare-%J.err
+
+set -euo pipefail
+export PATH="/software/cellgen/team361/ha11/envs/nichejepa/bin:$PATH"
+export WANDB_MODE=online
+: "${PHASEJ_GROUP:?missing PHASEJ_GROUP}"
+: "${PHASEJ_BASE_JOB:?missing PHASEJ_BASE_JOB}"
+: "${PHASEJ_M1_JOB:?missing PHASEJ_M1_JOB}"
+: "${PHASEJ_BLANK_JOB:?missing PHASEJ_BLANK_JOB}"
+
+JOB=${LSB_JOBID:-local}
+ROOT="phaseJ/comparisons/phaseJ_compare_${JOB}"
+if [[ -e "$ROOT" ]]; then
+  echo "Refusing to overwrite $ROOT" >&2
+  exit 2
+fi
+mkdir -p "$ROOT/scores"
+BASE="phaseJ/runs/phaseJ_base_${PHASEJ_BASE_JOB}"
+M1="phaseJ/runs/phaseJ_m1_${PHASEJ_M1_JOB}"
+BLANK="phaseJ/runs/phaseJ_blank_${PHASEJ_BLANK_JOB}"
+
+for CAT in color shape texture spatial 3d_spatial numeracy non_spatial complex; do
+  ln -s "$(realpath "$BASE/compbench_scores/mmdit_base_s4_${CAT}")" "$ROOT/scores/mmdit_base_s4_${CAT}"
+  ln -s "$(realpath "$M1/compbench_scores/mmdit_m1_s4_${CAT}")" "$ROOT/scores/mmdit_m1_s4_${CAT}"
+  ln -s "$(realpath "$BLANK/compbench_scores/mmdit_blank_s4_${CAT}")" "$ROOT/scores/mmdit_blank_s4_${CAT}"
+  ln -s "$(realpath "phaseH/scores/random_s4_${CAT}")" "$ROOT/scores/random_s4_${CAT}"
+  ln -s "$(realpath "phaseH/scores/oracle_s4_${CAT}")" "$ROOT/scores/oracle_s4_${CAT}"
+done
+
+python3 phaseC/eval_analyze.py --scores_dir "$ROOT/scores" --step 4 \
+  --models mmdit_base,mmdit_blank,random,oracle --title "Phase J text-conditioning test" \
+  --geneval2_dir "$ROOT/not_run" --fidelity "$ROOT/not_run.json" --diversity "$ROOT/not_run.json" \
+  --out "$ROOT/base_vs_blank.md"
+python3 phaseC/eval_analyze.py --scores_dir "$ROOT/scores" --step 4 \
+  --models mmdit_m1,mmdit_base,random,oracle --title "Phase J backbone test" \
+  --geneval2_dir "$ROOT/not_run" --fidelity "$ROOT/not_run.json" --diversity "$ROOT/not_run.json" \
+  --out "$ROOT/m1_vs_base.md"
+
+python3 phaseJ/log_compare_wandb.py --root "$ROOT" --base_run "$BASE" --m1_run "$M1" \
+  --blank_run "$BLANK" --project sd-mmdit-ranker-v1 --group "$PHASEJ_GROUP" \
+  --run_name "phaseJ_compare_${JOB}"
+cat "$ROOT/summary.md"

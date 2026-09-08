@@ -1,0 +1,51 @@
+#!/usr/bin/env bash
+#BSUB -J sd-phaseJ-prompt-compare
+#BSUB -G s10396
+#BSUB -q training-parallel
+#BSUB -n 2
+#BSUB -W 1:00
+#BSUB -R "span[hosts=1]"
+#BSUB -R "select[mem>16000]"
+#BSUB -R "rusage[mem=16000]"
+#BSUB -M 16000
+#BSUB -gpu "num=1:mode=exclusive_process"
+#BSUB -cwd /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM
+#BSUB -o /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-phaseJ-prompt-compare-%J.out
+#BSUB -e /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-phaseJ-prompt-compare-%J.err
+
+set -euo pipefail
+export PATH="/software/cellgen/team361/ha11/envs/nichejepa/bin:$PATH"
+export WANDB_MODE=online
+: "${PHASEJ_GROUP:?missing PHASEJ_GROUP}"
+: "${PHASEJ_FUSION_ALIGNED_JOB:?missing aligned job id}"
+: "${PHASEJ_FUSION_SHUFFLED_JOB:?missing shuffled official job id}"
+: "${PHASEJ_FUSION_AUDIT_JOB:?missing selection-emitting audit job id}"
+
+JOB=${LSB_JOBID:-local}
+ROOT="phaseJ/comparisons/phaseJ_prompt_compare_${JOB}"
+if [[ -e "$ROOT" ]]; then
+  echo "Refusing to overwrite $ROOT" >&2
+  exit 2
+fi
+mkdir -p "$ROOT/scores"
+CORRECT="phaseJ/runs/phaseJ_fusion_aligned_${PHASEJ_FUSION_ALIGNED_JOB}"
+SHUFFLED="phaseJ/audits/fusion_conditioning_${PHASEJ_FUSION_AUDIT_JOB}/shuffled/official_${PHASEJ_FUSION_SHUFFLED_JOB}"
+
+for CAT in color shape texture spatial 3d_spatial numeracy non_spatial complex; do
+  ln -s "$(realpath "$CORRECT/compbench_scores/mmdit_fusion_s4_${CAT}")" \
+    "$ROOT/scores/mmdit_fusion_s4_${CAT}"
+  ln -s "$(realpath "$SHUFFLED/scores/mmdit_fusion_shuffled_s4_${CAT}")" \
+    "$ROOT/scores/mmdit_fusion_shuffled_s4_${CAT}"
+done
+
+python phaseC/eval_analyze.py --scores_dir "$ROOT/scores" --step 4 \
+  --models mmdit_fusion,mmdit_fusion_shuffled \
+  --title "Same fusion checkpoint: correct prompt versus shuffled wrong prompt" \
+  --geneval2_dir "$ROOT/not_run" --fidelity "$ROOT/not_run.json" \
+  --diversity "$ROOT/not_run.json" --out "$ROOT/correct_vs_shuffled.md"
+
+python phaseJ/log_prompt_compare_wandb.py --root "$ROOT" \
+  --correct_run "$CORRECT" --shuffled_run "$SHUFFLED" \
+  --project sd-mmdit-ranker-v1 --group "$PHASEJ_GROUP" \
+  --run_name "phaseJ_fusion_prompt_compare_${JOB}"
+cat "$ROOT/correct_vs_shuffled.md"

@@ -1,0 +1,77 @@
+#!/usr/bin/env bash
+#BSUB -J sd-phaseN-rank-sweep
+#BSUB -G s10396
+#BSUB -q training-parallel
+#BSUB -n 4
+#BSUB -W 6:00
+#BSUB -R "span[hosts=1]"
+#BSUB -R "select[mem>128000 && hname!='farm-gpu0504']"
+#BSUB -R "rusage[mem=128000]"
+#BSUB -M 128000
+# DINOv2-base only, no diffusion model and no 11B scorer, so this is small.
+#BSUB -gpu "num=1:mode=exclusive_process:gmem=40G"
+#BSUB -cwd /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM
+#BSUB -o /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-phaseN-rank-%J.out
+#BSUB -e /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-phaseN-rank-%J.err
+
+# Tests ORCA's rank choice against an ALIGNMENT metric rather than a reconstruction one.
+#
+# Theorem 1 bounds recoverable information at rank n by the top-n spectral mass, and Proposition 2
+# predicts saturation at the spectral elbow. Both concern reconstructing the visual feature. Prompt
+# alignment is a different functional of that feature and can live in low-variance directions. This
+# sweep measures, for each rank, how much VQAScore ordering survives truncation to the top-n DINOv2
+# principal components, and prints it beside the cumulative spectral mass at the same rank.
+#
+# The PCA basis is fitted on COCO train2017 (as ORCA fits on a training subset) and applied
+# unchanged to val2017 references and to generated candidates, so nothing is fitted on the
+# evaluation set.
+set -euo pipefail
+
+export PATH="/software/cellgen/team361/ha11/envs/nichejepa/bin:$PATH"
+export HF_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/huggingface
+export TORCH_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/torch
+export XDG_CACHE_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/xdg
+export TOKENIZERS_PARALLELISM=false
+export WANDB_MODE=disabled
+source ~/.secrets/hf_token
+
+: "${RANK_SRC:?set RANK_SRC to a completed phaseN/refsim_<job> directory}"
+PCA_IMAGES=${RANK_PCA_IMAGES:-5000}
+
+JOB=${LSB_JOBID:-local}
+ROOT="phaseN/rank_sweep_${JOB}"
+if [[ -e "$ROOT" ]]; then echo "Refusing to overwrite $ROOT" >&2; exit 2; fi
+mkdir -p "$ROOT"
+
+echo "[$(date --iso-8601=seconds)] Phase-N DINO rank sweep | job=$JOB src=$RANK_SRC"
+nvidia-smi --query-gpu=index,name,memory.total --format=csv
+test -s "$RANK_SRC/pool_manifest.json"; test -d "$RANK_SRC/scores"
+
+python3 phaseN/dino_rank_sweep.py \
+  --refsim_src "$RANK_SRC" --pca_split train2017 --pca_images "$PCA_IMAGES" \
+  --ranks 4,8,16,24,32,48,64,96,128,192,256,384,512,768 \
+  --out "$ROOT/rank_sweep.json" | tee "$ROOT/rank_sweep.log"
+test -s "$ROOT/rank_sweep.json"
+
+python3 - <<PY
+import json
+d=json.load(open("$ROOT/rank_sweep.json"))
+p=d['pca']
+print()
+print(f"PCA on {p['images']} train2017 images, {p['patches']} patch embeddings, dim {p['dim']}")
+print(f"power-law exponent alpha = {p['power_law_alpha']:.3f}  (Prop. 2 assumes alpha > 1)")
+print(f"cumulative mass at rank 64 = {p['mass_at_64']*100:.1f}%   "
+      f"rank for 90% = {p['rank_for_90pct_mass']}   rank for 99% = {p['rank_for_99pct_mass']}")
+print()
+print(f"{'rank':>5s} {'spectral mass':>14s} {'rho':>9s} {'95% CI':>19s} {'within rs':>10s}")
+for r in d['sweep']:
+    ci=r['rho_ci']
+    print(f"{r['rank']:>5d} {r['cumulative_spectral_mass']*100:13.1f}% {r['rho']*100:8.2f}% "
+          f"[{ci[0]*100:+6.1f},{ci[1]*100:+6.1f}] {r['within_spearman']:+10.4f}")
+print()
+print(f"best rank {d['best_rank']} at rho {d['best_rho']*100:.2f}%; "
+      f"rho at ORCA's rank 64 = {d['rho_at_rank_64']*100:.2f}%")
+PY
+
+echo "[$(date --iso-8601=seconds)] complete: $ROOT"
+if command -v my-job-stats >/dev/null 2>&1; then my-job-stats -a -n -s; fi

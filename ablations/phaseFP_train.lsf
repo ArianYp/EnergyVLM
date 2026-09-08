@@ -87,7 +87,10 @@ jq -e '.pass == true and .cross_arm_pair_identity == true' "$CACHE/summary.json"
 
 echo "[$(date --iso-8601=seconds)] Phase-FP train start"
 echo "  host=$(hostname) job=$JOB arm=$PHASEFP_ARM label_source=$LABEL_SOURCE seed=$PHASEFP_SEED"
-echo "  cache=$CACHE steps=$PHASEFP_STEPS beta=$PHASEFP_BETA repa=$PHASEFP_LAMBDA_REPA"
+# Every live hyperparameter is echoed, including the anchor weight. The knob sweep (101933/101934)
+# varied only --lambda_anchor and the header did not print it, so the two runs were indistinguishable
+# from stdout alone and had to be told apart from args.json. Same failure mode as the Phase R drift.
+echo "  cache=$CACHE steps=$PHASEFP_STEPS beta=$PHASEFP_BETA anchor=$PHASEFP_ANCHOR repa=$PHASEFP_LAMBDA_REPA lr=$PHASEFP_LR"
 echo "  noise_coupling=$PHASEFP_NOISE_COUPLING sigma_band=$PHASEFP_SIGMA_BAND output=$OUT"
 nvidia-smi --query-gpu=index,name,memory.total --format=csv
 

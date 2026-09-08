@@ -1,0 +1,63 @@
+#!/usr/bin/env bash
+#BSUB -J sd-phaseC-eval-smoke-ext
+#BSUB -G s10396
+#BSUB -q training-parallel
+#BSUB -n 8
+#BSUB -W 2:00
+#BSUB -R "span[hosts=1]"
+#BSUB -R "select[mem>64000 && hname!='farm-gpu0504']"
+#BSUB -R "rusage[mem=64000]"
+#BSUB -M 64000
+#BSUB -gpu "num=1:mode=exclusive_process:gmodel=NVIDIAH200"
+#BSUB -cwd /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM
+#BSUB -o /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-phaseC-eval-smoke-ext-%J.out
+#BSUB -e /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-phaseC-eval-smoke-ext-%J.err
+
+# Validation of the two evaluator paths added after the original harness report:
+#   non_spatial -> CLIPScore          (official; NOT 3-in-1)
+#   complex     -> 3-in-1            (BLIP-VQA + UniDet-2D-complex + CLIPScore-complex)
+# Same known-answer design as job 85505: Phase-A base@4 vs M1@4, where VQAScore already
+# established M1 >> base (0.785 vs 0.454). A working evaluator must recover that ordering.
+# Phase-A images come from the *train* pool, so 3-in-1 routing uses the train lists.
+set -euo pipefail
+export PATH="/software/cellgen/team361/ha11/envs/nichejepa/bin:$PATH"
+export HF_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/huggingface
+export TORCH_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/torch
+export XDG_CACHE_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/xdg
+export TOKENIZERS_PARALLELISM=false
+echo "[`date`] Phase C1 eval-smoke-ext | Host: $(hostname)"
+
+echo "=== arithmetic identity of the 3-in-1 composition vs upstream ==="
+python3 phaseC/test_3in1_identity.py
+
+for MODEL in base M1; do
+  for CAT in non_spatial complex; do
+    D=phaseC/eval_smoke_ext/${MODEL}_s4_${CAT}
+    echo "=== ${MODEL} / ${CAT} ==="
+    python3 phaseC/compbench_eval.py stage --images phaseA/images/${MODEL} \
+      --prompts phaseA/prompts.json --steps 4 --categories ${CAT} --limit 40 --out "$D"
+    python3 phaseC/compbench_eval.py run     --dir "$D" --skip_done
+    python3 phaseC/compbench_eval.py collect --dir "$D" --routing_split train
+  done
+done
+
+echo "=== paired base-vs-M1 summary (expect M1 > base on both) ==="
+python3 - <<'PY'
+import json, pathlib
+for cat in ("non_spatial", "complex"):
+    s = {}
+    for m in ("base", "M1"):
+        f = pathlib.Path(f"phaseC/eval_smoke_ext/{m}_s4_{cat}/scores.json")
+        s[m] = {r["idx"]: r["score"] for r in json.loads(f.read_text())["per_prompt"]}
+    ks = sorted(set(s["base"]) & set(s["M1"]))
+    d = [s["M1"][k] - s["base"][k] for k in ks]
+    w = sum(x > 0 for x in d); l = sum(x < 0 for x in d); t = len(d) - w - l
+    nz = {m: sum(v > 0 for v in s[m].values()) for m in s}
+    print(f"{cat:12s} n={len(ks)} base={sum(s['base'][k] for k in ks)/len(ks):.4f} "
+          f"M1={sum(s['M1'][k] for k in ks)/len(ks):.4f} "
+          f"M1-base={sum(d)/len(d):+.4f}  W/L/T={w}/{l}/{t}  "
+          f"non-zero base={nz['base']}/{len(ks)} M1={nz['M1']}/{len(ks)}")
+PY
+
+echo "[`date`] DONE"
+if command -v my-job-stats >/dev/null 2>&1; then my-job-stats -a -n -s; fi

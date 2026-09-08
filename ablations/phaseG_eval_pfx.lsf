@@ -1,0 +1,48 @@
+#!/usr/bin/env bash
+#BSUB -J sd-phaseG-eval-pfx
+#BSUB -G s10396
+#BSUB -q training-parallel
+#BSUB -n 16
+#BSUB -W 24:00
+#BSUB -R "span[hosts=1]"
+#BSUB -R "select[mem>256000 && hname!='farm-gpu0504']"
+#BSUB -R "rusage[mem=256000]"
+#BSUB -M 256000
+#BSUB -gpu "num=4:mode=exclusive_process:gmodel=NVIDIAH200"
+#BSUB -cwd /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM
+#BSUB -o /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-phaseG-eval-pfx-%J.out
+#BSUB -e /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-phaseG-eval-pfx-%J.err
+# Phase G multi-prefix arms (4 pairs/update over the SHARED prefix k'=0..3, dose +0.0816).
+# Tests whether the k=3 harm survives when the pair-count objection is removed.
+set -euo pipefail
+export PATH="/software/cellgen/team361/ha11/envs/nichejepa/bin:$PATH"
+export HF_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/huggingface
+export TORCH_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/torch
+export XDG_CACHE_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/xdg
+export TOKENIZERS_PARALLELISM=false
+export NCCL_NVLS_ENABLE=0
+source ~/.secrets/hf_token
+echo "[`date`] Phase G multi-prefix eval | Host: $(hostname)"
+for spec in "GorcP:checkpoints/phaseG/phaseG_oracle_pfx_20260727_015427_88070/checkpoint_final.pt" "GrndP:checkpoints/phaseG/phaseG_random_pfx_20260727_033603_88071/checkpoint_final.pt"; do
+  L=${spec%%:*}; CK=${spec#*:}
+  torchrun --standalone --nproc-per-node=4 exp0/phaseA_generate.py \
+    --out_root phaseC/eval --label $L --checkpoint "$CK" --cfg 1 \
+    --split val --steps_list 4 --per_category 1000
+done
+python3 phaseC/test_3in1_identity.py
+for MODEL in GorcP GrndP; do
+  for CAT in color shape texture spatial 3d_spatial numeracy non_spatial complex; do
+    D=phaseC/eval_scores/${MODEL}_s4_${CAT}
+    [ -f "$D/scores.json" ] && continue
+    python3 phaseC/compbench_eval.py stage --images phaseC/eval/images/${MODEL} \
+      --prompts phaseC/eval/prompts.json --steps 4 --categories ${CAT} --out "$D"
+    python3 phaseC/compbench_eval.py run     --dir "$D" --skip_done
+    python3 phaseC/compbench_eval.py collect --dir "$D" --routing_split val
+  done
+done
+python3 phaseC/eval_analyze.py --scores_dir phaseC/eval_scores --step 4 \
+  --models GorcP,GrndP --title "Phase G multi-prefix (k=3, 4 pairs/update)" \
+  --fidelity /nonexistent --diversity /nonexistent \
+  --out phaseG/verdict_branch_pfx.md
+cat phaseG/verdict_branch_pfx.md
+echo "[`date`] DONE"

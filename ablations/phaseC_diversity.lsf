@@ -1,0 +1,61 @@
+#!/usr/bin/env bash
+#BSUB -J sd-phaseC-diversity
+#BSUB -G s10396
+#BSUB -q training-parallel
+#BSUB -n 16
+#BSUB -W 12:00
+#BSUB -R "span[hosts=1]"
+#BSUB -R "select[mem>256000 && hname!='farm-gpu0504']"
+#BSUB -R "rusage[mem=256000]"
+#BSUB -M 256000
+#BSUB -gpu "num=4:mode=exclusive_process:gmodel=NVIDIAH200"
+#BSUB -cwd /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM
+#BSUB -o /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-phaseC-diversity-%J.out
+#BSUB -e /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-phaseC-diversity-%J.err
+
+# Phase C1 — intra-prompt DIVERSITY gate (the mode-collapse half of a "clean" H1).
+# 8 seeds per prompt on a 400-prompt stratified subset (50/category) of the same
+# HELD-OUT CompBench-val pool used for the alignment eval, at the headline 4 steps.
+# `idx` is preserved by build_eval_pool.py subset, so candidate 0 here is bit-identical
+# to the image the alignment eval scored — the diversity set contains it, not a re-roll.
+# 3 models x 400 prompts x 8 seeds = 9,600 images.
+set -euo pipefail
+export PATH="/software/cellgen/team361/ha11/envs/nichejepa/bin:$PATH"
+export HF_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/huggingface
+export TORCH_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/torch
+export XDG_CACHE_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/xdg
+export TOKENIZERS_PARALLELISM=false
+export NCCL_NVLS_ENABLE=0
+source ~/.secrets/hf_token
+echo "[`date`] Phase C1 diversity | Host: $(hostname)"
+nvidia-smi --query-gpu=index,name,memory.total --format=csv
+
+M1_CKPT=checkpoints/method/M1_pure_consistency_20260624_065127_55187/checkpoint_final.pt
+B2_CKPT=checkpoints/phaseC/phaseC_B2_20260724_230657_85487/checkpoint_final.pt
+B4_CKPT=checkpoints/phaseC/phaseC_B4_20260724_230700_85488/checkpoint_final.pt
+N_SEEDS=8
+
+# pre-flight: fail in seconds rather than after hours of generation
+echo "=== metric maths guard ==="
+python3 phaseC/test_metrics.py
+
+python3 phaseC/build_eval_pool.py subset --pool phaseC/eval/prompts.json \
+  --per_category 50 --out phaseC/diversity/prompts.json
+
+echo "=== STAGE 1: generate ${N_SEEDS} seeds per prompt ==="
+for spec in "M1:$M1_CKPT" "B2:$B2_CKPT" "B4:$B4_CKPT"; do
+  LABEL=${spec%%:*}; CKPT=${spec#*:}
+  echo "--- generate $LABEL ---"
+  torchrun --standalone --nproc-per-node=4 exp0/phaseA_generate.py \
+    --out_root phaseC/diversity --label "$LABEL" --checkpoint "$CKPT" --cfg 1 \
+    --prompts_json phaseC/diversity/prompts.json --steps_list 4 --n_seeds ${N_SEEDS}
+done
+
+echo "=== STAGE 2: intra-prompt DINOv2 + LPIPS ==="
+python3 phaseC/diversity_eval.py --gen_root phaseC/diversity/images \
+  --models B4,B2,M1 --steps 4 --n_seeds ${N_SEEDS} \
+  --prompts phaseC/diversity/prompts.json --out phaseC/diversity_report.md
+
+# Combined verdict: ablations/phaseC_verdict.lsf (avoids concurrent writers).
+echo "[`date`] DONE -> phaseC/diversity_report.md"
+if command -v my-job-stats >/dev/null 2>&1; then my-job-stats -a -n -s; fi

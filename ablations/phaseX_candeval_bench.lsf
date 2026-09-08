@@ -1,0 +1,81 @@
+#!/usr/bin/env bash
+#BSUB -J sd-phaseX-candbench
+#BSUB -G s10396
+#BSUB -q training-parallel
+#BSUB -n 8
+#BSUB -W 4:00
+#BSUB -R "span[hosts=1]"
+#BSUB -R "select[mem>128000 && hname!='farm-gpu0504']"
+#BSUB -R "rusage[mem=128000]"
+#BSUB -M 128000
+#BSUB -gpu "num=2:mode=exclusive_process:gmem=78G"
+#BSUB -cwd /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM
+#BSUB -o /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-phaseX-candbench-%J.out
+#BSUB -e /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-phaseX-candbench-%J.err
+
+# Phase X v5 section 10.2: benchmark the candidate-level evaluator stack on a fixed ~1% slice
+# BEFORE committing to all 25,584 candidate images, and report the extrapolated cost.
+#
+# Experiment B needs a held-out per-candidate label. The only per-candidate score that exists today
+# is VQAScore, which v5 forbids using as both the target and the oracle -- so the CompBench and
+# GenEval2 evaluators have to be run over every candidate, not just the bo1/bo4/bo8 selections.
+#
+# No new tooling is needed: compbench_eval.py takes --image_name, so candidate j is scored straight
+# out of the shared pool. That also avoids building eight more symlink trees over 19k images.
+#
+# The slice is fixed and declared here so the timing cannot be cherry-picked: 30 prompts from each
+# of two categories, for two candidate indices. `color` uses BLIP-VQA and `numeracy` uses UniDet,
+# which are the cheap and expensive ends of the stack, so the extrapolation brackets the real cost
+# instead of assuming every category runs at the same rate.
+set -euo pipefail
+export PATH="/software/cellgen/team361/ha11/envs/nichejepa/bin:$PATH"
+export HF_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/huggingface
+export TORCH_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/torch
+export XDG_CACHE_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/xdg
+export TOKENIZERS_PARALLELISM=false
+export WANDB_MODE=disabled
+export PYTHONPATH="/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM:${PYTHONPATH:-}"
+source ~/.secrets/hf_token
+
+POOL_ROOT=${CANDBENCH_POOL:-phaseN/bestofk_rec_113031}
+PROMPTS=${CANDBENCH_PROMPTS:-phaseFP/eval_pool_101203/compbench_prompts.json}
+STEPS=${CANDBENCH_STEPS:-40}
+LIMIT=${CANDBENCH_LIMIT:-30}
+OUT=phaseX/candeval_bench_${LSB_JOBID:-local}
+mkdir -p "$OUT"
+
+echo "[$(date --iso-8601=seconds)] candidate-evaluator benchmark"
+echo "  pool=$POOL_ROOT steps=$STEPS limit=$LIMIT/category"
+IMGS="$POOL_ROOT/compbench/images/pool"
+test -d "$IMGS" || { echo "no pool at $IMGS" >&2; exit 2; }
+echo "  candidate images available: $(find "$IMGS" -name 'cand*.png' | wc -l)"
+
+for CAT in color numeracy; do
+  for J in 0 3; do
+    D="$OUT/${CAT}_cand${J}"
+    t0=$(date +%s)
+    python3 phaseC/compbench_eval.py stage --images "$IMGS" --prompts "$PROMPTS" \
+      --steps "$STEPS" --image_name "cand${J}.png" --categories "$CAT" --limit "$LIMIT" --out "$D"
+    python3 phaseC/compbench_eval.py run --dir "$D" --skip_done
+    python3 phaseC/compbench_eval.py collect --dir "$D" --routing_split val
+    t1=$(date +%s)
+    n=$(python3 -c "import json;print(json.load(open('$D/scores.json'))['n'])" 2>/dev/null || echo 0)
+    echo "TIMING $CAT cand$J: n=$n elapsed=$((t1-t0))s"
+  done
+done
+
+python3 - "$OUT" <<'PY'
+import json, glob, os, sys
+out = sys.argv[1]
+rows = []
+for p in sorted(glob.glob(f"{out}/*/scores.json")):
+    d = json.load(open(p))
+    rows.append((os.path.basename(os.path.dirname(p)), d["evaluator"], d["n"], d["mean"]))
+for name, ev, n, m in rows:
+    print(f"  {name:20s} evaluator={ev:18s} n={n:3d} mean={m:.4f}")
+# per-image cost is read from the TIMING lines by the caller; here just record what was scored
+json.dump({"slices": [{"slice": r[0], "evaluator": r[1], "n": r[2], "mean": r[3]} for r in rows]},
+          open(f"{out}/bench.json", "w"), indent=2)
+print(f"wrote {out}/bench.json")
+PY
+echo "[$(date --iso-8601=seconds)] done -> $OUT"

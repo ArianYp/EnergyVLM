@@ -1,0 +1,527 @@
+\documentclass[11pt]{article}
+\usepackage[margin=1in]{geometry}
+\usepackage{booktabs}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{xcolor}
+\usepackage{hyperref}
+\usepackage{array}
+\hypersetup{colorlinks=true, linkcolor=blue!50!black, urlcolor=blue!50!black}
+
+\newcommand{\good}[1]{\textcolor{green!45!black}{#1}}
+\newcommand{\bad}[1]{\textcolor{red!70!black}{#1}}
+
+\title{Can DINOv2 features score SD3.5 candidate images?\\
+\large Four experiments on the ORCA visual target}
+\author{}
+\date{19 August 2026}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+\noindent
+We ran four experiments. The first rebuilds the ORCA paper's DINOv2 compression and matches its
+reported number. The second shows that SD3.5's internal state can predict those compressed DINOv2
+features. The third and fourth ask whether a DINOv2-based score can pick the better of eight images
+generated from the same prompt. It cannot: a score that reads the prompt does no better than a
+number that ignores the prompt. One category, \texttt{3d\_spatial}, is an exception.
+\end{abstract}
+
+\section{What we were testing and why}
+
+ORCA trains a diffusion model with an extra loss. That loss pushes the model's internal state
+towards a 64-number summary of DINOv2 features, through a matrix chosen by the prompt. We wanted to
+know whether the same machinery can be used a different way: as a \emph{scorer} that ranks several
+images generated from one prompt, without decoding them.
+
+ORCA's predictor does not output a score. It outputs a 64-number vector,
+\begin{equation}
+\hat z(x_t, y) \;=\; K(\Delta_y)^\top h_t(x_t, y) \;\in\; \mathbb{R}^{64},
+\end{equation}
+where $h_t$ is the diffusion model's hidden state and $K(\Delta_y)$ is a matrix built from the
+prompt. To get a score you must compare $\hat z$ against a target, or measure its size. So before
+building anything, three things had to be true:
+
+\begin{enumerate}
+  \item the 64-number DINOv2 summary can be rebuilt (Experiment 1);
+  \item SD3.5's hidden state can predict it (Experiment 2);
+  \item DINOv2 features, given the prompt, tell you which image is better (Experiments 3 and 4).
+\end{enumerate}
+
+Item 3 is the one that matters. Items 1 and 2 only say the parts exist.
+
+\section{Experiment 1: rebuild the DINOv2 compression}
+
+\paragraph{Purpose.} Check we can reproduce ORCA's visual target before relying on it.
+
+\paragraph{Method.} Take 5{,}000 images from COCO \texttt{train2017}. Centre-crop each to a square,
+resize to $224\times224$ with bicubic interpolation, no flipping. Run DINOv2-L/14. Keep the patch
+tokens after the final LayerNorm and drop the CLS token, giving $224/14 = 16$, so $16\times16 = 256$
+vectors of length 1024 per image, and $5000 \times 256 = 1{,}280{,}000$ in total. Sample 100{,}000 of
+them. Compute the mean $\bar v$ and run PCA in double precision. Keep the top 64 directions $P_{64}$.
+The target for an image is
+\begin{equation}
+z_q(x) \;=\; P_{64}\bigl(v_q(x) - \bar v\bigr) \;\in\; \mathbb{R}^{64},
+\qquad q = 1 \dots 256 .
+\end{equation}
+
+Two choices matter. We do \textbf{not} divide the tokens by their length, and we do \textbf{not}
+whiten. ORCA's loss is a squared error over directions ordered by variance, so both steps would
+change every eigenvalue.
+
+\paragraph{Result.}
+
+\begin{table}[h]
+\centering
+\caption{How much of the variation the top directions keep.}
+\begin{tabular}{@{}rrrrrrrrr@{}}
+\toprule
+directions kept & 1 & 2 & 4 & 8 & 16 & 32 & \textbf{64} & 128 \\
+\midrule
+variation kept & 2.92\% & 5.25\% & 9.36\% & 14.65\% & 20.49\% & 27.60\% & \good{\textbf{37.05\%}} & 49.65\% \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\noindent
+The ORCA paper reports \textbf{37.3\%} at 64 directions. We get \textbf{37.05\%}, a gap of
+0.25 percentage points. The rebuild is correct.
+
+\paragraph{Two things the paper claims that our numbers do not support.}
+
+The paper assumes the eigenvalues shrink as $\lambda_i \le C\,i^{-\alpha}$ with $\alpha > 1$, and
+uses that to bound how much is lost past rank $n$ by $C/((\alpha-1)n^{\alpha-1})$. We fitted
+$\alpha$ over several ranges.
+
+\begin{table}[h]
+\centering
+\caption{The fitted exponent $\alpha$ depends strongly on which components you fit over.}
+\begin{tabular}{@{}lrl@{}}
+\toprule
+components fitted & $\alpha$ & \\
+\midrule
+1--64   & 0.676 & \bad{below 1} \\
+1--128  & 0.649 & \bad{below 1} \\
+1--256  & 0.648 & \bad{below 1} \\
+1--512  & 0.698 & \bad{below 1} \\
+64--1024  & 1.012 & just above 1 \\
+128--1024 & 1.117 & above 1 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\noindent
+$\alpha$ is below 1 across the whole head of the spectrum. It only passes 1 far out in the tail, and
+then only reaches 1.012, so the divisor $\alpha - 1 = 0.012$ makes the bound useless at rank 64.
+
+Second, the paper expects performance to level off where the kept variation levels off. It does not
+level off here: 37.05\% at 64, 49.65\% at 128, 65.66\% at 256, still climbing. 62.95\% of the
+variation is still missing at rank 64. The paper's own Table~2 agrees with our reading, since its
+GenEval score keeps rising to rank 128 and rank 64 was picked on FID instead.
+
+\paragraph{Conclusion.} The compression rebuilds correctly. The paper's reason for choosing 64
+directions does not hold up on our copy of its spectrum. This does not affect ORCA's reported FID
+and GenEval gains.
+
+\section{Experiment 2: can SD3.5's hidden state predict those 64 numbers?}
+
+\paragraph{Purpose.} ORCA's predictor is a restricted linear map. Before building it, check that an
+\emph{unrestricted} linear map can do the job. If the unrestricted one fails, the restricted one
+must fail too.
+
+\paragraph{Method.} Take 2{,}500 COCO images, none of them among the 5{,}000 used for the PCA. For
+each image: encode to the SD3.5 VAE latent $x_0$, add noise at a fixed level,
+\begin{equation}
+x_\sigma \;=\; (1-\sigma)\,x_0 + \sigma\,\epsilon, \qquad \sigma = 0.5,
+\end{equation}
+run the frozen SD3.5 transformer, and capture the image tokens leaving block 8 of 24. Average-pool
+those tokens to a $16\times16$ grid so they line up with the DINOv2 grid. Fit ridge regression from
+the block-8 token to that patch's 64 DINOv2 numbers, on 2{,}000 images, and test on the held-out 500.
+Repeat at three generation sizes.
+
+\paragraph{Two controls, and why the first version was wrong.}
+
+Our first version shuffled tokens against each other. That is the wrong floor. It destroys the grid
+position as well as the image, so it lands near $-1$ whatever the model learned, and ``better than
+shuffled'' is then true by construction. It reported $R^2 = 0.40$--$0.47$, which we withdrew.
+
+SD3.5 adds position information to each token, and DINOv2 features have a position pattern (sky at
+the top, object in the middle). So a ridge could score well by learning the average pattern per grid
+slot, with no knowledge of the actual image. The two correct controls are:
+
+\begin{itemize}
+  \item \textbf{position only}: predict every image with the average DINOv2 map per grid slot,
+        computed on the training images;
+  \item \textbf{shuffled images}: predict image $i$'s map using image $j$'s features, keeping each
+        token in its own grid slot.
+\end{itemize}
+
+\paragraph{Result.}
+
+\begin{table}[h]
+\centering
+\caption{Held-out $R^2$ for predicting the 64 DINOv2 numbers from block 8. The column that matters
+is the gain over position.}
+\begin{tabular}{@{}lrrrr@{}}
+\toprule
+generation size & raw $R^2$ & position only & \textbf{gain over position} & shuffled images \\
+\midrule
+256 px  & 0.4029 & 0.1956 & \good{\textbf{0.2074}} & $-0.0399$ \\
+512 px  & 0.4696 & 0.1956 & \good{\textbf{0.2741}} & $-0.1061$ \\
+1024 px & 0.4729 & 0.1956 & \good{\textbf{0.2773}} & $-0.1049$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{table}[h]
+\centering
+\caption{Other measurements from the same runs.}
+\begin{tabular}{@{}lrrr@{}}
+\toprule
+generation size & cosine & feature length & effective rank \\
+\midrule
+256 px  & 0.6346 & 123.42 & 550.4 \\
+512 px  & 0.6854 & 114.52 & 460.6 \\
+1024 px & 0.6876 & 102.41 & 308.7 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\paragraph{Conclusion.} Block 8 does carry image-specific DINOv2 information, worth $0.21$ to $0.28$
+$R^2$ once the position pattern is removed. Position alone accounts for $0.196$, which is 42\% of the
+raw 1024 px number, so the first version overstated the effect by nearly half.
+
+512 px is the efficient choice: it gains $0.2741$ against 1024 px's $0.2773$, at a quarter of the
+pixels. One caveat: at 256 px the SD3.5 grid is already $16\times16$, so pooling does nothing, while
+512 px averages $2\times2$ tokens and 1024 px averages $4\times4$. The comparison across sizes is
+therefore mixed up with how much averaging each one gets.
+
+\section{The images and the labels used for scoring}
+
+Experiments 3 and 4 need images and a ground truth. Both already existed.
+
+\begin{table}[h]
+\centering
+\caption{The candidate pool. Every image was generated at SD3.5-Medium's own recommended settings:
+1024 px, 40 steps, guidance 4.5, skip layers 7--9.}
+\begin{tabular}{@{}lrrr@{}}
+\toprule
+prompt set & prompts & images per prompt & total images \\
+\midrule
+T2I-CompBench++ & 2{,}398 & 8 & 19{,}184 \\
+GenEval2        &    800 & 8 &  6{,}400 \\
+\midrule
+total           & 3{,}198 & 8 & \textbf{25{,}584} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+We then scored \emph{every} candidate with the official evaluators, not just the selected one. This
+took eight jobs, one per candidate index. The point is to have a ground truth that is not VQAScore,
+so VQAScore can be a fair comparison rather than the answer key.
+
+\begin{table}[h]
+\centering
+\caption{Average score per candidate index. They are nearly identical, as they must be: the eight
+candidates are interchangeable random draws.}
+\begin{tabular}{@{}lrrrrrrrr@{}}
+\toprule
+candidate & 0 & 1 & 2 & 3 & 4 & 5 & 6 & 7 \\
+\midrule
+CompBench & 0.4891 & 0.4896 & 0.4932 & 0.4871 & 0.5007 & 0.4895 & 0.4915 & 0.4888 \\
+GenEval2  & 0.1791 & 0.1759 & 0.1765 & 0.1917 & 0.1816 & 0.1821 & 0.1907 & 0.1912 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{How much is there to gain by picking well?}
+
+\begin{table}[h]
+\centering
+\caption{Room to improve by choosing the best of the eight images, per prompt.}
+\begin{tabular}{@{}lr@{}}
+\toprule
+best minus average, per prompt & \textbf{$+0.1429$} \\
+best minus worst, per prompt   & $+0.3067$ \\
+as a share of the average score & 45.1\% \\
+variation within a prompt vs.\ between candidate indices & $1449\times$ \\
+prompts where all eight images score the same & 7.0\% \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{table}[h]
+\centering
+\caption{Room to improve, by category. The categories with the most room are the ones where you can
+write a same-word wrong-binding version of the prompt.}
+\begin{tabular}{@{}lrr@{}}
+\toprule
+category & room to improve & average score \\
+\midrule
+spatial      & 0.2191 & 0.2873 \\
+numeracy     & 0.2021 & 0.5973 \\
+3d\_spatial  & 0.1978 & 0.3785 \\
+shape        & 0.1688 & 0.5570 \\
+color        & 0.1376 & 0.7532 \\
+texture      & 0.1333 & 0.6862 \\
+complex      & 0.0689 & 0.3552 \\
+non\_spatial & 0.0164 & 0.3147 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\noindent
+The room to improve, $+0.1429$, is larger than any training effect we have measured in this project.
+Almost all of the variation is \emph{within} a prompt, which is what a scorer would exploit.
+
+\subsection{167 prompts have no ranking to learn}
+
+167 of the 2{,}398 prompts give all eight images the same score, so there is no order to predict.
+
+\begin{table}[h]
+\centering
+\caption{Where the 167 flat prompts come from.}
+\begin{tabular}{@{}lrrr@{}}
+\toprule
+category & prompts & flat & of which all-zero \\
+\midrule
+spatial     & 298 & 136 & \multirow{3}{*}{139 all-zero, 28 all non-zero} \\
+numeracy    & 300 &  30 & \\
+3d\_spatial & 300 &   1 & \\
+others      & 300 each & 0 & \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\noindent
+139 of them score zero on every image, meaning all eight failed. These prompts have no room to
+improve, so they must stay in the denominator when averaging any selection gain. They are dropped
+only from rank correlations, where they are undefined. One effect of this: any \texttt{spatial}
+correlation below is measured on the 162 of 298 prompts where the evaluator separates the images at
+all.
+
+\section{Experiment 3: how good is VQAScore, the current best scorer?}
+
+\paragraph{Purpose.} Set the bar. If a DINOv2 score is to be useful it has to be compared against
+what is already available.
+
+\paragraph{Method.} For each prompt, rank the eight images by VQAScore and by the official label, and
+compute Kendall's $\tau_b$ between the two orders. Average over prompts. We do this \emph{within}
+each prompt on purpose. Pooling all 19{,}184 images together would mostly measure which prompts are
+easy, not which image is better.
+
+\paragraph{Result.} Mean $\tau_b = \mathbf{+0.1536}$, 95\% interval $[+0.1389, +0.1670]$, over 2{,}231
+prompts. \textbf{35.8\%} of prompts have $\tau \le 0$, meaning VQAScore orders them no better than
+chance.
+
+\begin{table}[h]
+\centering
+\caption{VQAScore against the official labels, by category.}
+\begin{tabular}{@{}lrr@{}}
+\toprule
+category & mean $\tau_b$ & prompts \\
+\midrule
+spatial      & $+0.2674$ & 162 \\
+color        & $+0.2034$ & 300 \\
+shape        & $+0.1940$ & 300 \\
+texture      & $+0.1878$ & 300 \\
+numeracy     & $+0.1750$ & 270 \\
+complex      & $+0.1386$ & 300 \\
+non\_spatial & $+0.0788$ & 300 \\
+3d\_spatial  & \bad{$+0.0377$} & 299 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\paragraph{Conclusion.} VQAScore is a moderate scorer, not a strong one. It is close to useless on
+\texttt{3d\_spatial} ($+0.0377$), which is also a category with a lot of room to improve ($0.1978$).
+That gap is where a new scorer could earn its place.
+
+\section{Experiment 4: can DINOv2 features rank the images?}
+
+\paragraph{Purpose.} The main question. ORCA's target is a 64-number DINOv2 summary. Does that
+summary, read with knowledge of the prompt, say which of eight images is better?
+
+\paragraph{Method.} For each of the 25{,}584 images we stored the $16\times16\times64$ DINOv2 summary
+and the CLS token. We then trained a small scorer,
+\begin{equation}
+S(x, y) \;=\; \operatorname*{reduce}_{q} \Bigl( \hat z_q(x)^\top W \, \hat e(y) \Bigr) + b ,
+\end{equation}
+where $\hat z_q$ is the length-normalised 64-number summary of patch $q$, $\hat e$ is the
+length-normalised CLIP-L text embedding of the prompt, and $W$ is a single $64 \times 768$ matrix
+(49{,}152 numbers). The reduce step is either the average over patches or the maximum. We train it to
+order pairs of images correctly, using a hinge loss on pairs whose labels differ by at least half of
+that category's typical within-prompt spread.
+
+\paragraph{Splits.} 839 prompts to train, 359 to choose when to stop, 1{,}200 sealed for the final
+number. The split is by prompt, so no test prompt is seen during training.
+
+\paragraph{Controls.} Four of them.
+
+\begin{enumerate}
+  \item \textbf{Numbers that ignore the prompt.} If one of these matches the scorer, the prompt is
+        doing no work.
+  \item \textbf{Wrong prompt.} Feed a different prompt's text, averaged over 50 shuffles where no
+        prompt keeps its own text.
+  \item \textbf{Untrained matrix.} The same architecture with random $W$. Needed because this scorer
+        reaches $\tau = +0.69$ on the training prompts even when fed pure noise, so it has ample
+        capacity to memorise.
+  \item \textbf{Per-category label spread} sets the pair margin, because the eight evaluators are on
+        different scales.
+\end{enumerate}
+
+\begin{table}[h]
+\centering
+\caption{Typical within-prompt spread of the official label. A single fixed margin across these
+would have starved \texttt{non\_spatial} of training pairs.}
+\begin{tabular}{@{}lrrrrrrrr@{}}
+\toprule
+category & spatial & numeracy & shape & color & texture & 3d\_spatial & complex & non\_spatial \\
+\midrule
+spread & 0.2973 & 0.1652 & 0.1304 & 0.1201 & 0.1201 & 0.1175 & 0.0481 & 0.0108 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\paragraph{Result.}
+
+\begin{table}[h]
+\centering
+\caption{Mean within-prompt $\tau_b$ against the official labels, on 1{,}118 sealed prompts. The row
+that decides the question is the last one.}
+\begin{tabular}{@{}lrr@{}}
+\toprule
+ & average over patches & maximum over patches \\
+\midrule
+scorer that reads the prompt & $+0.0538$ & $+0.0430$ \\
+\quad 95\% interval & $[+0.0356,+0.0719]$ & $[+0.0252,+0.0608]$ \\
+\midrule
+wrong prompt fed in            & $+0.0379$ & $+0.0259$ \\
+untrained matrix               & $+0.0160$ & $+0.0203$ \\
+\midrule
+\textbf{best number that never reads the prompt} & \textbf{+0.0423} & \textbf{+0.0423} \\
+\midrule
+scorer minus prompt-free number & \bad{$+0.0115$} & \bad{$+0.0008$} \\
+scorer minus wrong prompt       & $+0.0159$ & $+0.0172$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{table}[h]
+\centering
+\caption{The numbers that never read the prompt. All are computed from the same 64-number DINOv2
+summary.}
+\begin{tabular}{@{}lrr@{}}
+\toprule
+number & mean $\tau_b$ & 95\% interval \\
+\midrule
+spread of the summary across image quadrants & $+0.0423$ & $[+0.0238,+0.0618]$ \\
+how much the summary varies between patches  & $+0.0386$ & $[+0.0198,+0.0573]$ \\
+average size of the first direction          & $+0.0337$ & $[+0.0155,+0.0521]$ \\
+total size of all 64 directions              & $+0.0176$ & $[-0.0005,+0.0367]$ \\
+length of the CLS token                      & $-0.0293$ & $[-0.0475,-0.0113]$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{table}[h]
+\centering
+\caption{The scorer by category, both reduce steps. Bold marks intervals that stay above zero.}
+\begin{tabular}{@{}lrrr@{}}
+\toprule
+category & average over patches & maximum over patches & prompts used \\
+\midrule
+3d\_spatial  & \good{$\mathbf{+0.1138}$ $[+0.0638,+0.1626]$} & \good{$\mathbf{+0.0719}$ $[+0.0267,+0.1173]$} & 150/150 \\
+spatial      & \good{$\mathbf{+0.0748}$ $[+0.0045,+0.1452]$} & $+0.0356$ $[-0.0281,+0.0993]$ & 83/150 \\
+numeracy     & \good{$\mathbf{+0.0685}$ $[+0.0097,+0.1262]$} & $+0.0069$ $[-0.0507,+0.0663]$ & 135/150 \\
+shape        & \good{$\mathbf{+0.0651}$ $[+0.0187,+0.1104]$} & \good{$\mathbf{+0.0681}$ $[+0.0184,+0.1205]$} & 150/150 \\
+color        & $+0.0380$ $[-0.0100,+0.0880]$ & $+0.0241$ $[-0.0221,+0.0714]$ & 150/150 \\
+non\_spatial & $+0.0362$ $[-0.0142,+0.0865]$ & $+0.0217$ $[-0.0285,+0.0726]$ & 150/150 \\
+complex      & $+0.0252$ $[-0.0252,+0.0743]$ & \good{$\mathbf{+0.0781}$ $[+0.0314,+0.1257]$} & 150/150 \\
+texture      & $+0.0198$ $[-0.0293,+0.0681]$ & $+0.0310$ $[-0.0142,+0.0751]$ & 150/150 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\paragraph{Conclusion.} The scorer fails. With the maximum reduce it beats a number that ignores the
+prompt entirely by $+0.0008$, which is nothing. With the average reduce it wins by $+0.0115$. Feeding
+it the wrong prompt costs only about $0.016$, so most of what little it does is not about the prompt.
+For scale, VQAScore reaches $+0.1536$ on the same prompts and labels; this scorer reaches $+0.0538$.
+
+One category breaks the pattern. On \texttt{3d\_spatial} the scorer reaches $+0.1138$
+$[+0.0638, +0.1626]$ while VQAScore reaches $+0.0377$, about three times better, in a category with
+$0.1978$ of room to improve. That result rests on 150 prompts.
+
+\paragraph{Two things that weaken our own numbers.} We ran two reduce steps and are quoting the
+better one, which flatters it; with intervals about $\pm 0.018$ wide, choosing between two options
+after seeing the sealed set inflates the estimate. And the average reduce beating the maximum points
+away from the story we expected: if the scorer worked by spotting the requested object in some patch,
+the maximum should win.
+
+\section{Summary}
+
+\begin{table}[h]
+\centering
+\caption{All four experiments.}
+\begin{tabular}{@{}p{3.6cm}p{4.4cm}p{5.6cm}@{}}
+\toprule
+experiment & result & verdict \\
+\midrule
+1. Rebuild the DINOv2 compression &
+37.05\% kept at 64 directions, against the paper's 37.3\% &
+\good{Works.} The paper's reason for choosing 64 does not hold up: $\alpha < 1$ across the head of
+the spectrum, and the kept variation does not level off \\
+\addlinespace
+2. Predict the compression from SD3.5 block 8 &
+$R^2$ gain over position: 0.2074 at 256 px, 0.2741 at 512 px, 0.2773 at 1024 px &
+\good{Works.} 512 px is the efficient size. Position alone gives 0.1956, so our first number was
+42\% inflated \\
+\addlinespace
+3. Measure VQAScore against official labels &
+$\tau_b = +0.1536$; only $+0.0377$ on \texttt{3d\_spatial} &
+Sets the bar. VQAScore is moderate, and weak on \texttt{3d\_spatial} \\
+\addlinespace
+4. Score candidates with DINOv2 features &
+$\tau_b = +0.0538$, against $+0.0423$ for a number that ignores the prompt &
+\bad{Fails.} Reading the prompt adds almost nothing. Exception: \texttt{3d\_spatial} at $+0.1138$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection*{What we recommend}
+
+\textbf{Do not train the full ORCA scoring kernel.} Its purpose is to rank candidates. The cheap
+version of that test says DINOv2 features carry almost no prompt-specific ranking information. A
+larger version of a signal that is not there will not find one.
+
+\textbf{Look at \texttt{3d\_spatial} on its own.} It is the only place something appeared, and it is
+also where VQAScore is worst, so it is the only place a new scorer would be worth having. Check it on
+more than 150 prompts before trusting it.
+
+\textbf{If anyone repeats this, keep the position control.} Our first version of Experiment 2 used a
+token shuffle, which cannot fail, and reported $R^2 = 0.40$--$0.47$. Almost half of that was the
+model knowing where each patch sits in the image.
+
+\subsection*{Files}
+
+\begin{table}[h]
+\centering
+\begin{tabular}{@{}ll@{}}
+\toprule
+what & where \\
+\midrule
+PCA fit & \texttt{phaseX/fit\_dino\_pca.py}, output \texttt{phaseX/dino\_pca/} \\
+Block-8 prediction & \texttt{phaseX/block8\_readout.py}, output \texttt{phaseX/block8\_readout\_v2.json} \\
+Candidate DINOv2 features & \texttt{phaseX/extract\_candidate\_dino.py}, output \texttt{phaseX/cand\_dino/} \\
+Official per-candidate labels & \texttt{ablations/phaseX\_candeval.lsf}, output \texttt{phaseX/candeval/} \\
+The scorer & \texttt{phaseX/dino\_probe.py}, output \texttt{phaseX/dino\_probe\_\{max,mean\}.json} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\noindent
+The PCA basis is pinned by two hashes: the image list \texttt{9ffea3f24ef55c96...} and the basis
+itself \texttt{bf441fa9a739682d...}.
+
+\end{document}

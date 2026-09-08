@@ -1,0 +1,90 @@
+#!/usr/bin/env bash
+#BSUB -J sd-phaseF-geneval-gap
+#BSUB -G s10396
+#BSUB -q training-parallel
+#BSUB -n 16
+#BSUB -W 24:00
+#BSUB -R "span[hosts=1]"
+#BSUB -R "select[mem>256000 && hname!='farm-gpu0504']"
+#BSUB -R "rusage[mem=256000]"
+#BSUB -M 256000
+#BSUB -gpu "num=4:mode=exclusive_process:gmodel=NVIDIAH200"
+#BSUB -cwd /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM
+#BSUB -o /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-phaseF-geneval-gap-%J.out
+#BSUB -e /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-phaseF-geneval-gap-%J.err
+# THE GENERALIZATION-OF-REWARD TABLE.
+# RTDMD's grpo.reward_fn includes `geneval` with prompt_path dataset/geneval and a
+# counting-specific scorer (COUNTING_THRESHOLD 0.9). So GenEval counting is a TRAINED
+# objective for them, and our held-out CompBench numeracy is not.
+# We hold the EVALUATOR fixed (our UniDet numeracy) and vary only the PROMPT DISTRIBUTION,
+# which isolates generalisation instead of confounding it with an evaluator swap.
+#   cells: {RTDMDcs, RTDMD} x {GenEval-counting (trained-on)}  vs the existing held-out numbers.
+set -euo pipefail
+export PATH="/software/cellgen/team361/ha11/envs/nichejepa/bin:$PATH"
+export HF_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/huggingface
+export TORCH_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/torch
+export XDG_CACHE_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/xdg
+export TOKENIZERS_PARALLELISM=false
+export NCCL_NVLS_ENABLE=0
+source ~/.secrets/hf_token
+echo "[`date`] Phase F generalization-of-reward | Host: $(hostname)"
+# job 88345 generated all 600x2 images successfully and they are kept; regenerate only if absent
+for V in cold_start rtdmd; do
+  L=$([ "$V" = cold_start ] && echo RTDMDcs || echo RTDMD)
+  [ "$(find phaseF/geneval_gap/images/$L -name '*.png' 2>/dev/null | wc -l)" = 600 ] && continue
+  torchrun --standalone --nproc-per-node=4 phaseF/generate_rtdmd.py \
+    --variant "$V" --out_root phaseF/geneval_gap --prompts_json phaseF/geneval_gap/prompts.json
+done
+
+# GenEval counting prompts use COCO classes with naive plurals ("toothbrushs", "sheeps"),
+# which CompBench's 101-word lexicon cannot parse -> job 88345 died on ZeroDivisionError.
+# The extended lexicon is additive and verified to leave all 300 CompBench numeracy parses
+# unchanged (phaseF/geneval_gap/build_lexicon.py), so all four cells stay evaluator-matched.
+python3 phaseF/geneval_gap/build_lexicon.py
+export COMPBENCH_OBJECTS=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/phaseF/geneval_gap/objects_ext.txt
+for MODEL in RTDMDcs RTDMD; do
+  D=phaseF/geneval_gap/scores/${MODEL}_s4_numeracy
+  [ -f "$D/scores.json" ] && continue
+  python3 phaseC/compbench_eval.py stage --images phaseF/geneval_gap/images/${MODEL} \
+    --prompts phaseF/geneval_gap/prompts.json --steps 4 --categories numeracy --out "$D"
+  python3 phaseC/compbench_eval.py run     --dir "$D" --skip_done --evaluator unidet_numeracy_ext
+  python3 phaseC/compbench_eval.py collect --dir "$D" --routing_split val
+done
+echo "=== THE FOUR-CELL TABLE ==="
+python3 - <<'PY'
+import json
+import numpy as np
+from pathlib import Path
+pool={p["idx"]:p for p in json.loads(Path("phaseF/geneval_gap/prompts.json").read_text())}
+def load(m, d):
+    f=Path(d)/f"{m}_s4_numeracy"/"scores.json"
+    return {r["idx"]: r["score"] for r in json.loads(f.read_text())["per_prompt"]} if f.exists() else {}
+G={m: load(m,"phaseF/geneval_gap/scores") for m in ("RTDMDcs","RTDMD")}
+H={m: load(m,"phaseC/eval_scores")        for m in ("RTDMDcs","RTDMD")}   # held-out CompBench
+rng=np.random.default_rng(0)
+def ci(d):
+    d=np.asarray(d,float)
+    b=d[rng.integers(0,len(d),(10000,len(d)))].mean(1)
+    return d.mean(), np.percentile(b,2.5), np.percentile(b,97.5)
+print(f"\n  {'prompt set':34s} {'RTDMDcs':>9s} {'RTDMD':>9s} {'Δ reward stage':>16s}  95% CI")
+rows=[]
+for name, S, sub in (("GenEval counting (TRAINED ON)", G, None),
+                     ("  ...GenEval-train subset",     G, "geneval_train"),
+                     ("  ...GenEval-test subset",      G, "geneval_test"),
+                     ("CompBench numeracy (HELD OUT)", H, None)):
+    ks=sorted(set(S["RTDMDcs"]) & set(S["RTDMD"]))
+    if sub: ks=[k for k in ks if pool.get(k,{}).get("src")==sub]
+    if not ks: print(f"  {name:34s} (no data)"); continue
+    a=np.array([S["RTDMDcs"][k] for k in ks]); b=np.array([S["RTDMD"][k] for k in ks])
+    m,lo,hi=ci(b-a)
+    print(f"  {name:34s} {a.mean():9.4f} {b.mean():9.4f} {m:+16.4f}  [{lo:+.4f},{hi:+.4f}]  n={len(ks)}")
+    rows.append({"set":name.strip(),"cs":float(a.mean()),"rtdmd":float(b.mean()),
+                 "delta":float(m),"ci":[float(lo),float(hi)],"n":len(ks)})
+Path("phaseF/geneval_gap/table.json").write_text(json.dumps(rows,indent=1))
+print("""
+  READ
+   large Δ on GenEval counting + flat held-out  -> GENERALIZATION-OF-REWARD gap (the headline)
+   flat on both                                 -> the 0.50->0.95 belongs to the DISTILLATION stage,
+                                                   and our claim about the reward stage stands unchanged""")
+PY
+echo "[`date`] DONE -> phaseF/geneval_gap/table.json"

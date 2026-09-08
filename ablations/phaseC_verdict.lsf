@@ -1,0 +1,39 @@
+#!/usr/bin/env bash
+#BSUB -J sd-phaseC-verdict
+#BSUB -G s10396
+#BSUB -q training-parallel
+#BSUB -n 2
+#BSUB -W 1:00
+#BSUB -R "span[hosts=1]"
+#BSUB -R "select[mem>16000]"
+#BSUB -R "rusage[mem=16000]"
+#BSUB -M 16000
+# The analysis is pure CPU (bootstrap over cached scores); the GPU request only exists
+# because this cluster's GPU queues reject jobs that ask for none.
+#BSUB -gpu "num=1:mode=exclusive_process"
+#BSUB -cwd /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM
+#BSUB -o /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-phaseC-verdict-%J.out
+#BSUB -e /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-phaseC-verdict-%J.err
+
+# Phase C1 — the single combined B4-vs-B2 verdict, once every pre-registered metric has
+# landed: CompBench 7-category primary, GenEval2 primary, and the fidelity + diversity
+# gates. CPU-only (bootstrap over cached per-prompt scores), and the ONLY writer of
+# phaseC/eval_verdict_s*.md, so the metric jobs can run concurrently without racing.
+set -euo pipefail
+export PATH="/software/cellgen/team361/ha11/envs/nichejepa/bin:$PATH"
+echo "[`date`] Phase C1 combined verdict | Host: $(hostname)"
+
+for STEP in 4 8 28; do
+  python3 phaseC/eval_analyze.py --scores_dir phaseC/eval_scores --step ${STEP} \
+    --models B4,B2,M1 \
+    --geneval2_dir phaseC/geneval2_scores \
+    --vqa phaseC/eval/scores \
+    --fidelity phaseC/fidelity_report.json \
+    --diversity phaseC/diversity_report.json \
+    --out phaseC/eval_verdict_s${STEP}.md
+done
+
+echo "=== headline (4-step) ==="
+cat phaseC/eval_verdict_s4.md
+echo "[`date`] DONE -> phaseC/eval_verdict_s{4,8,28}.md"
+if command -v my-job-stats >/dev/null 2>&1; then my-job-stats -a -n -s; fi

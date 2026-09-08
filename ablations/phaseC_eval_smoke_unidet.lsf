@@ -1,0 +1,79 @@
+#!/usr/bin/env bash
+#BSUB -J sd-phaseC-eval-smoke-unidet
+#BSUB -G s10396
+#BSUB -q training-parallel
+#BSUB -n 8
+#BSUB -W 2:00
+#BSUB -R "span[hosts=1]"
+#BSUB -R "select[mem>64000 && hname!='farm-gpu0504']"
+#BSUB -R "rusage[mem=64000]"
+#BSUB -M 64000
+#BSUB -gpu "num=1:mode=exclusive_process:gmodel=NVIDIAH200"
+#BSUB -cwd /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM
+#BSUB -o /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-phaseC-eval-smoke-unidet-%J.out
+#BSUB -e /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-phaseC-eval-smoke-unidet-%J.err
+
+# The two official evaluators that had NEVER been executed in this project.
+#
+# The original harness validation (job 85505) covered BLIP-VQA via `color` and UniDet-2D
+# via `spatial`; `3d_spatial` and `numeracy` were mapped in CATEGORY_EVALUATOR but never
+# run, so their weight requirements went unnoticed. They differ from 2D-spatial:
+#   numeracy_eval.py     load_expert_model(task='obj_detection', ckpt="R50")
+#                        -> Unified_learned_OCIM_R50_6x+2x.pth   (a DIFFERENT detector)
+#   3D_spatial_eval.py   model_bank_3d, which always uses R50, PLUS task='depth'
+#                        -> Unified_learned_OCIM_R50_6x+2x.pth + dpt_hybrid-midas-501f0c75.pt
+# Only the RS200 detector had been fetched, so both would have failed mid-run over the
+# full 21.6k-image val set. All three weights are now present; this proves they run.
+#
+# Same known-answer design as 85505/85634: Phase-A base@4 vs M1@4, where VQAScore
+# established M1 >> base. Also reports the zero-inflation these two categories are
+# expected to show (Deviation 1), which was only ever measured for `spatial`.
+set -euo pipefail
+export PATH="/software/cellgen/team361/ha11/envs/nichejepa/bin:$PATH"
+export HF_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/huggingface
+export TORCH_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/torch
+export XDG_CACHE_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/xdg
+export TOKENIZERS_PARALLELISM=false
+echo "[`date`] Phase C1 eval-smoke-unidet | Host: $(hostname)"
+
+echo "=== expert weights present ==="
+ls -la T2I-CompBench/UniDet_eval/experts/expert_weights/
+
+for MODEL in base M1; do
+  for CAT in 3d_spatial numeracy; do
+    D=phaseC/eval_smoke_unidet/${MODEL}_s4_${CAT}
+    echo "=== ${MODEL} / ${CAT} ==="
+    python3 phaseC/compbench_eval.py stage --images phaseA/images/${MODEL} \
+      --prompts phaseA/prompts.json --steps 4 --categories ${CAT} --limit 40 --out "$D"
+    python3 phaseC/compbench_eval.py run     --dir "$D"
+    python3 phaseC/compbench_eval.py collect --dir "$D"
+  done
+done
+
+echo "=== paired base-vs-M1 summary + zero-inflation (expect M1 > base) ==="
+python3 - <<'PY'
+import json, pathlib, sys
+bad = []
+for cat in ("3d_spatial", "numeracy"):
+    s = {}
+    for m in ("base", "M1"):
+        f = pathlib.Path(f"phaseC/eval_smoke_unidet/{m}_s4_{cat}/scores.json")
+        s[m] = {r["idx"]: r["score"] for r in json.loads(f.read_text())["per_prompt"]}
+    ks = sorted(set(s["base"]) & set(s["M1"]))
+    d = [s["M1"][k] - s["base"][k] for k in ks]
+    w = sum(x > 0 for x in d); l = sum(x < 0 for x in d); t = len(d) - w - l
+    nz = {m: sum(s[m][k] > 0 for k in ks) for m in s}
+    print(f"{cat:12s} n={len(ks)} base={sum(s['base'][k] for k in ks)/len(ks):.4f} "
+          f"M1={sum(s['M1'][k] for k in ks)/len(ks):.4f} "
+          f"M1-base={sum(d)/len(d):+.4f}  W/L/T={w}/{l}/{t}  "
+          f"non-zero base={nz['base']}/{len(ks)} M1={nz['M1']}/{len(ks)}  "
+          f"(tied-at-zero pairs = {sum(1 for k in ks if s['base'][k]==0 and s['M1'][k]==0)})")
+    if sum(d) / len(d) <= 0:
+        bad.append(f"{cat}: M1 did not beat base — evaluator suspect")
+if bad:
+    print("FAIL: " + "; ".join(bad)); sys.exit(1)
+print("PASS — 3d_spatial and numeracy evaluators run and recover the known ordering")
+PY
+
+echo "[`date`] DONE"
+if command -v my-job-stats >/dev/null 2>&1; then my-job-stats -a -n -s; fi

@@ -1,0 +1,33 @@
+#!/usr/bin/env bash
+#BSUB -J sd-W-s4-smoke
+#BSUB -G s10396
+#BSUB -q training-parallel
+#BSUB -n 4
+#BSUB -W 1:00
+#BSUB -R "span[hosts=1]"
+#BSUB -R "select[mem>128000]"
+#BSUB -R "rusage[mem=128000]"
+#BSUB -M 128000
+#BSUB -gpu "num=1:mode=exclusive_process:gmem=78G"
+#BSUB -cwd /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM
+#BSUB -o /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-W-s4-smoke-%J.out
+#BSUB -e /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-W-s4-smoke-%J.err
+# 30-step smoke of the two new selectors through the frozen S4 trainer.
+set -euo pipefail
+export PATH="/software/cellgen/team361/ha11/envs/nichejepa/bin:$PATH"
+export HF_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/huggingface
+export TORCH_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/torch
+export XDG_CACHE_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/xdg
+export TOKENIZERS_PARALLELISM=false
+export WANDB_MODE=disabled
+export PYTHONPATH="/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM:${PYTHONPATH:-}"
+source ~/.secrets/hf_token
+for V in "CD_dinop_cat 0.04" "CD_uniform_visit 1.0"; do set -- $V
+python3 phaseW/train_pilot_frozen_s4.py --variant $1 --coupling fresh --distill_loss x0_huber \
+  --seed 0 --sel_seed 0 --selection_dir phaseN/coco_selection_dinopatch --alpha 1.0 --temp $2 \
+  --N 4 --K 8 --cfg 7.0 --student_cfg 0.0 --cfg_mode composed --num_steps 30 --num_warmup_steps 5 --lr 1e-5 \
+  --weight_decay 0.0 --grad_clip 1.0 --height 512 --sched_shift 3.0 --num_train_ts 1000.0 --delta_min 1 --delta_max 3 \
+  --scoring_window 0.4,0.9 --support_m 1 --assign_seed 982451653 --huber_c 0.0 --gradient_checkpointing \
+  --save_every 1000 --log_every 10 --sample_every 0 --no_wandb --output_dir checkpoints/phaseW_smoke/s4_${1}_${LSB_JOBID}
+echo "SMOKE_OK $1"
+done

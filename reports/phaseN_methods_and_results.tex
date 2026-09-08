@@ -1,0 +1,937 @@
+\documentclass[10pt]{article}
+
+\usepackage[margin=0.9in]{geometry}
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage{lmodern}
+\usepackage{microtype}
+\usepackage{amsmath,amssymb,mathtools}
+\usepackage{booktabs}
+\usepackage{tabularx}
+\usepackage{array}
+\usepackage{xcolor}
+\usepackage{enumitem}
+\usepackage[hidelinks]{hyperref}
+\usepackage[capitalize,noabbrev]{cleveref}
+\usepackage{caption}
+\usepackage{xspace}
+\usepackage{placeins}
+\usepackage{longtable}
+
+\definecolor{observedblue}{HTML}{075FA8}
+\definecolor{placeholderred}{HTML}{B42318}
+\definecolor{goodgreen}{HTML}{277A4B}
+
+% Same convention as the main draft: blue = measured in this project, red = not yet filled.
+\newcommand{\obs}[1]{\textcolor{observedblue}{#1}}
+\newcommand{\tbd}[1]{\textcolor{placeholderred}{\textbf{[TBD: #1]}}}
+\newcommand{\method}{\textsf{CAFE}\xspace}
+\newcommand{\R}{\mathbb{R}}
+\newcommand{\E}{\mathbb{E}}
+
+\setlist[itemize]{leftmargin=*,topsep=2pt,itemsep=1pt}
+\setlist[enumerate]{leftmargin=*,topsep=2pt,itemsep=1pt}
+\captionsetup{font=small,labelfont=bf}
+
+\title{\textbf{Can a cheap signal tell which generated image is better?}\\
+\large Verification probes on Stable Diffusion 3.5-Medium: methods and results}
+\author{}
+\date{}
+
+\begin{document}
+\maketitle
+\vspace{-0.4in}
+
+\begin{abstract}
+\noindent
+A text-to-image model asked for ``a red cube and a blue sphere'' will sometimes produce it and
+sometimes swap the colours. If we sample four images, one is usually better than the rest. A
+\emph{verifier} is anything that guesses which one, without being told. This report measures how well
+several candidate verifiers do that, on a frozen Stable Diffusion 3.5-Medium test bed, against
+official automatic evaluators as ground truth. Two families are tested. The first,
+\method, is \emph{decoding-free}: it compares the generator's own flow-matching residual under the
+requested prompt against a minimally edited counterfactual prompt. It recovers \obs{7.4\%} of the
+available headroom and is beaten, at established significance, by two controls that are simpler and
+cheaper --- including one that uses no counterfactual at all. The second family scores each candidate
+by its similarity to the real photograph the caption was written for. There, similarity in a
+\emph{visual encoder} space recovers \obs{42.6\%}, similarity in the raw \emph{VAE latent} recovers
+\obs{18.1\%} with a within-prompt rank correlation indistinguishable from zero, and similarity in the
+\emph{denoiser's own intermediate hidden state} recovers \obs{38.8\%} with no decoder at all. Analyses
+that compare whole representation spaces --- debiased CKA and SVCCA --- explain why: the hidden state
+contains a linearly recoverable subspace shared with DINOv2 that the raw latent does not, and that
+subspace does not live in the high-variance directions, which is why truncating to 99.9\% of variance
+destroys it. We then train a small read-out head on the frozen denoiser, reaching cosine
+\obs{0.586} to DINOv2 patch tokens, and show it carries \obs{36.7\%} of headroom without a decoder,
+which is \obs{83\%} of what the target space itself achieves. Finally we ask how much of that target
+space is needed: the alignment signal concentrates \emph{faster} than variance --- \obs{90\%} of the
+full-rank result is retained at rank \obs{64}, where only \obs{45\%} of the spectral mass has
+accumulated --- but it does not saturate, because the DINOv2 spectrum on this corpus is heavy-tailed
+(\obs{$\alpha=0.800$}). The report defines every quantity, states every control, and reports what
+each probe is blind to.
+\end{abstract}
+
+\section{What question is being asked, and why it matters}
+\label{sec:why}
+
+\subsection{The three-stage decomposition}
+
+Improving a fast generator by selection and retraining decomposes into three questions that are
+easily conflated:
+\[
+  \underbrace{\text{does a better sample exist?}}_{\text{headroom}}
+  \;\longrightarrow\;
+  \underbrace{\text{can we find it?}}_{\text{verification}}
+  \;\longrightarrow\;
+  \underbrace{\text{can the model absorb it?}}_{\text{amortization}}
+\]
+Each stage can fail independently, and a single end-to-end number cannot tell you which one did.
+This report is entirely about the \textbf{middle} stage. It takes the candidate sets as given and
+asks only: given four images produced for the same prompt, how well does a proposed cheap signal
+reproduce the ordering that an expensive evaluator would give?
+
+\subsection{Why the correlation is the whole point}
+
+Everything hinges on a substitution. The expensive signal --- a vision--language model such as
+VQAScore, or an official benchmark evaluator --- requires decoding every candidate latent to pixels
+and then running a large scorer over it. If we want to \emph{train} on preferences over many
+candidates, that cost is paid on every sample of every step.
+
+A cheap signal is only useful if its ordering agrees with the expensive one. That agreement is a
+correlation, and it is the object of this report for three reasons.
+
+\begin{enumerate}
+  \item \textbf{It is the thing that transfers.} A label is used by selecting or weighting
+    candidates. Only the \emph{ordering} matters, not the absolute value, so rank agreement is the
+    quantity of interest rather than, say, mean squared error against the evaluator.
+  \item \textbf{It converts directly into an achievable gain.} \Cref{sec:headroom} defines
+    recovered headroom $\rho$, which maps a correlation onto ``what fraction of the available
+    improvement does this signal actually capture''. A verifier with a real but weak correlation
+    can be worth less than its cost.
+  \item \textbf{A weak correlation localizes the failure.} If a cheap signal fails, the question is
+    whether the information is absent from the representation or merely inaccessible to the
+    particular readout. \Cref{sec:repmetrics} gives tools that separate these, and
+    \Cref{sec:refresults} shows a case where the answer is ``present, but not where you would look''.
+\end{enumerate}
+
+\subsection{The test bed, for a reader who knows nothing about it}
+
+Everything below uses one frozen generator, Stable Diffusion 3.5-Medium (SD3.5-M), a
+2.24B-parameter rectified-flow transformer operating on a $16\times64\times64$ VAE latent for a
+$512\times512$ image. Candidates are produced by the \emph{unmodified} model at 8 sampling steps with
+classifier-free guidance 7.0, four random seeds per prompt ($K=4$). No training of the generator
+occurs anywhere in this report; the only thing ever trained is a small read-out head
+(\Cref{sec:projector}).
+
+Two prompt sets are used, and they are not interchangeable:
+\begin{itemize}
+  \item \textbf{T2I-CompBench++} prompts (\Cref{sec:cafe}) are short compositional templates
+    (``a white piano and a black bench''). They have \emph{no} ground-truth photograph, so only
+    prompt-based evaluators apply.
+  \item \textbf{COCO captions} (\Cref{sec:refsim}) describe a real photograph, which is on disk.
+    That makes \emph{reference-based} verifiers testable, which is impossible on CompBench++.
+\end{itemize}
+
+\section{Headroom and recovery: the measuring stick}
+\label{sec:headroom}
+
+\subsection{Definitions}
+
+Fix a prompt $p$ with $K$ cached candidate latents $z_1,\dots,z_K$ and a pre-specified evaluator
+$R(\cdot)$ applied to the decoded image. \emph{Headroom} is the gain available from perfect
+selection over uniform selection:
+\begin{equation}
+  \mathrm{headroom}(p) \;=\; \max_i R(z_i) \;-\; \frac{1}{K}\sum_{i=1}^{K} R(z_i),
+  \qquad
+  H \;=\; \E_p\!\left[\mathrm{headroom}(p)\right].
+\label{eq:headroom}
+\end{equation}
+The baseline is the \emph{mean} of the candidates, not the worst and not a single draw. This is
+deliberate: a verifier that picks uniformly at random scores zero in expectation, because
+$\E[R(\text{random pick})] = \frac1K\sum_i R(z_i)$.
+
+A verifier assigns scores $S_i$ and selects $\hat\imath = \arg\max_i S_i$. Its quality is the
+fraction of headroom it recovers:
+\begin{equation}
+  \rho \;=\;
+  \frac{\sum_p \left[\, R(z_{\hat\imath(p)}) - \frac1K\sum_i R(z_i(p)) \,\right]}
+       {\sum_p \left[\, \max_i R(z_i(p)) - \frac1K\sum_i R(z_i(p)) \,\right]}.
+\label{eq:rho}
+\end{equation}
+
+\subsection{Four properties worth stating explicitly}
+
+\begin{description}[leftmargin=1.2em,style=nextline]
+  \item[It is a ratio of sums, not a mean of ratios.]
+    Each prompt is weighted by its own headroom, so prompts where selection actually matters
+    dominate. The alternative --- averaging the per-prompt fraction --- weights every prompt equally
+    and is undefined when a prompt has zero headroom. The two differ materially: on the same data
+    and the same verifier, ratio-of-sums gives \obs{42.59\%} where mean-of-ratios gives
+    \obs{23.91\%}. Every number in this report is ratio-of-sums.
+  \item[Prompts where all $K$ candidates tie are free.]
+    They contribute $0$ to the numerator and $0$ to the denominator, so excluding them cannot change
+    $\rho$. This is why such rows are skipped to save compute, and why the count is reported
+    separately rather than hidden.
+  \item[The oracle is exactly $1$ and chance is exactly $0$.] By construction.
+  \item[It is \emph{not} antisymmetric.]
+    $\rho$ of the reversed score is not $-\rho$, because for $K>2$ picking the minimum is not the
+    mirror image of picking the maximum. This is why a verifier at $\obs{+7.38\%}$ has an inverted
+    twin at $\obs{-10.73\%}$ rather than $-7.38\%$.
+\end{description}
+
+\subsection{The denominator differs between experiments --- a real trap}
+
+$R$ is whatever evaluator that experiment froze, so $H$ is not one number.
+
+\begin{table}[h]
+\centering
+\caption{Headroom denominators actually in use. Recoveries computed against different rows of this
+table are \emph{not} comparable, because both the evaluator and the prompt pool differ.}
+\label{tab:denominators}
+\small
+\begin{tabularx}{\textwidth}{@{}Xllr@{}}
+\toprule
+Experiment & Evaluator $R$ & Prompt pool & $H$ \\
+\midrule
+\method probe (\Cref{sec:cafe}) & per-category T2I-CompBench++ & 2,098 held-out & \obs{0.14067} \\
+Reference similarity (\Cref{sec:refsim}) & VQAScore & 500 COCO captions & \obs{0.08753} \\
+Historical ``best-of-4'' headline & CompBench++, \emph{selected by VQAScore} & same 2,098 & \obs{0.05852} \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+The third row deserves a warning. It selects the candidate with VQAScore and then \emph{measures} it
+with CompBench++, so it is the gain of a particular cross-evaluator policy, not the CompBench++ oracle
+headroom. Selecting with CompBench++ itself on identical rows gives \obs{0.14067}, which is
+$2.4\times$ larger. Both quantities are legitimate; they answer different questions.
+
+\section{Experiment 1: a decoding-free counterfactual verifier (\method)}
+\label{sec:cafe}
+
+\subsection{The idea, and the intuition for why it might work}
+
+The generator is a conditional velocity field $v_\phi(x,\tau,p)$ trained so that, for a clean latent
+$z$, Gaussian noise $\epsilon$, and interpolation level $\sigma$,
+\[
+  x_\sigma = (1-\sigma)z + \sigma\epsilon,
+  \qquad
+  v_\phi\big(x_\sigma, \tau(\sigma), p\big) \;\approx\; \epsilon - z .
+\]
+Define the residual
+\begin{equation}
+  \ell_\phi(z,p;\sigma,\epsilon)
+  = \tfrac1d\big\| v_\phi(x_\sigma,\tau(\sigma),p) - (\epsilon-z) \big\|_2^2 .
+\label{eq:residual}
+\end{equation}
+The intuition: if $z$ really depicts what $p$ describes, the model should find $z$ easy to predict
+under $p$. The obvious problem is that $\ell$ also depends on how intrinsically hard $z$ is ---
+a cluttered image is harder for any prompt. So the absolute residual conflates ``matches the
+prompt'' with ``is a complicated picture''.
+
+The fix is a \emph{contrast}. Build a counterfactual prompt $q$ that changes exactly one
+compositional fact, and subtract:
+\begin{equation}
+  \delta_m = \ell_\phi(z,q;\sigma_m,\epsilon_m) - \ell_\phi(z,p;\sigma_m,\epsilon_m),
+  \qquad
+  B(z;p,q) = \frac{1}{M}\sum_{m=1}^{M}\delta_m .
+\label{eq:contrast}
+\end{equation}
+Crucially both terms use the \textbf{same} $\sigma_m$ and the \textbf{same} noise draw
+$\epsilon_m$ --- common random numbers. The image-difficulty term is then shared between the two
+evaluations and cancels, leaving (in principle) only the effect of the changed fact. Positive $B$
+favours $p$.
+
+We use $M=8$ stratified points $\sigma_m = 0.05 + 0.90\,(m-\tfrac12)/M$ on $[0.05,0.95]$, avoiding
+the degenerate endpoints, with $\tau = 1000\sigma$ passed to the transformer in float32.
+Classifier-free guidance is off: CFG is a sampling heuristic, not the conditional field whose
+residual we want.
+
+\subsection{The counterfactual edit engine}
+
+The quality of $q$ is the whole experiment. A sloppy edit measures vocabulary difficulty rather than
+composition. Two families were built.
+
+\begin{description}[leftmargin=1.2em,style=nextline]
+  \item[C1, same-token-multiset swaps (primary).]
+    The edit permutes words already present, so prompt length, token multiset and lexical difficulty
+    are all held fixed and only the \emph{binding} changes. Three tiers:
+    \begin{itemize}
+      \item \texttt{c1\_attr}: swap two attribute values bound to \emph{different} head nouns.\\
+        ``a red cube and a blue sphere'' $\rightarrow$ ``a blue cube and a red sphere''.
+      \item \texttt{c1\_role}: swap the two noun phrases across an \emph{asymmetric} relation.\\
+        ``a chicken behind a person'' $\rightarrow$ ``a person behind a chicken''.
+      \item \texttt{c1\_count}: swap two different \emph{plural} counts, preserving number agreement.
+    \end{itemize}
+  \item[C2, single-token lexical replacement (secondary).]
+    The pre-existing engine: replace one word with a different word (``blue'' $\rightarrow$
+    ``purple''). This changes the vocabulary, so it cannot separate binding from lexical difficulty.
+\end{description}
+
+Several guards were necessary, and each was added because its absence produced a wrong edit:
+symmetric relations (``next to'', ``near'') are refused because swapping across them does not change
+the meaning; attribute pairs binding to the \emph{same} head noun are refused (``a fabric blanket and
+a fluffy blanket'' describes the same scene either way); noun phrases containing a verb are refused
+because the phrase boundary is not where a regular expression puts it; and article agreement is
+repaired only where the swap \emph{created} the error, so that a counterfactual is never made more
+fluent than an already-ungrammatical source prompt.
+
+\begin{table}[h]
+\centering
+\caption{C1 edit-engine coverage over the 2,098 scored prompts. Headroom coverage weights each
+prompt by its own oracle headroom, which is the quantity that matters for an unconditional
+recovery.}
+\label{tab:c1coverage}
+\small
+\begin{tabular}{@{}lrrrl@{}}
+\toprule
+Category & Rows covered & Row coverage & Headroom coverage & Tier \\
+\midrule
+texture     & \obs{296/300} & \obs{98.7\%} & \obs{98.3\%} & \texttt{c1\_attr} \\
+3d\_spatial & \obs{296/300} & \obs{98.7\%} & \obs{99.2\%} & \texttt{c1\_role} \\
+color       & \obs{272/300} & \obs{90.7\%} & \obs{85.3\%} & \texttt{c1\_attr} \\
+shape       & \obs{268/300} & \obs{89.3\%} & \obs{91.0\%} & \texttt{c1\_attr} \\
+spatial     & \obs{213/298} & \obs{71.5\%} & \obs{75.9\%} & \texttt{c1\_role} \\
+complex     & \obs{147/300} & \obs{49.0\%} & \obs{54.3\%} & \texttt{c1\_attr} \\
+numeracy    & \obs{133/300} & \obs{44.3\%} & \obs{41.6\%} & \texttt{c1\_count} \\
+\midrule
+\textbf{total} & \obs{\textbf{1,625/2,098}} & \obs{\textbf{77.5\%}} & \obs{\textbf{78.6\%}} & \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Coverage is low for numeracy because many prompts contain a single count (``one drum''), and for
+spatial because symmetric relations are excluded by design. A defect in the pre-existing C2 engine
+is recorded here because it affects earlier work: it selects the replacement as the next unused
+entry of a flat family list, and those lists mix synonyms, so \obs{133 of 1,625} C2
+``counterfactuals'' are meaning-preserving (\texttt{metallic}$\rightarrow$\texttt{metal},
+\texttt{round}$\rightarrow$\texttt{circular}) --- \obs{25\%} of texture and \obs{20\%} of shape.
+
+\subsection{Arms: every control, and what each one rules out}
+
+All arms rank the same four latents with the same noise, so all comparisons are paired.
+
+\begin{table}[h]
+\centering
+\caption{The arms and the hypothesis each one kills.}
+\label{tab:arms}
+\small
+\begin{tabularx}{\textwidth}{@{}lX@{}}
+\toprule
+Arm & What it tests \\
+\midrule
+\texttt{cafe\_c1} & the proposed statistic: paired contrast under a same-multiset swap \\
+\texttt{cafe\_c2} & does the \emph{edit family} matter? \\
+\texttt{cafe\_c1\_selfnorm} & does dividing by cross-timestep dispersion help? \\
+\texttt{cafe\_c1\_inverted} & orientation control: is the sign meaningful? \\
+\texttt{cafe\_uncontrolled} & contrast against a fixed unrelated prompt (``a photograph''). \textbf{If this
+  wins, the careful counterfactual is doing no work.} \\
+\texttt{raw\_residual\_high/low} & $\pm\ell_\phi(z,p)$ alone. \textbf{If this wins, no counterfactual
+  is needed at all}, and the cost halves \\
+\texttt{clip} & decoded CLIPScore, the matched paid-for baseline \\
+\texttt{random}, \texttt{oracle} & the two ends of the scale \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\subsection{Results}
+
+\begin{table}[h]
+\centering
+\caption{\method probe, full C1 set, $n=\obs{1{,}492}$, $M=8$, \obs{1.75}\,s per record on one H200.
+Ground truth is the per-category CompBench++ evaluator, $H=\obs{0.14067}$.}
+\label{tab:caferesults}
+\small
+\begin{tabular}{@{}lcrrr@{}}
+\toprule
+Verifier & Decode? & $\rho$ & 95\% CI & Top-1 \\
+\midrule
+Oracle & yes & \obs{100\%} & --- & \obs{100\%} \\
+Decoded CLIP-L/14 & yes & \obs{30.18\%} & \obs{[+25.01, +35.10]} & \obs{32.8\%} \\
+\texttt{cafe\_uncontrolled} & no & \obs{20.01\%} & \obs{[+14.40, +25.32]} & \obs{30.7\%} \\
+\texttt{raw\_residual\_high} & no & \obs{16.22\%} & \obs{[+10.92, +21.50]} & \obs{32.8\%} \\
+\texttt{cafe\_c2} & no & \obs{8.47\%} & \obs{[+2.78, +14.12]} & \obs{27.4\%} \\
+\texttt{cafe\_c1\_selfnorm} & no & \obs{7.72\%} & \obs{[+2.14, +13.17]} & \obs{27.3\%} \\
+\textbf{\texttt{cafe\_c1}} & no & \obs{\textbf{7.38\%}} & \obs{[+2.03, +12.84]} & \obs{26.4\%} \\
+\texttt{cafe\_c1\_inverted} & no & \obs{$-10.73\%$} & \obs{[$-16.53$, $-4.97$]} & \obs{22.5\%} \\
+\texttt{raw\_residual\_low} & no & \obs{$-27.90\%$} & \obs{[$-34.06$, $-21.88$]} & \obs{18.5\%} \\
+Uniform & --- & \obs{$-0.14\%$} & \obs{[$-5.81$, $+5.22$]} & --- \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Marginal intervals overlap heavily and must not be read as a comparison. Because every verifier
+ranks the same candidates on the same prompts, the paired difference is the correct test.
+
+\begin{table}[h]
+\centering
+\caption{Paired prompt bootstrap, stratified by category, 20{,}000 draws, $n=\obs{1{,}492}$.
+$\Delta$ is \texttt{cafe\_c1} minus the named arm.}
+\label{tab:cafepaired}
+\small
+\begin{tabular}{@{}lrrrl@{}}
+\toprule
+Contrast & $\Delta\rho$ & 95\% CI & $p$ & Verdict \\
+\midrule
+$-$ \texttt{clip} & \obs{$-22.80\%$} & \obs{[$-30.15$, $-15.52$]} & \obs{$<10^{-4}$} & \obs{\method worse} \\
+$-$ \texttt{uncontrolled} & \obs{$-12.63\%$} & \obs{[$-19.40$, $-5.90$]} & \obs{0.0004} & \obs{\method worse} \\
+$-$ \texttt{raw\_residual\_high} & \obs{$-8.85\%$} & \obs{[$-16.13$, $-1.71$]} & \obs{0.0145} & \obs{\method worse} \\
+$-$ \texttt{cafe\_c2} & \obs{$-1.09\%$} & \obs{[$-7.75$, $+5.50$]} & \obs{0.758} & no separation \\
+$-$ \texttt{selfnorm} & \obs{$-0.35\%$} & \obs{[$-6.75$, $+6.04$]} & \obs{0.914} & no separation \\
+$-$ \texttt{raw\_residual\_low} & \obs{$+35.28\%$} & \obs{[$+26.50$, $+44.08$]} & \obs{$<10^{-4}$} & \obs{\method better} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\paragraph{The pre-specified mechanism test fails.}
+The controlled contrast is outperformed by the \emph{uncontrolled} negative and by the raw residual
+with \emph{no counterfactual at all}. It is also not distinguishable from the C2 edit family, so the
+choice of C1 as primary has no measured support.
+
+\paragraph{The aggregate hides a strong tier effect.}
+
+\begin{table}[h]
+\centering
+\caption{By edit tier. The extensions are not weak; they are absent or negative.}
+\label{tab:tiers}
+\small
+\begin{tabular}{@{}lrrrrr@{}}
+\toprule
+Tier & $n$ & \texttt{cafe\_c1} $\rho$ & 95\% CI & \texttt{clip} & \texttt{uncontrolled} \\
+\midrule
+\texttt{c1\_attr} (primary) & \obs{983} & \obs{15.62\%} & \obs{[+8.5, +22.5]} & \obs{41.36\%} & \obs{22.62\%} \\
+\texttt{c1\_count}          & \obs{125} & \obs{$-1.28\%$} & \obs{[$-15.9$, $+13.4$]} & \obs{22.93\%} & \obs{13.74\%} \\
+\texttt{c1\_role}           & \obs{384} & \obs{$-4.28\%$} & \obs{[$-14.5$, $+6.0$]} & \obs{13.19\%} & \obs{17.22\%} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Restricted to \texttt{c1\_attr}, the paired contrasts soften to ``does not outperform'' rather than
+``is outperformed'': versus \texttt{uncontrolled} \obs{$-7.01\%$}, $p=\obs{0.091}$; versus
+\texttt{raw\_residual\_high} \obs{$-6.75\%$}, $p=\obs{0.145}$; versus \texttt{clip}
+\obs{$-25.74\%$}, $p<\obs{10^{-4}}$. Both statements are true of different row sets and both should
+be quoted.
+
+\paragraph{Why the contrast underperforms its own controls: a coherent mechanism.}
+Order the arms by how similar the subtracted reference prompt is to $p$, and read the within-prompt
+correlation with the evaluator:
+\[
+  \underbrace{\ell_\phi(z,p)\ \text{alone}}_{\text{no reference}}\ \obs{+0.157}
+  \;>\;
+  \underbrace{\text{unrelated negative}}_{\text{``a photograph''}}\ \obs{+0.147}
+  \;>\;
+  \underbrace{\text{same-multiset swap}}_{\text{maximally similar}}\ \obs{+0.108}.
+\]
+Monotone \emph{decreasing} in the similarity of the subtrahend. This is exactly what happens if
+$\ell_\phi(z,q)$ is dominated by a candidate-specific difficulty term shared with $\ell_\phi(z,p)$:
+the more minimal the edit, the more completely that term cancels --- and the more of what survives is
+noise. \textbf{The intervention that makes the contrast clean is the same intervention that destroys
+its signal-to-noise.} Consistent with this, $B$ is only \obs{0.35\%} of the residual magnitude, and
+removing the raw-energy component from $B$ barely changes it (\obs{$+0.108 \to +0.091$}), so the
+residual signal is small rather than merely contaminated.
+
+\paragraph{A separate, well-powered positive result.}
+Averaged over candidates, $B$ is reliably positive: mean \obs{$+8.67\times10^{-4}$}, positive for
+\obs{79.8\%} of candidates. The frozen field \emph{does} prefer the true prompt over its
+same-multiset swap. But only \obs{45.5\%} of $B$'s variance is within-prompt, and the within-prompt
+rank correlation is \obs{$+0.060$}. In words: \emph{the model knows which prompt is correct on
+average; it does not know whether this particular sample got the binding right.}
+
+\paragraph{The control that decides what the positive result means.}
+Because $p$ and $q$ differ only in word order, a positive $B$ is equally consistent with sensitivity
+to \emph{binding} and sensitivity to \emph{word order}. The discriminating control is a
+meaning-preserving reorder $r$ with the identical token multiset:
+\begin{center}
+\begin{tabular}{@{}ll@{}}
+$p$ & ``a black pen and a blue ink'' \\
+$q$ & ``a blue pen and a black ink'' \quad (binding changed) \\
+$r$ & ``a blue ink and a black pen'' \quad (binding \emph{identical}, order changed) \\
+\end{tabular}
+\end{center}
+
+\begin{table}[h]
+\centering
+\caption{Reorder null, $n=\obs{785}$ captions, \obs{3{,}140} candidates.}
+\label{tab:reorder}
+\small
+\begin{tabular}{@{}lrrr@{}}
+\toprule
+ & mean $\delta$ & fraction $>0$ & $\rho$ as a selector \\
+\midrule
+counterfactual $q$ & \obs{$+8.67\times10^{-4}$} & \obs{79.8\%} & \obs{15.91\%} \\
+reorder $r$ (meaning preserved) & \obs{$+2.38\times10^{-4}$} & \obs{69.5\%} & \obs{$-0.98\%$} \\
+paired difference & \obs{$+6.29\times10^{-4}$} & \multicolumn{2}{l}{95\% CI \obs{$[5.83, 6.78]\times10^{-4}$}} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The directional effect is therefore \obs{$\approx73\%$} binding and \obs{$\approx27\%$} word-order
+sensitivity, and as a \emph{selector} the reorder is a proper null (\obs{$-0.98\%$}, versus
+\obs{$+0.39\%$} for random). The binding component survives its control. Per category the binding
+share is cleanest for colour (reorder only \obs{12.5\%} of the counterfactual effect), then texture
+\obs{34.7\%}, and weakest for shape \obs{68.5\%}.
+
+\section{Experiment 2: does resemblance to the real photograph predict prompt satisfaction?}
+\label{sec:refsim}
+
+\subsection{The idea, and why it is worth asking}
+
+A COCO caption was written to describe a specific photograph, and that photograph is on disk. So for
+these prompts, and only these, a \emph{reference-based} verifier is possible: score each candidate by
+how much it resembles the ground truth.
+
+This matters because at \emph{training} time a reference usually exists. If resemblance predicts
+prompt satisfaction, a training-time label can be produced with no vision--language model and, in the
+latent and hidden-state variants, no decoder.
+
+\paragraph{The confound, stated first.}
+One caption describes many valid photographs. Cosine to \emph{one} chosen reference measures
+instance-level similarity --- layout, palette, viewpoint --- not prompt adherence. A weak correlation
+is therefore the \emph{expected} result and would not show that the embedding lacks semantics. A
+strong one is the surprising outcome.
+
+\subsection{Setup}
+
+\obs{500} COCO captions, each with its real photograph, and \obs{4} candidates each generated by the
+frozen SD3.5-M at 8 steps and CFG 7.0 --- the same recipe as \Cref{sec:cafe}. Each candidate is
+scored by VQAScore (\texttt{clip-flant5-xxl}) against its caption; $H=\obs{0.08753}$, with
+\obs{zero} tied prompts. Captions whose \emph{text} repeats across different photographs were dropped
+(\obs{12} of them), because otherwise a text join attaches a generation to the wrong ground truth.
+
+\subsection{The four spaces, and why each is the natural thing to try}
+
+\begin{description}[leftmargin=1.2em,style=nextline]
+  \item[\texttt{dino} --- DINOv2-base CLS, 768-d, requires a decode.]
+    A self-supervised visual encoder whose features are known to capture object identity and layout.
+    The natural ``semantic similarity of two images'' measure.
+  \item[\texttt{clip} --- CLIP ViT-L/14 image embedding, 768-d, requires a decode.]
+    Trained on image--text pairs, so it is tilted towards exactly the caption-relevant content.
+  \item[\texttt{latent} --- the SD3.5 VAE latent, $16\times64\times64 = 65{,}536$-d, decoding-free.]
+    The cheapest possible option: the representation the generator already produces. Its weakness is
+    that a VAE is trained for \emph{reconstruction}, so its latent is organised by
+    appearance, not meaning.
+  \item[\texttt{repa} --- the denoiser's hidden state at block 8, 1536-d, decoding-free.]
+    The premise of representation-alignment methods (REPA) is that a diffusion transformer's
+    intermediate activations, while denoising, align with a visual encoder's features. If true, this
+    is a decoding-free representation with encoder-like semantics. It is extracted from the
+    \emph{image} stream of the joint block --- the text stream is a different tensor and using it
+    would silently measure the wrong thing --- while the model processes the image noised to
+    $\sigma=0.5$, with reference and candidates sharing the same noise and the same caption
+    conditioning so that only the image differs.
+\end{description}
+
+Each space is also evaluated inside a PCA basis fitted on that run's pooled reference-and-candidate
+vectors and truncated at 99.9\% of variance. This is a rotation and truncation \emph{inside one
+space}; nothing is fitted against the evaluator.
+
+\paragraph{A note on what cannot be done.}
+There is no cosine between a 768-d DINOv2 embedding and a 65{,}536-d latent. They have no shared
+basis, and PCA cannot supply one: projecting means a dot product with a component vector, so the
+mismatch sits on the \emph{input} side, where truncating the output dimension has no effect. The
+tools in \Cref{sec:repmetrics} are what answer cross-space questions.
+
+\subsection{Results}
+\label{sec:refresults}
+
+\begin{table}[h]
+\centering
+\caption{Comprehensive correlation table. $n=\obs{500}$ captions, $K=4$, ground truth VQAScore,
+$H=\obs{0.08753}$. ``Within-prompt'' correlates the $K$ similarities against the $K$ evaluator
+scores inside each prompt and averages over prompts --- this is the decisive form, because it asks
+whether the signal picks the better \emph{candidate}. ``Pooled'' correlates all $n\!\times\!K$ pairs
+at once and is confounded by prompt difficulty. Decoding-free arms in bold.}
+\label{tab:refsim}
+\small
+\begin{tabular}{@{}lcrrrrrrr@{}}
+\toprule
+& & & & \multicolumn{2}{c}{Within-prompt} & & \multicolumn{2}{c}{Pooled} \\
+\cmidrule(lr){5-6}\cmidrule(lr){8-9}
+Arm & Dec.? & $\rho$ & 95\% CI & Spearman & 95\% CI & Pearson & Spearman & Pearson \\
+\midrule
+\texttt{dino\_patchmean} & yes & \obs{43.92\%} & \obs{[+33.7,+53.5]} & \obs{+0.2149} & \obs{[+.164,+.265]} & \obs{+0.2414} & \obs{+0.2099} & \obs{+0.3351} \\
+\texttt{clip\_pca} & yes & \obs{43.64\%} & \obs{[+32.9,+53.4]} & \obs{+0.2435} & \obs{[+.194,+.291]} & \obs{+0.2864} & \obs{+0.2388} & \obs{+0.3172} \\
+\texttt{dino}      & yes & \obs{42.59\%} & \obs{[+32.2,+52.2]} & \obs{+0.1852} & \obs{[+.135,+.233]} & \obs{+0.2343} & \obs{+0.1965} & \obs{+0.2575} \\
+\texttt{clip}      & yes & \obs{41.89\%} & \obs{[+31.2,+52.0]} & \obs{+0.2554} & \obs{[+.206,+.305]} & \obs{+0.2744} & \obs{+0.1671} & \obs{+0.1977} \\
+\texttt{dino\_pca} & yes & \obs{41.65\%} & \obs{[+31.2,+51.4]} & \obs{+0.1924} & \obs{[+.143,+.241]} & \obs{+0.2370} & \obs{+0.1975} & \obs{+0.2582} \\
+\textbf{\texttt{repa}} & \textbf{no} & \obs{\textbf{38.75\%}} & \obs{[+28.3,+48.7]} & \obs{+0.1679} & \obs{[+.118,+.218]} & \obs{+0.1926} & \obs{+0.2173} & \obs{+0.3088} \\
+\textbf{\texttt{repa\_projected}} & \textbf{no} & \obs{\textbf{36.66\%}} & \obs{[+25.6,+47.1]} & \obs{+0.1504} & \obs{[+.099,+.201]} & \obs{+0.2025} & \obs{+0.1602} & \obs{+0.3011} \\
+\textbf{\texttt{latent}} & \textbf{no} & \obs{18.11\%} & \obs{[+5.3,+30.5]} & \obs{+0.0286} & \obs{[$-$.025,+.081]} & \obs{+0.0462} & \obs{+0.0231} & \obs{+0.0777} \\
+\textbf{\texttt{repa\_pca}} & \textbf{no} & \obs{17.11\%} & \obs{[+4.5,+29.5]} & \obs{+0.0534} & \obs{[+.003,+.104]} & \obs{+0.0863} & \obs{+0.0694} & \obs{+0.0921} \\
+\textbf{\texttt{latent\_pca}} & \textbf{no} & \obs{6.48\%} & \obs{[$-$7.0,+19.7]} & \obs{$-0.0219$} & \obs{[$-$.073,+.030]} & \obs{$-0.0213$} & \obs{+0.0049} & \obs{+0.0504} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Three readings.
+
+\begin{enumerate}
+  \item \textbf{Resemblance to the ground truth genuinely predicts prompt satisfaction.} Despite the
+    one-caption-many-images confound, encoder-space similarity recovers \obs{$\approx$43\%} of
+    headroom. The plain interpretation is that a generation which fails the caption also tends to
+    look unlike the photograph the caption describes.
+  \item \textbf{The raw latent is close to inert.} Its within-prompt Spearman is \obs{$+0.029$} with
+    a confidence interval straddling zero. This reproduces, in a reference-based setting, the
+    project's recurring finding that latent-to-semantics readouts do not work.
+  \item \textbf{The denoiser's hidden state is not inert, and needs no decoder.} \obs{38.75\%},
+    within confidence of DINO and CLIP, both of which must decode. Same model, same images, one
+    layer deeper: \obs{$+0.029 \to +0.168$}.
+\end{enumerate}
+
+\paragraph{PCA at 99.9\% variance destroys precisely the two decoding-free arms.}
+\texttt{repa} \obs{$38.75\% \to 17.11\%$} and \texttt{latent} \obs{$18.11\% \to 6.48\%$}, while the
+decoded arms are untouched. Retaining 99.9\% of variance still required \obs{2{,}376} latent
+components and \obs{727} hidden-state components, so this is not aggressive truncation. The
+conclusion is that in those two spaces the semantic content sits in \emph{low-variance} directions,
+and variance-ranked truncation deletes it. This is a direct caution against the natural idea of
+reducing everything to a fixed-size PCA embedding.
+
+\section{Comparing whole representation spaces}
+\label{sec:repmetrics}
+
+The remaining question --- \emph{why} does the hidden state work where the latent does not --- is
+about whole spaces of different dimensionality, so cosine cannot answer it. Three tools apply.
+Implementations and self-tests are in \texttt{phaseN/repsim\_metrics.py}.
+
+\subsection{Linear CKA, and the bias that makes the naive version unusable}
+
+Centered Kernel Alignment compares the \emph{Gram matrices} of two representations:
+\begin{equation}
+  \mathrm{CKA}(X,Y) = \frac{\|Y^\top X\|_F^2}{\|X^\top X\|_F \, \|Y^\top Y\|_F},
+\end{equation}
+with $X\in\R^{n\times p}$, $Y\in\R^{n\times q}$ column-centred. Intuitively it asks: \emph{do the two
+spaces consider the same pairs of samples to be similar?} Because it works through
+sample-by-sample similarity, it never needs $p=q$. It is invariant to rotation and to isotropic
+scaling, which is what makes it a fair comparison between arbitrary representations.
+
+Its weakness is a positive bias when features outnumber samples. Verified on synthetic data:
+two \emph{independent} Gaussians of representative shapes score \obs{$+0.179$}, not $0$. The unbiased
+HSIC estimator removes this: the same independent pair scores \obs{$-0.004$}, while identical
+representations still score $1$ and a planted shared signal scores \obs{$+0.870$}. The debiased value
+is the one to read. The two algebraic forms of CKA (feature-space and Gram/HSIC) were checked to
+agree to \obs{$2.2\times10^{-16}$}.
+
+\paragraph{What CKA is blind to.} It is dominated by the high-variance directions, because those
+dominate the Gram matrix. Two spaces that share their dominant structure will score high even if
+they disagree about everything else.
+
+\subsection{SVCCA, and the split that makes it honest}
+
+SVCCA truncates each space by SVD at 99\% of variance and then runs canonical correlation analysis
+between the reduced spaces, reporting the mean canonical correlation. Intuitively it asks a different
+question: \emph{is there a linear subspace of $X$ that is a linear function of a subspace of $Y$?}
+Unlike CKA, it does not care whether that subspace carries much variance --- only whether it is
+linearly decodable.
+
+CCA fitted and evaluated on the same rows finds large correlations between pure noise as soon as the
+retained dimensions approach the sample count: measured at \obs{$r=0.296$} on independent Gaussians.
+Directions are therefore fitted on one half of the samples and correlations measured on the held-out
+half, with a row-permutation null reported beside every value. With that split, independent data
+gives \obs{$0.054$} against a null of \obs{$0.061$} (excess \obs{$-0.007$}), and a planted shared
+signal gives \obs{$0.303$} against \obs{$0.053$} (excess \obs{$+0.250$}).
+
+\subsection{RSA}
+
+Representational Similarity Analysis is the cheapest and most assumption-free: for each prompt, take
+the $K$ reference-to-candidate similarities computed in space $A$ and in space $B$, and correlate
+those two vectors of length $K$. It fits nothing at all and answers exactly the question the
+downstream use cares about: \emph{would these two spaces rank the candidates the same way?}
+
+\subsection{Results, and the informative disagreement}
+
+\begin{table}[h]
+\centering
+\caption{Cross-space structure on the pooled \obs{2{,}500} reference and candidate vectors.
+Debiased CKA is the value to read. SVCCA excess is held-out score minus permutation null.
+RSA is the mean within-prompt Spearman between similarity structures.}
+\label{tab:crossspace}
+\small
+\begin{tabular}{@{}lrrrrrr@{}}
+\toprule
+Pair & CKA (biased) & \textbf{CKA (debiased)} & SVCCA & null & \textbf{excess} & RSA \\
+\midrule
+\texttt{latent}--\texttt{repa} & \obs{+0.9211} & \obs{\textbf{+0.9213}} & \obs{+0.1534} & \obs{+0.0226} & \obs{+0.1308} & \obs{+0.4036} \\
+\texttt{clip}--\texttt{dino}   & \obs{+0.5918} & \obs{\textbf{+0.5751}} & \obs{+0.1810} & \obs{+0.0239} & \obs{+0.1571} & \obs{+0.2992} \\
+\texttt{clip}--\texttt{repa}   & \obs{+0.2389} & \obs{\textbf{+0.2355}} & \obs{+0.2921} & \obs{+0.0226} & \obs{\textbf{+0.2695}} & \obs{+0.2452} \\
+\texttt{clip}--\texttt{latent} & \obs{+0.1975} & \obs{\textbf{+0.1899}} & \obs{+0.0326} & \obs{+0.0227} & \obs{+0.0099} & \obs{+0.0884} \\
+\texttt{dino}--\texttt{repa}   & \obs{+0.1923} & \obs{\textbf{+0.1876}} & \obs{+0.2939} & \obs{+0.0251} & \obs{\textbf{+0.2689}} & \obs{+0.2004} \\
+\texttt{dino}--\texttt{latent} & \obs{+0.1792} & \obs{\textbf{+0.1692}} & \obs{+0.0257} & \obs{+0.0221} & \obs{\textbf{+0.0036}} & \obs{+0.0512} \\
+\midrule
+\multicolumn{7}{@{}l}{\emph{involving the trained read-out head of \Cref{sec:projector}}}\\
+\texttt{dino\_patchmean}--\texttt{repa\_projected} & \obs{+0.8272} & \obs{\textbf{+0.8275}} & \obs{+0.5687} & \obs{+0.0229} & \obs{\textbf{+0.5458}} & \obs{+0.5932} \\
+\texttt{dino\_patchmean}--\texttt{repa} & \obs{+0.3230} & \obs{\textbf{+0.3208}} & \obs{+0.4143} & \obs{+0.0215} & \obs{+0.3928} & \obs{+0.3620} \\
+\texttt{dino\_patchmean}--\texttt{latent} & \obs{+0.2723} & \obs{\textbf{+0.2669}} & \obs{+0.0345} & \obs{+0.0228} & \obs{\textbf{+0.0117}} & \obs{+0.1612} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+CKA and SVCCA give \emph{opposite orderings}, and that is the result rather than a problem.
+
+\begin{itemize}
+  \item CKA says \texttt{latent} and \texttt{repa} are nearly the same space (\obs{0.921}) and that
+    \texttt{repa}--\texttt{dino} is low (\obs{0.188}).
+  \item SVCCA says \texttt{repa}--\texttt{dino} has the \emph{largest} shared decodable subspace
+    (excess \obs{$+0.269$}) while \texttt{latent}--\texttt{dino} has essentially none
+    (excess \obs{$+0.004$}).
+\end{itemize}
+
+Both are correct about different things, and together they explain \Cref{tab:refsim}. The latent and
+the layer-8 hidden state share their \emph{dominant variance} structure --- both are dominated by
+low-level image content --- which is what CKA measures, hence \obs{0.92}. But the hidden state
+additionally contains a \emph{linearly recoverable} DINOv2-aligned subspace that the raw latent does
+not, which is what SVCCA measures, hence \obs{$+0.269$} versus \obs{$+0.004$}.
+
+That is the representation-alignment premise, confirmed on this model without training anything. It
+also explains why PCA at 99.9\% variance collapsed the \texttt{repa} arm: the DINO-aligned subspace
+is real and linearly accessible, but it is not among the high-variance directions, so
+variance-ranked truncation removes it.
+
+\section{A trained read-out head, and the cross-space arm it enables}
+\label{sec:projector}
+
+The analyses above deliberately fit nothing. They therefore cannot answer the practical question:
+how much of the visual encoder's information can be \emph{recovered} from the denoiser when a map is
+allowed? That question matters because a map is exactly what a training-time labeller would use.
+
+\subsection{Training}
+
+We train a per-token MLP $1536 \rightarrow 2048 \rightarrow 2048 \rightarrow 768$ that maps the
+frozen denoiser's layer-8 hidden state to DINOv2-base patch tokens, maximising cosine, on COCO
+\texttt{train2017}. Only this head trains: the denoiser and the encoder are frozen, so nothing here
+can change the generator and the result is purely a read-out. Validation uses a disjoint slice of
+\texttt{train2017}, leaving \texttt{val2017} --- which supplies the reference photographs of
+\Cref{sec:refsim} --- entirely untouched by training or early stopping.
+
+Patch-to-patch alignment requires the two token grids to correspond, verified numerically before any
+compute: at 512\,px the model emits $(512/8/2)^2 = 1024$ image tokens and DINOv2 at
+$224\cdot\lfloor 512/256\rfloor = 448$\,px emits $(448/14)^2 = 1024$ patches.
+
+\begin{table}[h]
+\centering
+\caption{Read-out head training. A randomly initialised projector sits near $1-\cos = 1$.
+The curve is still descending at the final step, so \obs{0.586} is a lower bound on what this map
+can reach.}
+\label{tab:projector}
+\small
+\begin{tabular}{@{}lrrrrrrr@{}}
+\toprule
+step & 500 & 1500 & 2500 & 3500 & 4500 & 5500 & \textbf{6000} \\
+\midrule
+val $1-\cos$ & \obs{0.5115} & \obs{0.4649} & \obs{0.4459} & \obs{0.4399} & \obs{0.4269} & \obs{0.4209} & \obs{\textbf{0.4140}} \\
+val $\cos$   & \obs{0.489} & \obs{0.535} & \obs{0.554} & \obs{0.560} & \obs{0.573} & \obs{0.579} & \obs{\textbf{0.586}} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+A frozen intermediate hidden state predicts DINOv2 patch tokens at cosine \obs{0.586}. This is the
+direct confirmation of what \Cref{tab:crossspace} inferred from subspace statistics alone: the
+encoder's information is present in the denoiser and a small head reaches it.
+
+\subsection{The cross-space arm}
+
+With a map in hand, the comparison that was previously undefined becomes well posed:
+\[
+  \texttt{repa\_projected} \;=\; \cos\!\Big(\operatorname{mean}_\text{tok} \text{proj}\big(h_T(\text{candidate})\big),\;
+  \operatorname{mean}_\text{patch} \text{DINOv2}(\text{reference})\Big).
+\]
+Two choices decide whether this number means anything.
+
+\paragraph{Pooling before the cosine is required, not a convenience.}
+The head was trained per token against the patch grid of the \emph{same} image, so token $i$ of the
+prediction and of the target are the same spatial location. A candidate and a reference are
+different images and share no such correspondence, so a per-token cosine between them would compare
+unrelated positions. Both sides are pooled over tokens first.
+
+\paragraph{The matched upper bound must live in the target space.}
+Comparing \texttt{repa\_projected} against the CLS-based \texttt{dino} arm would be unmatched,
+because the head was trained to hit \emph{patch} tokens, not CLS. \Cref{tab:refsim} therefore also
+reports \texttt{dino\_patchmean}, the same similarity computed between reference and candidate
+patch-means. Without that row one could not tell whether a gap is the head's fault or the target
+space's.
+
+The result is \obs{36.66\%} against a matched decoded ceiling of \obs{43.92\%}: the learned map
+carries \obs{83\%} of what the target space itself achieves, with no decoder. The structural
+measures confirm the map did its job --- \texttt{dino\_patchmean}--\texttt{repa\_projected} reaches
+debiased CKA \obs{0.828} and SVCCA excess \obs{+0.546}, against \obs{0.267} and \obs{+0.012} for
+\texttt{dino\_patchmean}--\texttt{latent}.
+
+Two honest qualifications. The head does \emph{not} beat the raw hidden state
+(\obs{36.66\%} versus \obs{38.75\%}); mapping into the encoder's space costs a little. And the raw
+hidden states are nearly collinear --- mean cosine \obs{0.970} --- so \texttt{repa}'s similarity is a
+small perturbation on a large common component, whereas the projected arm at \obs{0.738} is better
+conditioned even though its $\rho$ is slightly lower.
+
+\section{How much of the visual target space is needed?}
+\label{sec:rank}
+
+A read-out head is cheaper, and an auxiliary alignment loss is better conditioned, when the target is
+low-rank. The natural construction is to keep only the top-$n$ principal components of the encoder,
+$z_n(x) = P_n\big(E_D(x) - \bar v\big)$. The question this raises is not whether a low-rank target
+reconstructs the encoder --- by definition it captures the top-$n$ spectral mass --- but whether it
+retains the \emph{alignment} signal. Those are different functionals of the same feature, and a
+direction carrying little variance can still carry the binding information.
+
+\paragraph{Protocol.}
+The PCA basis is estimated once on \obs{5{,}000} COCO \texttt{train2017} images
+(\obs{100{,}000} patch embeddings, dimension \obs{768}) and applied unchanged to \texttt{val2017}
+references and to generated candidates, so nothing is fitted on the evaluation set. For each rank we
+score every candidate by its cosine to the reference \emph{inside the rank-$n$ subspace} and
+correlate with VQAScore. Patches are pooled before projection, which is exact rather than
+approximate because the projection is linear (verified to \obs{$6.2\times10^{-15}$}).
+
+\begin{table}[h]
+\centering
+\caption{Alignment recovery against retained spectral mass, $n=\obs{500}$ captions. Cumulative mass
+is a property of the encoder alone; $\rho$ is measured against VQAScore.}
+\label{tab:ranksweep}
+\small
+\begin{tabular}{@{}rrrrr@{}}
+\toprule
+rank $n$ & cumulative spectral mass & $\rho$ & 95\% CI & within-prompt Spearman \\
+\midrule
+4    & \obs{13.0\%} & \obs{27.43\%} & \obs{[+15.7, +38.9]} & \obs{+0.0860} \\
+8    & \obs{18.9\%} & \obs{33.67\%} & \obs{[+22.3, +44.6]} & \obs{+0.1396} \\
+16   & \obs{25.9\%} & \obs{34.38\%} & \obs{[+23.0, +45.0]} & \obs{+0.1641} \\
+32   & \obs{34.4\%} & \obs{36.47\%} & \obs{[+25.1, +47.3]} & \obs{+0.1582} \\
+48   & \obs{40.4\%} & \obs{38.81\%} & \obs{[+27.7, +48.9]} & \obs{+0.1733} \\
+64   & \obs{45.2\%} & \obs{38.61\%} & \obs{[+27.6, +48.7]} & \obs{+0.1652} \\
+128  & \obs{58.9\%} & \obs{42.62\%} & \obs{[+32.1, +52.2]} & \obs{+0.1694} \\
+256  & \obs{75.3\%} & \obs{42.30\%} & \obs{[+32.2, +51.6]} & \obs{+0.1767} \\
+512  & \obs{92.1\%} & \obs{39.19\%} & \obs{[+28.6, +48.9]} & \obs{+0.1736} \\
+768  & \obs{100.0\%} & \obs{42.87\%} & \obs{[+32.8, +52.0]} & \obs{+0.1840} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\paragraph{Alignment concentrates faster than variance.}
+Rank \obs{64} retains \obs{90\%} of the full-rank recovery (\obs{38.61\%} of \obs{42.87\%}) while
+only \obs{45.2\%} of the spectral mass has accumulated; rank \obs{16} already retains \obs{80\%} at
+\obs{25.9\%} of mass. A low-rank target is therefore a cheap and largely lossless carrier of the
+alignment signal, and this is a stronger justification for a small $n$ than a variance argument
+would give.
+
+\paragraph{But there is no elbow to saturate at.}
+The DINOv2 spectrum on this corpus is heavy-tailed. Fitting $\lambda_i \approx C i^{-\alpha}$ over
+eigenvalues 5--512 gives \obs{$\alpha = 0.800$}, and reaching \obs{90\%} of the mass requires rank
+\obs{467}, \obs{99\%} rank \obs{718}. Correspondingly $\rho$ does not plateau at 64: it drifts
+upward to rank $\sim$128 and the within-prompt rank correlation increases monotonically to full rank.
+All confidence intervals overlap heavily, so rank 128 cannot be claimed to beat rank 64. The
+defensible statement is the weaker and more useful one: \textbf{truncation is cheap in alignment
+terms long before it is cheap in variance terms, but nothing saturates}, so a rank chosen by a
+spectral-elbow argument would be chosen on a feature the spectrum does not have. Any claim that
+performance saturates at a spectral elbow should be checked against $\alpha$ on the actual corpus,
+because at $\alpha<1$ the tail mass does not decay at the rate such arguments assume.
+
+\section{What this means for a decoding-free training signal}
+\label{sec:implications}
+
+The motivating goal is a label computable \emph{before} decoding, so that preference distillation
+does not pay a VAE decode plus a large vision--language model per candidate per step.
+\Cref{tab:status} summarises where that stands.
+
+\begin{table}[h]
+\centering
+\caption{Status of each route to a pre-decoding label. $\rho$ values come from different pools and
+evaluators (\Cref{tab:denominators}) and are not directly comparable across the horizontal rule.}
+\label{tab:status}
+\small
+\begin{tabularx}{\textwidth}{@{}Xccr@{}}
+\toprule
+Route & Needs decode? & Needs a reference image? & $\rho$ \\
+\midrule
+Counterfactual flow-residual contrast (\Cref{sec:cafe}) & no & no & \obs{7.38\%} \\
+Raw residual magnitude & no & no & \obs{16.22\%} \\
+Uncontrolled negative prompt & no & no & \obs{20.01\%} \\
+Decoded CLIPScore against the prompt & yes & no & \obs{30.18\%} \\
+\midrule
+VAE-latent similarity to reference (\Cref{sec:refsim}) & no & yes & \obs{18.11\%} \\
+Read-out head into encoder space (\Cref{sec:projector}) & no & yes & \obs{36.66\%} \\
+Hidden-state similarity to reference & no & yes & \obs{38.75\%} \\
+Decoded encoder similarity to reference & yes & yes & \obs{43.92\%} \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+Three conclusions follow.
+
+\begin{enumerate}
+  \item \textbf{No reference-free pre-decoding label is available yet.} The best measured is
+    \obs{20.01\%}, from an \emph{uncontrolled} negative prompt, and the mechanism analysis of
+    \Cref{sec:cafe} indicates that much of it tracks image complexity rather than semantics: the raw
+    residual alone correlates \obs{$+0.157$} with the evaluator, more than the carefully controlled
+    contrast at \obs{$+0.108$}.
+  \item \textbf{A reference-based pre-decoding label \emph{is} available and is competitive.} At
+    \obs{38.75\%} it is statistically indistinguishable from decoded encoder similarity and above
+    decoded CLIPScore's \obs{30.18\%} on its own pool. Since distillation on real-image corpora has a
+    reference for every training prompt, this is directly usable as a training-time labeller.
+  \item \textbf{The representation, not the modelling capacity, was the obstacle.} A latent-to-encoder
+    read-out was previously judged inert. That judgement was reached on the \emph{VAE latent}, whose
+    shared decodable subspace with the encoder is \obs{+0.004} --- indistinguishable from nothing. The
+    denoiser's hidden state is a different object, at \obs{+0.269}, and a head trained on it reaches
+    cosine \obs{0.586}. Conclusions drawn about the latent should not be carried over to the hidden
+    state.
+\end{enumerate}
+
+\paragraph{The open question.} Every working route above needs a reference image, so none of them
+labels a synthetic compositional prompt. The untested route that would is a probe trained directly
+from the hidden state to the alignment score, with no reference and no decode. The labels for it
+already exist: \obs{20{,}168} candidate-level scores on training prompts and \obs{8{,}392}
+candidate-level official-evaluator scores on held-out prompts. Two design points matter. The metric
+depends only on the ordering \emph{within} a prompt, so the objective should be a within-group
+ranking loss rather than a regression onto absolute scores, which spends capacity on the
+across-prompt difficulty that $\rho$ divides out. And the identical probe should be run on the raw
+VAE latent as a matched control, since the analyses here predict it stays inert.
+
+\tbd{direct hidden-state-to-score probe: held-out $\rho$ against the decoded-CLIP bar of
+\obs{30.18\%}, with latent-probe and random-label controls.}
+
+\section{Threats to validity}
+\label{sec:threats}
+
+\begin{itemize}
+  \item \textbf{Round-trip latents.} In \Cref{sec:cafe} the latent $z$ is obtained by VAE-encoding a
+    decoded PNG. It is a round trip, not the sampler's terminal latent.
+  \item \textbf{Teacher, not student.} All candidates are 8-step CFG-7 samples from the frozen
+    teacher, not from a fast distilled student.
+  \item \textbf{Different denominators.} \Cref{tab:denominators} applies throughout; \obs{7.38\%} and
+    \obs{42.59\%} are fractions of different quantities measured by different evaluators on different
+    prompts, and must not be placed in one ranking.
+  \item \textbf{Reference ambiguity.} \Cref{sec:refsim} scores against one photograph among many
+    valid ones, so its correlations are a lower bound on what a reference-based signal could achieve
+    with multiple references.
+  \item \textbf{One backbone, one resolution.} Everything is SD3.5-M at $512^2$.
+  \item \textbf{Layer and noise level not swept.} The \texttt{repa} arm uses block 8 at $\sigma=0.5$
+    because that is the layer the project's alignment runs used. Neither choice was tuned, so the
+    \obs{38.75\%} is not an optimum.
+  \item \textbf{Abstention untested.} No arm in this report declines to answer, so the reported
+    unconditional recovery is the conditional recovery times a constant coverage factor, by
+    construction rather than by measurement.
+\end{itemize}
+
+\section{Reproduction}
+
+\begin{table}[h]
+\centering
+\small
+\begin{tabularx}{\textwidth}{@{}lX@{}}
+\toprule
+Component & Path \\
+\midrule
+C1/C2 edit engine, reorder null & \texttt{phaseN/c1\_edits.py} \\
+\method probe (all arms) & \texttt{phaseN/probe\_cafe.py} \\
+Paired bootstrap contrasts & \texttt{phaseN/paired\_contrasts.py} \\
+Ordering, per-$\sigma$, variance decomposition & \texttt{phaseN/analyze\_cafe.py} \\
+COCO reference pool & \texttt{phaseN/build\_coco\_pool.py} \\
+Reference similarity, PCA, CKA, SVCCA, RSA & \texttt{phaseN/ref\_similarity.py} \\
+CKA / debiased CKA / SVCCA with self-tests & \texttt{phaseN/repsim\_metrics.py} \\
+Projector training & \texttt{phaseN/train\_repa\_projector.py} \\
+\midrule
+\method results & \texttt{phaseN/cafe\_probe\_105300/} \\
+Reorder null & \texttt{phaseN/reorder\_null\_105323/} \\
+Reference similarity (+\,\texttt{repa}) & \texttt{phaseN/refsim\_repa\_106517/} \\
+Projector & \texttt{phaseN/repa\_projector\_106522/} \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+Running \texttt{python3 phaseN/repsim\_metrics.py} executes the CKA and SVCCA self-tests quoted in
+\Cref{sec:repmetrics}.
+
+\end{document}

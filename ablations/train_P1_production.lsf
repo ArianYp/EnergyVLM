@@ -1,0 +1,105 @@
+#!/usr/bin/env bash
+#BSUB -J sd-prod-ema9999-detach-lr100
+#BSUB -G s10396
+#BSUB -q training-parallel
+#BSUB -n 16
+#BSUB -W 168:00
+#BSUB -R "span[hosts=1]"
+#BSUB -R "select[mem>64000 && hname!='farm-gpu0504']"
+#BSUB -R "rusage[mem=64000]"
+#BSUB -M 64000
+#BSUB -gpu "num=4:mode=exclusive_process:gmodel=NVIDIAH200"
+#BSUB -cwd /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM
+#BSUB -o /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-prod-ema9999-detach-lr100-%J.out
+#BSUB -e /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-prod-ema9999-detach-lr100-%J.err
+
+# ============================================================================
+# PRODUCTION CANDIDATE P1 — long-horizon (50k) confirmation of the full fix stack
+# Stacks the three proven fixes vs. the original diverging v5:
+#   1. --ema_decay 0.9999        : the stable slow-EMA regime (E8 proved 10x
+#                                  slower kills the divergence while KEEPING the
+#                                  EMA self-distillation method; teacher still
+#                                  tracks the student). Was 0.999 (diverged).
+#   2. --reward_detach_projector : projector trained by L_align only; reward
+#                                  grad reaches the student via x̂₀ but NOT the
+#                                  projector params (prevents collapse-toward-
+#                                  text corruption). Proven mechanically.
+#   3. --lambda_reward 100       : strong reward, now that training is stable it
+#                                  can actually do work — AND this is exactly
+#                                  where projector corruption was visible, so it
+#                                  validates fix #2 under stress. Was 1.0.
+#
+# PRIMARY CHECKS (W&B project sd-self-distill-ablation):
+#   - train/d_mean, train/xhat_norm_mean : MUST stay flat (~330 scale) to ~50k,
+#       confirming 0.9999 holds long-horizon (10k runs were flat but E8 had one
+#       transient grad blip at 8k — this run removes that doubt).
+#   - train/align_cos : MUST stay healthy (~0.6-0.8), NOT suppressed to ~0.17
+#       like the corrupted lambda_reward=100 run — confirms the projector fix.
+#   - train/projector_grad_norm_pre_clip : should sit at the L_align-only level
+#       (~1-5), not the ~228 spike seen when the reward corrupted the projector.
+# REWARD-OVER-OPTIMIZATION WATCH (the one NEW risk at lambda_reward=100):
+#   - train/s_mean climbing toward ~1.0 + samples/student turning over-stylized
+#       / "CLIP-pleasing" would mean reward over-optimization (a SEPARATE issue
+#       from the divergence; there is no KL-to-base anchor). If so, lower
+#       lambda_reward. Watch samples/student vs samples/teacher_ema.
+# ============================================================================
+
+set -euo pipefail
+
+export HF_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/huggingface
+export TORCH_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/torch
+export XDG_CACHE_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/xdg
+export NCCL_NVLS_ENABLE=0
+source ~/.secrets/hf_token
+mkdir -p "$HF_HOME" "$TORCH_HOME" "$XDG_CACHE_HOME" logs
+
+echo "[`date`] PRODUCTION P1: ema_decay=0.9999 + reward_detach_projector + lambda_reward=100, 50k steps"
+echo "Host: $(hostname) | LSF: ${LSB_JOBID:-unknown}"
+nvidia-smi --query-gpu=index,name,memory.total --format=csv
+
+RUN_NAME="prod_P1_ema9999_detach_lr100_$(date +%Y%m%d_%H%M%S)_${LSB_JOBID:-local}"
+
+torchrun \
+  --standalone \
+  --nproc-per-node=4 \
+  train_self_distill.py \
+  --output_dir "checkpoints/production/${RUN_NAME}" \
+  --coco_split train2017 \
+  --feature_encoder clip \
+  --clip_id openai/clip-vit-large-patch14 \
+  --num_steps 50000 \
+  --num_warmup_steps 500 \
+  --lr 1e-5 \
+  --projector_lr 1e-4 \
+  --weight_decay 0.0 \
+  --grad_clip 1.0 \
+  --projector_grad_clip 5.0 \
+  --N_traj 4 \
+  --K_steps 8 \
+  --scoring_window 0.4,0.9 \
+  --delta_min 1 --delta_max 3 \
+  --tau_N 1.0 --tau_K 1.0 \
+  --score_norm zscore \
+  --ema_decay 0.999 \
+  --distance pseudo_huber \
+  --guidance_scale 7.0 \
+  --lambda_align 1.0 \
+  --lambda_reward 1.0 \
+  --lambda_fm 0.0 \
+  --gradient_checkpointing \
+  --save_every 5000 \
+  --sample_every 1000 \
+  --probe_every 0 \
+  --log_every 10 \
+  --save_train_images_every 2000 \
+  --log_image_samples \
+  --sample_inference_steps 28 \
+  --wandb_project sd-self-distill-ablation \
+  --wandb_run_name "${RUN_NAME}" \
+  --ema_decay 0.9999 \
+  --lambda_reward 100.0 \
+  --reward_detach_projector
+
+if command -v my-job-stats >/dev/null 2>&1; then
+  my-job-stats -a -n -s
+fi

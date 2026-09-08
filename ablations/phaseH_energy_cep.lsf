@@ -1,0 +1,43 @@
+#!/usr/bin/env bash
+#BSUB -J sd-phaseH-energy-cep
+#BSUB -G s10396
+#BSUB -U conf_july_2026
+#BSUB -q training-parallel
+#BSUB -n 8
+#BSUB -W 12:00
+#BSUB -R "span[hosts=1]"
+#BSUB -R "select[mem>128000 && hname!='farm-gpu0504']"
+#BSUB -R "rusage[mem=128000]"
+#BSUB -M 128000
+#BSUB -gpu "num=1:mode=exclusive_process:gmodel=NVIDIAH200"
+#BSUB -cwd /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM
+#BSUB -o /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-phaseH-energy-cep-%J.out
+#BSUB -e /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-phaseH-energy-cep-%J.err
+# PHASE H V1 — noise-space ENERGY model, contrastive (CEP).
+#
+# For a DETERMINISTIC 4-step student, E_T(z_T) = -r(f(z_T)) EXACTLY. So gate 2's null was not an
+# ill-posed target -- it was a well-posed hard function fitted with ridge/GBT on avg-pools of raw z.
+# V1 changes the two things that were actually wrong:
+#   FEATURES  one step of the STUDENT itself: x0_hat = z - sigma0 * v_theta(z, t0, c), which is the
+#             student's own opinion about where this noise is going and already encodes the prompt.
+#   OBJECTIVE within-group softmax matching, KL(softmax(r/a) || softmax(-E/a)), not pointwise
+#             regression. Cancels the per-prompt offset -- the thing that makes pointwise fitting
+#             hopeless, since VQAScore is dominated by prompt difficulty. No text conditioning
+#             needed, because the offset it would explain is exactly what is cancelled.
+#
+# Cross-fitted (GroupKFold by prompt): the Phase-H pool IS our val set, so every energy is
+# out-of-fold and the exported selection can be scored by the official evaluators without leakage.
+# Success metric fixed in advance: fraction of the +0.0485 oracle gate that argmin-E recovers.
+set -euo pipefail
+export PATH="/software/cellgen/team361/ha11/envs/nichejepa/bin:$PATH"
+export HF_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/huggingface
+export TORCH_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/torch
+export XDG_CACHE_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/xdg
+export TOKENIZERS_PARALLELISM=false
+source ~/.secrets/hf_token
+echo "[`date`] Phase H V1 energy (CEP) | Host: $(hostname)"
+python3 phaseH/energy_cep.py --reward vqa
+# CLIPScore is cached for the same candidates: a second reward is a free check that any signal
+# is about the channel and not about one scorer's idiosyncrasies.
+python3 phaseH/energy_cep.py --reward clip
+echo "[`date`] DONE"

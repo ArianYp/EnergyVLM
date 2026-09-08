@@ -1,0 +1,7 @@
+W_B2_118k-avglast5_s0 131862
+W_B2_118k-avglast5_s1 131863
+W_B2_118k-avglast5_s2 131864
+W_CD_dinop_hard_118k-avglast5_s0 131865
+W_CD_dinop_hard_118k-avglast5_s1 131866
+W_CD_dinop_hard_118k-avglast5_s2 131867
+W_B4_118k-avglast5_s0 131868

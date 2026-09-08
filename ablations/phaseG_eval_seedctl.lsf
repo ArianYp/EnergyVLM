@@ -1,0 +1,52 @@
+#!/usr/bin/env bash
+#BSUB -J sd-phaseG-eval-seedctl
+#BSUB -G s10396
+#BSUB -U conf_july_2026
+#BSUB -q training-parallel
+#BSUB -n 16
+#BSUB -W 24:00
+#BSUB -R "span[hosts=1]"
+#BSUB -R "select[mem>256000 && hname!='farm-gpu0504']"
+#BSUB -R "rusage[mem=256000]"
+#BSUB -M 256000
+#BSUB -gpu "num=4:mode=exclusive_process:gmodel=NVIDIAH200"
+#BSUB -cwd /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM
+#BSUB -o /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-phaseG-eval-seedctl-%J.out
+#BSUB -e /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-phaseG-eval-seedctl-%J.err
+# THE SEED CONTROL VERDICT. GrndS1 - Grnd is the analogue of C1's B2'-B2 = +0.0007, but measured
+# IN the degraded regime (arms at 0.355-0.404 vs an M1 baseline of 0.4948) where every channel-3
+# claim actually lives. Four numbers depend on it:
+#   Gant-Gorc +0.0043 "null" | Gmed-Gorc +0.0328 | Gmed-Gant +0.0285 | Gmed-Grnd +0.0106
+# If |GrndS1-Grnd| is comparable to +0.0106, the first and last are not interpretable.
+# Also runs the pre-registered gates (fidelity, diversity) that channel 3 has never had.
+set -euo pipefail
+export PATH="/software/cellgen/team361/ha11/envs/nichejepa/bin:$PATH"
+export HF_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/huggingface
+export TORCH_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/torch
+export XDG_CACHE_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/xdg
+export TOKENIZERS_PARALLELISM=false
+export NCCL_NVLS_ENABLE=0
+source ~/.secrets/hf_token
+echo "[`date`] Phase G seed control eval | Host: $(hostname)"
+CK=$(ls -dt checkpoints/phaseG/phaseG_randomS1_*/checkpoint_final.pt | head -1)
+echo "=== GrndS1 <- $CK ==="
+torchrun --standalone --nproc-per-node=4 exp0/phaseA_generate.py \
+  --out_root phaseC/eval --label GrndS1 --checkpoint "$CK" --cfg 1 \
+  --split val --steps_list 4 --per_category 1000
+python3 phaseC/test_3in1_identity.py
+for CAT in color shape texture spatial 3d_spatial numeracy non_spatial complex; do
+  D=phaseC/eval_scores/GrndS1_s4_${CAT}
+  [ -f "$D/scores.json" ] && continue
+  python3 phaseC/compbench_eval.py stage --images phaseC/eval/images/GrndS1 \
+    --prompts phaseC/eval/prompts.json --steps 4 --categories ${CAT} --out "$D"
+  python3 phaseC/compbench_eval.py run     --dir "$D" --skip_done
+  python3 phaseC/compbench_eval.py collect --dir "$D" --routing_split val
+done
+echo "=== SEED CONTROL: GrndS1 - Grnd (should be ~0 if the arm contrasts are interpretable) ==="
+python3 phaseC/eval_analyze.py --scores_dir phaseC/eval_scores --step 4 --models GrndS1,Grnd,M1
+echo "=== the arm contrasts, for comparison ==="
+for pair in Gant,Gorc Gmed,Gorc Gmed,Grnd; do
+  python3 phaseC/eval_analyze.py --scores_dir phaseC/eval_scores --step 4 --models ${pair},M1 2>&1 | grep PRIMARY-1
+done
+# (the pre-registered gates need their own 4-seed / COCO pools -- see phaseG_gates.lsf)
+echo "[`date`] DONE"

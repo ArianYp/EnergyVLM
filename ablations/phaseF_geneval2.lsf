@@ -1,0 +1,71 @@
+#!/usr/bin/env bash
+#BSUB -J sd-phaseF-geneval2
+#BSUB -G s10396
+#BSUB -q training-parallel
+#BSUB -n 16
+#BSUB -W 24:00
+#BSUB -R "span[hosts=1]"
+#BSUB -R "select[mem>256000 && hname!='farm-gpu0504']"
+#BSUB -R "rusage[mem=256000]"
+#BSUB -M 256000
+#BSUB -gpu "num=4:mode=exclusive_process:gmodel=NVIDIAH200"
+#BSUB -cwd /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM
+#BSUB -o /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-phaseF-geneval2-%J.out
+#BSUB -e /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-phaseF-geneval2-%J.err
+
+# Phase F follow-up — GenEval2 (Soft-TIFA-gm, Qwen3-VL judge) on the matched RTDMD pair.
+# CompBench showed the reward stage buys attribute binding (+0.031 color/shape) but LOSES
+# counting (numeracy -0.034 sig). GenEval2 is counting/position-heavy AND is RTDMD's own
+# published weak spot, so it is the sharpest independent test of that counting hypothesis.
+# Same 800 held-out GenEval2 prompts, same seeds, their native 1024px / 4 NFE / CPS sampler.
+set -euo pipefail
+export PATH="/software/cellgen/team361/ha11/envs/nichejepa/bin:$PATH"
+export HF_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/huggingface
+export TORCH_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/torch
+export XDG_CACHE_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/xdg
+export TOKENIZERS_PARALLELISM=false
+export NCCL_NVLS_ENABLE=0
+source ~/.secrets/hf_token
+echo "[`date`] Phase F GenEval2 | Host: $(hostname)"
+
+python3 phaseC/build_eval_pool.py geneval2 --out phaseC/geneval2/prompts.json
+
+echo "=== STAGE 1: generate both variants on the 800 GenEval2 prompts ==="
+for V in cold_start rtdmd; do
+  torchrun --standalone --nproc-per-node=4 phaseF/generate_rtdmd.py \
+    --variant "$V" --out_root phaseC/geneval2 --prompts_json phaseC/geneval2/prompts.json
+done
+
+echo "=== STAGE 2: official GenEval2 Soft-TIFA-gm scoring (Qwen3-VL judge) ==="
+for MODEL in RTDMDcs RTDMD; do
+  D=phaseC/geneval2_scores/${MODEL}_s4
+  [ -f "$D/scores.json" ] && { echo "skip $D"; continue; }
+  python3 phaseC/geneval2_eval.py stage --images phaseC/geneval2/images/${MODEL} \
+    --pool phaseC/geneval2/prompts.json --steps 4 --out "$D"
+  python3 phaseC/geneval2_eval.py run     --dir "$D" --method soft_tifa_gm --skip_done
+  python3 phaseC/geneval2_eval.py collect --dir "$D" --method soft_tifa_gm
+done
+
+echo "=== STAGE 3: verdict (CompBench + GenEval2 together) ==="
+python3 phaseC/eval_analyze.py --scores_dir phaseC/eval_scores --step 4 \
+  --models RTDMD,RTDMDcs --vqa phaseF/eval/scores \
+  --geneval2_dir phaseC/geneval2_scores \
+  --title "Phase F (RTDMD reward-stage effect)" \
+  --fidelity /nonexistent --diversity /nonexistent \
+  --out phaseF/verdict_rtdmd_reward_effect.md
+
+echo "=== per-skill breakdown (is the loss specifically COUNTING?) ==="
+python3 - <<'PY'
+import json
+from pathlib import Path
+for m in ("RTDMDcs", "RTDMD"):
+    f = Path(f"phaseC/geneval2_scores/{m}_s4/scores.json")
+    if not f.exists():
+        print(f"{m}: no scores"); continue
+    d = json.loads(f.read_text())
+    print(f"{m}: overall={d.get('overall')}")
+    for k, v in (d.get("per_skill") or {}).items():
+        print(f"   {k:12s} {v:.4f}")
+PY
+cat phaseF/verdict_rtdmd_reward_effect.md
+echo "[`date`] DONE"

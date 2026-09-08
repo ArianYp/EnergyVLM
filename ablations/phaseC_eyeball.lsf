@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+#BSUB -J sd-phaseC-eyeball
+#BSUB -G s10396
+#BSUB -q training-parallel
+#BSUB -n 4
+#BSUB -W 2:00
+#BSUB -R "span[hosts=1]"
+#BSUB -R "select[mem>64000 && hname!='farm-gpu0504']"
+#BSUB -R "rusage[mem=64000]"
+#BSUB -M 64000
+#BSUB -gpu "num=1:mode=exclusive_process:gmodel=NVIDIAH200"
+#BSUB -cwd /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM
+#BSUB -o /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-phaseC-eyeball-%J.out
+#BSUB -e /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-phaseC-eyeball-%J.err
+
+# Early viability eyeball: is 6000 steps from base SD3.5-M enough for a functioning
+# few-step student? Sample B2 & B4 @ step-2000 (1/3 budget) at 1/2/4/8/28 steps on
+# 16 diverse prompts (per_category 2 -> same indices as phaseA M1/base for reference).
+set -euo pipefail
+export PATH="/software/cellgen/team361/ha11/envs/nichejepa/bin:$PATH"
+export HF_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/huggingface
+export TORCH_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/torch
+export XDG_CACHE_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/xdg
+source ~/.secrets/hf_token
+echo "[`date`] eyeball B2/B4 step2000 | Host: $(hostname)"
+python3 exp0/phaseA_generate.py --out_root phaseC/eyeball --label B2_s2000 \
+  --checkpoint "checkpoints/phaseC/phaseC_B2_20260724_230657_85487/checkpoint_step2000.pt" --cfg 1 --steps_list 1,2,4,8,28 --per_category 2
+python3 exp0/phaseA_generate.py --out_root phaseC/eyeball --label B4_s2000 \
+  --checkpoint "checkpoints/phaseC/phaseC_B4_20260724_230700_85488/checkpoint_step2000.pt" --cfg 1 --steps_list 1,2,4,8,28 --per_category 2
+echo "[`date`] DONE -> phaseC/eyeball/images/{B2_s2000,B4_s2000}"

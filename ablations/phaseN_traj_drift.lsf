@@ -1,0 +1,45 @@
+#!/usr/bin/env bash
+#BSUB -J sd-traj-drift
+#BSUB -G s10396
+#BSUB -q training-parallel
+#BSUB -n 4
+#BSUB -W 4:00
+#BSUB -R "span[hosts=1]"
+#BSUB -R "select[mem>128000 && hname!='farm-gpu0504']"
+#BSUB -R "rusage[mem=128000]"
+#BSUB -M 128000
+#BSUB -gpu "num=1:mode=exclusive_process:gmem=78G"
+#BSUB -cwd /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM
+#BSUB -o /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-traj-drift-%J.out
+#BSUB -e /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-traj-drift-%J.err
+#
+# Measure the mechanism that `cfg_mode=branch_onpolicy` is supposed to fix, BEFORE spending 12
+# training runs on it. The claim in train_pilot.py:517 is that CFG amplifies off-trajectory
+# displacement w-fold. The discriminating statistic is cos(delta_u, delta_c); per-branch norms
+# cannot distinguish common-mode cancellation from independent compounding.
+#
+# Two checkpoints, both seed 0, same budget: the standard off-policy student and the one existing
+# on-policy student. If the mechanism is real, the on-policy student should show smaller trajectory
+# drift -- that is the internal positive control for the whole idea.
+set -euo pipefail
+export PATH="/software/cellgen/team361/ha11/envs/nichejepa/bin:$PATH"
+export HF_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/huggingface
+export TORCH_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/torch
+export XDG_CACHE_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/xdg
+export TOKENIZERS_PARALLELISM=false
+export PYTHONPATH="/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM:${PYTHONPATH:-}"
+source ~/.secrets/hf_token
+
+CKPTS="offpolicy=checkpoints/phaseN/phaseN_B2_a1.0_t1.0_s0_108317/checkpoint_final.pt"
+CKPTS="$CKPTS onpolicy=checkpoints/phaseN/phaseN_B2_a1.0_t1.0_s0_110746/checkpoint_final.pt"
+
+for item in $CKPTS; do
+  tag="${item%%=*}"; ck="${item#*=}"
+  echo "=================== $tag"
+  # every live hyperparameter passed explicitly: parser defaults have drifted before (run 91058)
+  python3 phaseN/diag_traj_drift.py \
+    --ckpt "$ck" --K 4 --cfg 7.0 --student_cfg 7.0 --ws "1,3,5,7" \
+    --n_prompts 8 --n_seeds 4 \
+    --out "phaseN/traj_drift_${tag}.json"
+done
+echo "[traj-drift] done"

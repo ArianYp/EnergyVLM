@@ -1,0 +1,111 @@
+#!/usr/bin/env bash
+#BSUB -J sd-phaseJ-fusion
+#BSUB -G s10396
+#BSUB -q training-parallel
+#BSUB -n 8
+#BSUB -W 24:00
+#BSUB -R "span[hosts=1]"
+#BSUB -R "select[mem>64000 && hname!='farm-gpu0504']"
+#BSUB -R "rusage[mem=64000]"
+#BSUB -M 64000
+#BSUB -gpu "num=1:mode=exclusive_process"
+#BSUB -cwd /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM
+#BSUB -o /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-phaseJ-fusion-%J.out
+#BSUB -e /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-phaseJ-fusion-%J.err
+
+set -euo pipefail
+export PATH="/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/venv_mmdit/bin:/software/cellgen/team361/ha11/envs/nichejepa/bin:$PATH"
+export HF_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/huggingface
+export TORCH_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/torch
+export XDG_CACHE_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/xdg
+export TOKENIZERS_PARALLELISM=false
+export WANDB_MODE=online
+source ~/.secrets/hf_token
+
+: "${PHASEJ_FUSION_ACTION:?submit with PHASEJ_FUSION_ACTION=smoke|extract|aligned|blank}"
+: "${PHASEJ_GROUP:?submit with a unique PHASEJ_GROUP}"
+JOB=${LSB_JOBID:-local}
+
+echo "[$(date --iso-8601=seconds)] Phase J fusion action=$PHASEJ_FUSION_ACTION job=$JOB"
+nvidia-smi --query-gpu=index,name,memory.total --format=csv
+python phaseJ/validate_lucidrains_reference.py --output "phaseJ/lucidrains_validation_job${JOB}.json"
+python phaseJ/test_fusion_ranker.py
+
+if [[ "$PHASEJ_FUSION_ACTION" == smoke ]]; then
+  CACHE="phaseJ/fusion_cache/smoke_${JOB}"
+  OUT="phaseJ/runs/phaseJ_fusion_smoke_${JOB}"
+  python phaseJ/fusion_ranker.py extract \
+    --output_dir "$CACHE" --limit_train 16 --limit_external 16 \
+    --wandb_group "$PHASEJ_GROUP" --wandb_run_name "phaseJ_fusion_extract_smoke_${JOB}"
+  python phaseJ/fusion_ranker.py train \
+    --token_dir "$CACHE" --output_dir "$OUT" \
+    --model_label mmdit_fusion --condition aligned \
+    --epochs 2 --patience 2 --seeds 13 --batch_size 2 \
+    --wandb_group "$PHASEJ_GROUP" --wandb_run_name "phaseJ_fusion_train_smoke_${JOB}"
+  test -s "$OUT/ranking_results.json"
+  test -s "$OUT/fusion_rankers.pt"
+  echo "Fusion smoke complete: $OUT"
+  exit 0
+fi
+
+if [[ "$PHASEJ_FUSION_ACTION" == extract ]]; then
+  CACHE="phaseJ/fusion_cache/full_${JOB}"
+  python phaseJ/fusion_ranker.py extract \
+    --output_dir "$CACHE" \
+    --wandb_group "$PHASEJ_GROUP" --wandb_run_name "phaseJ_fusion_extract_${JOB}"
+  test -s "$CACHE/train_tokens.pt"
+  test -s "$CACHE/external_tokens.pt"
+  echo "Fusion tokens complete: $CACHE"
+  exit 0
+fi
+
+: "${PHASEJ_FUSION_TOKEN_JOB:?aligned/blank requires completed extract job id}"
+TOKEN_DIR="phaseJ/fusion_cache/full_${PHASEJ_FUSION_TOKEN_JOB}"
+case "$PHASEJ_FUSION_ACTION" in
+  aligned)
+    CONDITION=aligned
+    MODEL_LABEL=mmdit_fusion
+    ;;
+  blank)
+    CONDITION=blank
+    MODEL_LABEL=mmdit_fusion_blank
+    ;;
+  *)
+    echo "Invalid PHASEJ_FUSION_ACTION=$PHASEJ_FUSION_ACTION" >&2
+    exit 2
+    ;;
+esac
+
+OUT="phaseJ/runs/phaseJ_fusion_${PHASEJ_FUSION_ACTION}_${JOB}"
+python phaseJ/fusion_ranker.py train \
+  --token_dir "$TOKEN_DIR" --output_dir "$OUT" \
+  --model_label "$MODEL_LABEL" --condition "$CONDITION" \
+  --wandb_group "$PHASEJ_GROUP" \
+  --wandb_run_name "phaseJ_fusion_${PHASEJ_FUSION_ACTION}_${JOB}"
+
+test -s "$OUT/ranking_results.json"
+test -s "$OUT/fusion_rankers.pt"
+echo "=== Official held-out CompBench selection evaluation ==="
+for CAT in color shape texture spatial 3d_spatial numeracy non_spatial complex; do
+  D="$OUT/compbench_scores/${MODEL_LABEL}_s4_${CAT}"
+  python phaseC/compbench_eval.py stage \
+    --images "$OUT/selection/images/${MODEL_LABEL}" \
+    --prompts "$OUT/selection/prompts.json" --steps 4 --categories "$CAT" --out "$D"
+  python phaseC/compbench_eval.py run --dir "$D" --skip_done
+  python phaseC/compbench_eval.py collect --dir "$D" --routing_split val
+  ln -s "$(realpath "phaseH/scores/random_s4_${CAT}")" "$OUT/compbench_scores/random_s4_${CAT}"
+  ln -s "$(realpath "phaseH/scores/oracle_s4_${CAT}")" "$OUT/compbench_scores/oracle_s4_${CAT}"
+done
+
+python phaseC/eval_analyze.py --scores_dir "$OUT/compbench_scores" --step 4 \
+  --models "${MODEL_LABEL},random,oracle" --title "Phase J fusion ${PHASEJ_FUSION_ACTION}" \
+  --geneval2_dir "$OUT/not_run" --fidelity "$OUT/not_run.json" --diversity "$OUT/not_run.json" \
+  --out "$OUT/official_vs_random.md"
+python phaseJ/log_official_wandb.py --run_dir "$OUT" --model_label "$MODEL_LABEL" \
+  --project sd-mmdit-ranker-v1 --group "$PHASEJ_GROUP" \
+  --run_name "phaseJ_fusion_eval_${PHASEJ_FUSION_ACTION}_${JOB}"
+
+echo "[$(date --iso-8601=seconds)] Phase J fusion complete: $OUT"
+if command -v my-job-stats >/dev/null 2>&1; then
+  my-job-stats -a -n -s
+fi

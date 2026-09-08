@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+#BSUB -J sd-phaseT-reward
+#BSUB -G s10396
+#BSUB -q training-parallel
+#BSUB -W 8:00
+#BSUB -n 4
+#BSUB -R "span[hosts=1]"
+#BSUB -R "select[mem>128000 && hname!='farm-gpu0504']"
+#BSUB -R "rusage[mem=128000]"
+#BSUB -M 128000
+#BSUB -gpu "num=1:mode=exclusive_process:gmem=78G"
+#BSUB -cwd /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM
+#BSUB -o /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-phaseT-reward-%J.out
+#BSUB -e /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-phaseT-reward-%J.err
+#
+# Human-preference metrics on ALREADY-GENERATED eval images, so these numbers sit on exactly the
+# images behind our CompBench/GenEval2 results. Adds the metric family the comparison papers report
+# (PickScore / HPSv2.1 / ImageReward / Aesthetic / CLIPScore) to our FID / CMMD / precision / recall.
+set -euo pipefail
+export PATH="/software/cellgen/team361/ha11/envs/nichejepa/bin:$PATH"
+export HF_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/huggingface
+export TORCH_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/torch
+export XDG_CACHE_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/xdg
+export TOKENIZERS_PARALLELISM=false
+export PYTHONPATH="/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM:${PYTHONPATH:-}"
+source ~/.secrets/hf_token
+
+: "${EVAL_DIR:?set EVAL_DIR}"
+python3 phaseT/reward_metrics.py --eval_dir "$EVAL_DIR" --steps 4 \
+  --metrics pickscore,clipscore,aesthetic,hpsv2,imagereward

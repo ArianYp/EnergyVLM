@@ -1,0 +1,104 @@
+#!/usr/bin/env bash
+#BSUB -J sd-eval10
+#BSUB -G s10396
+#BSUB -q training-parallel
+#BSUB -n 16
+#BSUB -W 16:00
+#BSUB -R "span[hosts=1]"
+#BSUB -R "select[mem>128000]"
+#BSUB -R "rusage[mem=128000]"
+#BSUB -M 128000
+#BSUB -gpu "num=4:mode=exclusive_process:gmem=40G"
+#BSUB -cwd /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM
+#BSUB -o /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-eval10-%J.out
+#BSUB -e /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-eval10-%J.err
+#
+# OFFICIAL-PROTOCOL alignment eval for the headline table: T2I-CompBench with 10 images per prompt
+# (what the official scripts assume; the sweeps used 1) over the same 2,398 val prompts, plus
+# GenEval2 (1 image per prompt, its evaluator's contract). Candidate 0 of every prompt is the very
+# image the 1-image evals scored (same seed), so this is a strict superset. Students at cfg 1.
+#
+#   bsub -env "all,EVAL_LABEL=V_CD_dinop_hard_s0,EVAL_CKPT=checkpoints/...pt,EVAL_CFG=1.0" < ablations/phaseN_eval_official10.lsf
+set -euo pipefail
+export PATH="/software/cellgen/team361/ha11/envs/nichejepa/bin:$PATH"
+export HF_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/huggingface
+export TORCH_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/torch
+export XDG_CACHE_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/xdg
+export TOKENIZERS_PARALLELISM=false
+export NCCL_NVLS_ENABLE=0
+source ~/.secrets/hf_token
+: "${EVAL_LABEL:?missing model label}"
+: "${EVAL_CKPT:?missing checkpoint path, or the string 'base'}"
+: "${EVAL_CFG:?set EVAL_CFG explicitly: 1.0 for students, 7.0 for base}"
+POOL=${EVAL_POOL:-phaseFP/eval_pool_101203}
+STEPS=${EVAL_STEPS:-4}
+NIMG=${EVAL_NIMG:-10}
+JOB=${LSB_JOBID:-local}
+ROOT="phaseN/eval10_${EVAL_LABEL}_${JOB}"
+if [[ -e "$ROOT" ]]; then echo "Refusing to overwrite $ROOT" >&2; exit 2; fi
+test -s "$POOL/manifest.json"
+mkdir -p "$ROOT"; cp "$POOL/manifest.json" "$ROOT/pool_manifest.json"
+if [[ "$EVAL_CKPT" != "base" ]]; then
+  python3 - <<PY
+import torch; ck = torch.load("$EVAL_CKPT", map_location="cpu", weights_only=False)
+assert "model" in ck and ck.get("step"), "incomplete checkpoint"; print("checkpoint step", ck["step"])
+PY
+fi
+NAMES=$(python3 -c "print(','.join(f'cand{j}.png' for j in range($NIMG)))")
+echo "[$(date --iso-8601=seconds)] eval10 | label=$EVAL_LABEL ckpt=$EVAL_CKPT steps=$STEPS cfg=$EVAL_CFG images/prompt=$NIMG"
+
+echo "[$(date --iso-8601=seconds)] STAGE generation"
+torchrun --standalone --nproc-per-node=4 exp0/phaseA_generate.py \
+  --out_root "$ROOT/compbench" --label "$EVAL_LABEL" --checkpoint "$EVAL_CKPT" \
+  --cfg "$EVAL_CFG" --prompts_json "$POOL/compbench_prompts.json" --steps_list "$STEPS" --n_seeds "$NIMG"
+torchrun --standalone --nproc-per-node=4 exp0/phaseA_generate.py \
+  --out_root "$ROOT/geneval2" --label "$EVAL_LABEL" --checkpoint "$EVAL_CKPT" \
+  --cfg "$EVAL_CFG" --prompts_json "$POOL/geneval2_prompts.json" --steps_list "$STEPS"
+
+echo "[$(date --iso-8601=seconds)] STAGE compbench scoring ($NIMG images/prompt)"
+for CAT in color shape texture spatial 3d_spatial numeracy non_spatial complex; do
+  D="$ROOT/compbench_scores/${EVAL_LABEL}_s${STEPS}_${CAT}"
+  python3 phaseC/compbench_eval.py stage --images "$ROOT/compbench/images/${EVAL_LABEL}" \
+    --prompts "$POOL/compbench_prompts.json" --steps "$STEPS" --categories "$CAT" \
+    --image_name "$NAMES" --out "$D"
+  python3 phaseC/compbench_eval.py run --dir "$D" --skip_done
+  python3 phaseC/compbench_eval.py collect --dir "$D" --routing_split val
+done
+
+echo "[$(date --iso-8601=seconds)] STAGE geneval2 scoring"
+D="$ROOT/geneval2_scores/${EVAL_LABEL}_s${STEPS}"
+python3 phaseC/geneval2_eval.py stage --images "$ROOT/geneval2/images/${EVAL_LABEL}" \
+  --pool "$POOL/geneval2_prompts.json" --steps "$STEPS" --out "$D"
+python3 phaseC/geneval2_eval.py run --dir "$D" --method soft_tifa_gm --skip_done
+python3 phaseC/geneval2_eval.py collect --dir "$D" --method soft_tifa_gm
+for CAT in color shape texture spatial 3d_spatial numeracy non_spatial complex; do
+  test -s "$ROOT/compbench_scores/${EVAL_LABEL}_s${STEPS}_${CAT}/scores.json"
+done
+test -s "$D/scores.json"
+
+python3 - <<PY
+import json, glob, os, hashlib, subprocess, importlib
+def sha(p):
+    h=hashlib.sha256()
+    with open(p,"rb") as f:
+        for c in iter(lambda: f.read(1<<24), b""): h.update(c)
+    return h.hexdigest()
+def rev(d):
+    try: return subprocess.run(["git","-C",d,"rev-parse","HEAD"],capture_output=True,text=True).stdout.strip()
+    except Exception: return None
+pins={"evaluators":{d:rev(d) for d in ("T2I-CompBench","GenEval2","t2v_metrics")}, "repo_commit":rev("."),
+      "packages":{m:getattr(importlib.import_module(m),"__version__",None) for m in ("torch","diffusers","transformers")},
+      "pool_manifest":json.load(open("$ROOT/pool_manifest.json")),
+      "checkpoint_sha256":(sha("$EVAL_CKPT") if "$EVAL_CKPT"!="base" else "base")}
+subprocess.run("pip freeze > $ROOT/pip_freeze.txt", shell=True)
+out={"label":"$EVAL_LABEL","ckpt":"$EVAL_CKPT","steps":$STEPS,"cfg":float("$EVAL_CFG"),
+     "protocol":{"compbench_images_per_prompt":$NIMG,"geneval2_images_per_prompt":1},"compbench":{},"pins":pins}
+for p in sorted(glob.glob("$ROOT/compbench_scores/*/scores.json")):
+    cat=os.path.basename(os.path.dirname(p)).split("_s${STEPS}_")[-1]
+    out["compbench"][cat]=json.load(open(p))["mean"]
+out["compbench_mean"]=sum(out["compbench"].values())/len(out["compbench"])
+out["geneval2"]=json.load(open("$D/scores.json")).get("mean")
+json.dump(out, open("$ROOT/alignment.json","w"), indent=2)
+print(json.dumps({k:v for k,v in out.items() if k!="pins"}, indent=2))
+PY
+echo "[$(date --iso-8601=seconds)] eval10 complete: $ROOT"

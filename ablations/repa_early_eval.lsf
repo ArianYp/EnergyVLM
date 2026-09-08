@@ -1,0 +1,57 @@
+#!/usr/bin/env bash
+#BSUB -J sd-repa-early
+#BSUB -G s10396
+#BSUB -U conf_july_2026
+#BSUB -q training-parallel
+#BSUB -n 16
+#BSUB -W 12:00
+#BSUB -R "span[hosts=1]"
+#BSUB -R "select[mem>256000 && hname!='farm-gpu0504']"
+#BSUB -R "rusage[mem=256000]"
+#BSUB -M 256000
+#BSUB -gpu "num=4:mode=exclusive_process:gmodel=NVIDIAH200"
+#BSUB -cwd /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM
+#BSUB -o /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-repa-early-%J.out
+#BSUB -e /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-repa-early-%J.err
+# EARLY READ on the REPA run at step 10000 of 20000 (job 91058 still training).
+#
+# Purpose: get the direction of the CMMD/VQAScore effect before committing to the full-run
+# interpretation. Same Phase-A pool, same seeds, same scorers M1's 69.7 / 0.7848 came from.
+#
+# ⚠️ NOT the pre-registered comparison. M1's numbers are at 20k steps; this is 10k. Any difference
+# therefore confounds "REPA helped" with "half the training". Read the SIGN and the magnitude
+# ORDER only. The like-for-like number is the 20k checkpoint from 91058.
+#
+# ⚠️ The training-log comparison already flags a confound this eval cannot resolve: REPA's grad norm
+# climbs to ~1030 vs M1's ~432 while its parameter drift is 5x SMALLER (Δθξ 6.0 vs 31). With
+# grad_clip 1.0 that means REPA is DAMPING the student's movement. A student that moved less sits
+# closer to the base model and may score better on fidelity for reasons unrelated to representation
+# alignment. Separating those needs a --lambda_repa 0 run at matched effective step size.
+set -euo pipefail
+export PATH="/software/cellgen/team361/ha11/envs/nichejepa/bin:$PATH"
+export HF_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/huggingface
+export TORCH_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/torch
+export XDG_CACHE_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/xdg
+export TOKENIZERS_PARALLELISM=false
+export NCCL_NVLS_ENABLE=0
+source ~/.secrets/hf_token
+echo "[`date`] REPA early eval (step 10000) | Host: $(hostname)"
+CK=$(ls -dt checkpoints/phaseR/repa_full_*/checkpoint_step10000.pt | head -1)
+echo "checkpoint: $CK"
+python3 -c "
+import torch,sys
+ck=torch.load('$CK', map_location='cpu', weights_only=False)
+print('  keys:', sorted(ck.keys()))
+print('  step:', ck.get('step'))
+assert 'model' in ck, 'no model key'
+print('  projector present:', 'projector' in ck)"
+torchrun --standalone --nproc-per-node=4 exp0/phaseA_generate.py \
+  --label REPA10k --checkpoint "$CK" --cfg 1 --steps_list 4,8,28 --per_category 80
+torchrun --standalone --nproc-per-node=4 exp0/phaseA_score.py --labels REPA10k --steps_list 4,8,28
+python3 exp0/fidelity_cmmd.py --steps 4,8,28 --out phaseA/fidelity_report_repa10k.md
+echo "=== REPA @10k vs M1 @20k (DIRECTIONAL ONLY -- unmatched step counts) ==="
+# --out is REQUIRED: repa_compare.py defaults to phaseA/repa_compare.json, so any two runs
+# that omit it silently overwrite each other's comparison.
+python3 exp0/repa_compare.py --fidelity_md phaseA/fidelity_report_repa10k.md \
+  --labels REPA10k,M1 --steps 4,8,28 --out phaseA/repa_compare_repa10k.json
+echo "[`date`] DONE"

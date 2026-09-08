@@ -1,0 +1,38 @@
+#!/usr/bin/env bash
+#BSUB -J sd-phaseG-latent-ext
+#BSUB -G s10396
+#BSUB -U conf_july_2026
+#BSUB -q training-parallel
+#BSUB -n 8
+#BSUB -W 8:00
+#BSUB -R "span[hosts=1]"
+#BSUB -R "select[mem>256000 && hname!='farm-gpu0504']"
+#BSUB -R "rusage[mem=256000]"
+#BSUB -M 256000
+#BSUB -gpu "num=2:mode=exclusive_process:gmodel=NVIDIAH200"
+#BSUB -cwd /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM
+#BSUB -o /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-phaseG-latent-ext-%J.out
+#BSUB -e /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-phaseG-latent-ext-%J.err
+# REVIEWER-DRIVEN. Fixes a cross-units error inside our own falsification test.
+#
+# Every "extremity" number we have for the TARGET channel is in REWARD space (z-scores of
+# endpoint VQAScore): oracle 1.214 / control 0.752. The student regresses onto the endpoint
+# LATENT. phaseH/measure_noise_extremity.py hardcodes those reward-space values as
+# `phaseG_reference` and the v3 report compares them against Phase H's LATENT-space 0.873/0.870,
+# concluding "+0.462 vs +0.003, 1/150th the variance cost". That comparison is cross-units --
+# the same error class as retraction #2, recurring inside the experiment meant to falsify the claim.
+#
+# The branch generation is deterministic, so the M endpoint latents are exactly regenerable.
+# This measures the quantity the whole thesis is about, in the space the map acts on.
+set -euo pipefail
+export PATH="/software/cellgen/team361/ha11/envs/nichejepa/bin:$PATH"
+export HF_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/huggingface
+export TORCH_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/torch
+export XDG_CACHE_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/xdg
+export TOKENIZERS_PARALLELISM=false
+export NCCL_NVLS_ENABLE=0
+source ~/.secrets/hf_token
+echo "[`date`] Phase G latent-space target extremity | Host: $(hostname)"
+torchrun --standalone --nproc-per-node=2 phaseG/measure_target_extremity_latent.py \
+  --k 3 --limit 1200
+echo "[`date`] DONE"

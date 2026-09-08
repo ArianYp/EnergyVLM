@@ -38,6 +38,7 @@ ARMS = [  # label prefix, display name, jobs file
     ("S4_CD_latent_full-T0.04", "latent scorer, Boltzmann T=0.04, exact", "phaseW/s4f_jobs.txt"),
     ("S4_CD_dinop_hard-rewF", "argmax + projector reward (frozen)", "phaseW/s4g_jobs.txt"),
     ("S4_CD_dinop_hard-rewR", "argmax + projector reward (refreshed)", "phaseW/s4g_jobs.txt"),
+    ("S4_CD_dinop_hard-rewX", "argmax + exact DINO reward", "phaseW/s4h_jobs.txt"),
 ]
 CONTRASTS = [
     ("S4_CD_dinop_hard", "S4_B2"), ("S4_CD_dinop_full-T0.04", "S4_B2"), ("S4_CD_dinop_full-T0.08", "S4_B2"),
@@ -53,6 +54,8 @@ CONTRASTS = [
     ("S4_CD_latent_full-T0.04", "S4_CD_dinop_full-T0.04"), ("S4_CD_latent_full-T0.04", "S4_CD_latent_hard"),
     ("S4_CD_dinop_hard-rewF", "S4_CD_dinop_hard"), ("S4_CD_dinop_hard-rewR", "S4_CD_dinop_hard"),
     ("S4_CD_dinop_hard-rewF", "S4_B2"), ("S4_CD_dinop_hard-rewR", "S4_B2"), ("S4_CD_dinop_hard-rewR", "S4_CD_dinop_hard-rewF"),
+    ("S4_CD_dinop_hard-rewX", "S4_CD_dinop_hard"), ("S4_CD_dinop_hard-rewX", "S4_B2"),
+    ("S4_CD_dinop_hard-rewX", "S4_CD_dinop_hard-rewR"), ("S4_CD_dinop_hard-rewX", "S4_CD_dinop_hard-rewF"),
 ]
 
 

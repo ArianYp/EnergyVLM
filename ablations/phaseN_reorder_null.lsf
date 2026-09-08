@@ -1,0 +1,116 @@
+#!/usr/bin/env bash
+#BSUB -J sd-phaseN-reorder-null
+#BSUB -G s10396
+#BSUB -q training-parallel
+#BSUB -n 4
+#BSUB -W 12:00
+#BSUB -R "span[hosts=1]"
+#BSUB -R "select[mem>128000 && hname!='farm-gpu0504']"
+#BSUB -R "rusage[mem=128000]"
+#BSUB -M 128000
+#BSUB -gpu "num=1:mode=exclusive_process:gmem=40G"
+#BSUB -cwd /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM
+#BSUB -o /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-phaseN-reorder-%J.out
+#BSUB -e /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-phaseN-reorder-%J.err
+
+# THE DECISIVE CONTROL for the one positive result in the CAFE probe.
+#
+# The C1 counterfactual q and the prompt p differ ONLY in word order -- that is what makes the
+# intervention clean. It is also what makes the directional result ambiguous. mean B = +5.84e-4,
+# positive for 76.1% of candidates, is equally consistent with:
+#   (a) the frozen field reads attribute-to-object BINDING, or
+#   (b) the frozen field is sensitive to WORD ORDER in the text encoders.
+#
+# A lexical paraphrase cannot separate these, because it changes the tokens and so tests a third
+# thing. The meaning-preserving same-token-multiset REORDER can:
+#   p  "a red cube and a blue sphere"
+#   q  "a blue cube and a red sphere"   binding changed, order changed
+#   r  "a blue sphere and a red cube"   binding UNCHANGED, order changed
+#
+#   delta(r) null and delta(q) positive  -> (a). The directional claim is binding and survives.
+#   delta(r) ~ delta(q)                  -> (b). The directional claim is positional and dies.
+#
+# Restricted to the 745 attribute-binding rows that admit a valid reorder, so p, q and r are scored
+# on exactly the same images with the same noise. The role tier admits no same-multiset reorder and
+# is excluded; it recovered nothing anyway (Spearman -0.005 and -0.012).
+set -euo pipefail
+
+export PATH="/software/cellgen/team361/ha11/envs/nichejepa/bin:$PATH"
+export HF_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/huggingface
+export TORCH_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/torch
+export XDG_CACHE_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/xdg
+export TOKENIZERS_PARALLELISM=false
+export WANDB_MODE=disabled
+source ~/.secrets/hf_token
+
+JOB=${LSB_JOBID:-local}
+ROOT="phaseN/reorder_null_${JOB}"
+if [[ -e "$ROOT" ]]; then echo "Refusing to overwrite $ROOT" >&2; exit 2; fi
+mkdir -p "$ROOT"
+
+echo "[$(date --iso-8601=seconds)] Phase-N reorder null | job=$JOB"
+nvidia-smi --query-gpu=index,name,memory.total --format=csv
+
+echo "=== 0. Rebuild records, now carrying the reorder null ==="
+python3 phaseN/c1_edits.py \
+  --cand_scores phaseFP/exact_headroom_101942/cand_scores \
+  --out "$ROOT/records_c1.jsonl" --summary "$ROOT/c1_coverage.json" --require_images
+python3 -c "
+import json
+s=json.load(open('$ROOT/c1_coverage.json'))
+assert s['with_reorder_null'] > 700, s['with_reorder_null']
+print(f\"reorder null available on {s['with_reorder_null']}/{s['kept']} rows\")
+"
+
+echo "=== 1. Smoke ==="
+python3 phaseN/probe_cafe.py --records "$ROOT/records_c1.jsonl" \
+  --reorder --require_reorder --skip_flat --per_category 3 \
+  --bootstrap 200 --progress_every 3 --out "$ROOT/probe_smoke.json"
+python3 -c "
+import json, math
+d=json.load(open('$ROOT/probe_smoke.json')); s=d['summary']
+assert 'cafe_reorder' in s['arms'], sorted(s['arms'])
+for r in d['rows']:
+    assert r['reorder_null'], r['prompt']
+    # p, q and r must be three DIFFERENT strings, or the control is vacuous.
+    assert len({r['prompt'], r['counterfactual'], r['reorder_null']})==3, r['prompt']
+    assert len(r['scores']['cafe_reorder'])==4
+    assert all(math.isfinite(x) for x in r['scores']['cafe_reorder'])
+print('smoke OK')
+"
+
+echo "=== 2. Full reorder-null run ==="
+python3 phaseN/probe_cafe.py --records "$ROOT/records_c1.jsonl" \
+  --reorder --require_reorder --skip_flat \
+  --progress_every 50 --out "$ROOT/probe_reorder.json" | tee "$ROOT/probe_reorder.log"
+test -s "$ROOT/probe_reorder.json"
+
+echo "=== 3. Paired contrasts: is delta(reorder) smaller than delta(C1)? ==="
+python3 phaseN/paired_contrasts.py --probe "$ROOT/probe_reorder.json" \
+  --out "$ROOT/paired.json" > /dev/null
+python3 phaseN/analyze_cafe.py --probe "$ROOT/probe_reorder.json" \
+  --out "$ROOT/analysis.json" > /dev/null
+python3 - <<PY
+import json, numpy as np
+d=json.load(open("$ROOT/probe_reorder.json")); rows=d['rows']
+def flat(a): return np.array([v for r in rows for v in r['scores'][a]], float)
+c1, ro = flat('cafe_c1'), flat('cafe_reorder')
+rng=np.random.default_rng(20260812)
+# Paired by CANDIDATE here: both arms use the same z and the same noise, so the difference of the
+# two contrasts is itself a paired quantity and its bootstrap is the right test.
+diff = c1 - ro
+boot = diff[rng.integers(0, diff.size, (20000, diff.size))].mean(axis=1)
+out = {
+ "n_candidates": int(c1.size),
+ "mean_delta_c1": float(c1.mean()), "frac_positive_c1": float((c1>0).mean()),
+ "mean_delta_reorder": float(ro.mean()), "frac_positive_reorder": float((ro>0).mean()),
+ "paired_difference": float(diff.mean()),
+ "ci": [float(np.percentile(boot,2.5)), float(np.percentile(boot,97.5))],
+ "reorder_as_frac_of_c1": float(ro.mean()/c1.mean()) if c1.mean() else None,
+}
+json.dump(out, open("$ROOT/reorder_verdict.json","w"), indent=2)
+print(json.dumps(out, indent=2))
+PY
+
+echo "[$(date --iso-8601=seconds)] Phase-N reorder null complete: $ROOT"
+if command -v my-job-stats >/dev/null 2>&1; then my-job-stats -a -n -s; fi

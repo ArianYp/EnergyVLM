@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+#BSUB -J sd-phaseJ-fusion-audit
+#BSUB -G s10396
+#BSUB -q training-parallel
+#BSUB -n 4
+#BSUB -W 2:00
+#BSUB -R "span[hosts=1]"
+#BSUB -R "select[mem>32000 && hname!='farm-gpu0504']"
+#BSUB -R "rusage[mem=32000]"
+#BSUB -M 32000
+#BSUB -gpu "num=1:mode=exclusive_process"
+#BSUB -cwd /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM
+#BSUB -o /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-phaseJ-fusion-audit-%J.out
+#BSUB -e /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-phaseJ-fusion-audit-%J.err
+
+set -euo pipefail
+export PATH="/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/venv_mmdit/bin:/software/cellgen/team361/ha11/envs/nichejepa/bin:$PATH"
+export WANDB_MODE=online
+: "${PHASEJ_GROUP:?missing PHASEJ_GROUP}"
+: "${PHASEJ_FUSION_ALIGNED_JOB:?missing aligned job id}"
+: "${PHASEJ_FUSION_TOKEN_JOB:?missing token job id}"
+JOB=${LSB_JOBID:-local}
+python phaseJ/audit_fusion_conditioning.py \
+  --run_dir "phaseJ/runs/phaseJ_fusion_aligned_${PHASEJ_FUSION_ALIGNED_JOB}" \
+  --token_dir "phaseJ/fusion_cache/full_${PHASEJ_FUSION_TOKEN_JOB}" \
+  --output_dir "phaseJ/audits/fusion_conditioning_${JOB}" \
+  --emit_selections \
+  --wandb_group "$PHASEJ_GROUP" --wandb_run_name "phaseJ_fusion_conditioning_audit_${JOB}"

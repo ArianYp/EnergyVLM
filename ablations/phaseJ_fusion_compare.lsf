@@ -1,0 +1,59 @@
+#!/usr/bin/env bash
+#BSUB -J sd-phaseJ-fusion-compare
+#BSUB -G s10396
+#BSUB -q training-parallel
+#BSUB -n 2
+#BSUB -W 1:00
+#BSUB -R "span[hosts=1]"
+#BSUB -R "select[mem>16000]"
+#BSUB -R "rusage[mem=16000]"
+#BSUB -M 16000
+#BSUB -gpu "num=1:mode=exclusive_process"
+#BSUB -cwd /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM
+#BSUB -o /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-phaseJ-fusion-compare-%J.out
+#BSUB -e /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-phaseJ-fusion-compare-%J.err
+
+set -euo pipefail
+export PATH="/software/cellgen/team361/ha11/envs/nichejepa/bin:$PATH"
+export WANDB_MODE=online
+: "${PHASEJ_GROUP:?missing PHASEJ_GROUP}"
+: "${PHASEJ_FUSION_ALIGNED_JOB:?missing aligned job id}"
+: "${PHASEJ_FUSION_BLANK_JOB:?missing blank job id}"
+: "${PHASEJ_FROZEN_BASE_JOB:?missing frozen SD3 base job id}"
+
+JOB=${LSB_JOBID:-local}
+ROOT="phaseJ/comparisons/phaseJ_fusion_compare_${JOB}"
+if [[ -e "$ROOT" ]]; then
+  echo "Refusing to overwrite $ROOT" >&2
+  exit 2
+fi
+mkdir -p "$ROOT/scores"
+ALIGNED="phaseJ/runs/phaseJ_fusion_aligned_${PHASEJ_FUSION_ALIGNED_JOB}"
+BLANK="phaseJ/runs/phaseJ_fusion_blank_${PHASEJ_FUSION_BLANK_JOB}"
+FROZEN="phaseJ/runs/phaseJ_base_${PHASEJ_FROZEN_BASE_JOB}"
+
+for CAT in color shape texture spatial 3d_spatial numeracy non_spatial complex; do
+  ln -s "$(realpath "$ALIGNED/compbench_scores/mmdit_fusion_s4_${CAT}")" "$ROOT/scores/mmdit_fusion_s4_${CAT}"
+  ln -s "$(realpath "$BLANK/compbench_scores/mmdit_fusion_blank_s4_${CAT}")" "$ROOT/scores/mmdit_fusion_blank_s4_${CAT}"
+  ln -s "$(realpath "$FROZEN/compbench_scores/mmdit_base_s4_${CAT}")" "$ROOT/scores/mmdit_base_s4_${CAT}"
+  ln -s "$(realpath "phaseH/scores/random_s4_${CAT}")" "$ROOT/scores/random_s4_${CAT}"
+  ln -s "$(realpath "phaseH/scores/oracle_s4_${CAT}")" "$ROOT/scores/oracle_s4_${CAT}"
+done
+
+python phaseC/eval_analyze.py --scores_dir "$ROOT/scores" --step 4 \
+  --models mmdit_fusion,mmdit_fusion_blank,random,oracle \
+  --title "Trainable MMDiT fusion text-conditioning control" \
+  --geneval2_dir "$ROOT/not_run" --fidelity "$ROOT/not_run.json" --diversity "$ROOT/not_run.json" \
+  --out "$ROOT/fusion_vs_blank.md"
+python phaseC/eval_analyze.py --scores_dir "$ROOT/scores" --step 4 \
+  --models mmdit_fusion,mmdit_base,random,oracle \
+  --title "Trainable encoder fusion versus frozen SD3 MMDiT" \
+  --geneval2_dir "$ROOT/not_run" --fidelity "$ROOT/not_run.json" --diversity "$ROOT/not_run.json" \
+  --out "$ROOT/fusion_vs_frozen.md"
+
+python phaseJ/log_fusion_compare_wandb.py --root "$ROOT" \
+  --aligned_run "$ALIGNED" --blank_run "$BLANK" --frozen_run "$FROZEN" \
+  --project sd-mmdit-ranker-v1 --group "$PHASEJ_GROUP" \
+  --run_name "phaseJ_fusion_compare_${JOB}"
+cat "$ROOT/fusion_vs_blank.md"
+cat "$ROOT/fusion_vs_frozen.md"

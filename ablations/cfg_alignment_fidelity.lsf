@@ -1,0 +1,58 @@
+#!/usr/bin/env bash
+#BSUB -J sd-cfg-tradeoff
+#BSUB -G s10396
+#BSUB -U conf_july_2026
+#BSUB -q training-parallel
+#BSUB -n 16
+#BSUB -W 12:00
+#BSUB -R "span[hosts=1]"
+#BSUB -R "select[mem>256000 && hname!='farm-gpu0504']"
+#BSUB -R "rusage[mem=256000]"
+#BSUB -M 256000
+#BSUB -gpu "num=4:mode=exclusive_process:gmodel=NVIDIAH200"
+#BSUB -cwd /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM
+#BSUB -o /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-cfg-tradeoff-%J.out
+#BSUB -e /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-cfg-tradeoff-%J.err
+# DOES GUIDANCE DISTILLATION ALREADY BUY CFG-7 ALIGNMENT AT CFG-1 FIDELITY?
+#
+# The premise of the REPA/SoftREPA direction is that high CFG trades image quality for prompt
+# alignment. Our Phase-A grid measured ALIGNMENT and FIDELITY only at ONE CFG per model
+# (base at 7, students at 1), so the trade-off itself has never been measured here.
+# The missing cell is the frozen teacher at CFG=1. Everything else is on disk, seed-paired.
+#
+#   base @ CFG7 s28   alignment 0.810   CMMD 55.5      <- have
+#   base @ CFG1 s28   ?                 ?              <- THIS JOB
+#   M1   @ CFG-free s4  0.785           69.7           <- have (trained on CFG-7 outputs)
+#
+# READ
+#  base@CFG1 much worse alignment AND much better CMMD -> the trade-off is real and quantified;
+#      then ask where M1 sits. If M1 has CFG-7-like alignment at CFG-1-like CMMD, guidance
+#      distillation ALREADY resolves it and REPA is not needed for this problem.
+#      If M1 inherits the CFG-7 fidelity penalty, that penalty is the target REPA would attack,
+#      now with a measured size.
+#  base@CFG1 similar on both -> the motivating trade-off does not hold in our setup and the
+#      direction needs a different justification.
+set -euo pipefail
+export PATH="/software/cellgen/team361/ha11/envs/nichejepa/bin:$PATH"
+export HF_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/huggingface
+export TORCH_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/torch
+export XDG_CACHE_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/xdg
+export TOKENIZERS_PARALLELISM=false
+export NCCL_NVLS_ENABLE=0
+source ~/.secrets/hf_token
+echo "[`date`] CFG alignment-vs-fidelity | Host: $(hostname)"
+
+# same pool, same seeds, same steps as the rest of Phase A -> paired with base/M1/M2
+torchrun --standalone --nproc-per-node=4 exp0/phaseA_generate.py \
+  --label baseCFG1 --checkpoint base --cfg 1 --steps_list 4,8,28 --per_category 80
+
+# alignment (VQAScore), same scorer as every other Phase-A number
+torchrun --standalone --nproc-per-node=4 exp0/phaseA_score.py \
+  --labels baseCFG1 --steps_list 4,8,28
+
+# fidelity (CMMD vs COCO-real) -- rescans phaseA/images, so it picks up the new label
+python3 exp0/fidelity_cmmd.py --steps 4,8,28 --out phaseA/fidelity_report_cfg.md
+
+echo "=== THE TRADE-OFF TABLE ==="
+python3 exp0/cfg_tradeoff_table.py
+echo "[`date`] DONE"

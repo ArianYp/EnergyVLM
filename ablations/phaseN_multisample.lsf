@@ -1,0 +1,52 @@
+#!/usr/bin/env bash
+#BSUB -J sd-phaseN-multi
+#BSUB -G s10396
+#BSUB -q training-parallel
+#BSUB -n 16
+#BSUB -W 12:00
+#BSUB -R "span[hosts=1]"
+#BSUB -R "select[mem>96000 && hname!='farm-gpu0504']"
+#BSUB -R "rusage[mem=96000]"
+#BSUB -M 96000
+#BSUB -gpu "num=4:mode=exclusive_process:gmem=78G"
+#BSUB -cwd /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM
+#BSUB -o /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-phaseN-multi-%J.out
+#BSUB -e /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-phaseN-multi-%J.err
+
+# Several images per prompt, so conditional diversity can be measured. Every arm uses the SAME
+# prompts and the SAME initial noises (candidate j keeps seed --seed + idx + j*SEED_STRIDE), so a
+# difference in diversity is the model and not the draw.
+set -euo pipefail
+export PATH="/software/cellgen/team361/ha11/envs/nichejepa/bin:$PATH"
+export HF_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/huggingface
+export TORCH_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/torch
+export XDG_CACHE_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/xdg
+export TOKENIZERS_PARALLELISM=false
+export NCCL_NVLS_ENABLE=0
+export WANDB_MODE=disabled
+source ~/.secrets/hf_token
+
+: "${MS_LABEL:?}"; : "${MS_CKPT:?}"
+POOL=${MS_POOL:-phaseFP/eval_pool_101203}
+STEPS=${MS_STEPS:-4}
+CFG=${MS_CFG:-1.0}
+NSEED=${MS_NSEEDS:-4}
+NP=${MS_NPROMPTS:-500}
+JOB=${LSB_JOBID:-local}
+ROOT="phaseN/multi_${MS_LABEL}_${JOB}"
+[[ -e "$ROOT" ]] && { echo "Refusing to overwrite $ROOT" >&2; exit 2; }
+mkdir -p "$ROOT"
+
+python3 - <<PROMPTS
+import json, pathlib
+p=json.load(open("$POOL/compbench_prompts.json"))[:$NP]
+pathlib.Path("$ROOT").mkdir(parents=True, exist_ok=True)
+json.dump(p, open("$ROOT/prompts.json","w"), indent=1)
+print(f"{len(p)} prompts x $NSEED images at $STEPS steps, cfg $CFG")
+PROMPTS
+
+if [[ "$MS_CKPT" != "base" ]]; then test -s "$MS_CKPT"; fi
+torchrun --standalone --nproc-per-node=4 exp0/phaseA_generate.py \
+  --out_root "$ROOT" --label "$MS_LABEL" --checkpoint "$MS_CKPT" \
+  --cfg "$CFG" --prompts_json "$ROOT/prompts.json" --steps_list "$STEPS" --n_seeds "$NSEED"
+echo "[$(date --iso-8601=seconds)] DONE -> $ROOT/images/$MS_LABEL"

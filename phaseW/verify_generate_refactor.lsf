@@ -1,0 +1,61 @@
+#!/usr/bin/env bash
+#BSUB -J sd-W-genrefactor
+#BSUB -G s10396
+#BSUB -q training-parallel
+#BSUB -n 4
+#BSUB -W 1:00
+#BSUB -R "span[hosts=1]"
+#BSUB -R "select[mem>64000 && hname!='farm-gpu0504']"
+#BSUB -R "rusage[mem=64000]"
+#BSUB -M 64000
+#BSUB -gpu "num=1:mode=exclusive_process:gmem=40G"
+#BSUB -cwd /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM
+#BSUB -o /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-W-genrefactor-%J.out
+#BSUB -e /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-W-genrefactor-%J.err
+#
+# Byte-identity test for the "load the pipeline once" refactor of exp0/phaseA_generate.py.
+#
+# The refactor lets --out_root / --prompts_json be comma-lists so one process serves both the
+# CompBench and GenEval2 pools after a single pipeline + checkpoint load. It must not change a
+# single pixel: sharding and seeding are per-item, so it should not, but "should not" is not a
+# test. The reference images are phaseW/qual/gen_{bench}/images/BASE_cfg7/p*/s4/cand0.png, which
+# were produced by the PRE-refactor script on the same 16 prompts (same original pool idx, same
+# seed = 0 + idx, base checkpoint, cfg 7, 4 steps). Both the two-pool path and the single-pool
+# path are regenerated and cmp'd byte for byte.
+set -uo pipefail
+export PATH="/software/cellgen/team361/ha11/envs/nichejepa/bin:$PATH"
+export HF_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/huggingface
+export TORCH_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/torch
+export XDG_CACHE_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/xdg
+export TOKENIZERS_PARALLELISM=false
+source ~/.secrets/hf_token
+
+SCR=phaseW/qual/genrefactor_${LSB_JOBID:-local}
+rm -rf "$SCR"; mkdir -p "$SCR"
+
+echo "=== two-pool mode (one process, both benches) ==="
+python3 exp0/phaseA_generate.py \
+  --out_root "$SCR/two_compbench,$SCR/two_geneval2" \
+  --prompts_json "phaseW/qual/compbench_subset.json,phaseW/qual/geneval2_subset.json" \
+  --label BASE_cfg7 --checkpoint base --cfg 7.0 --steps_list 4
+echo "=== single-pool mode (compbench only) ==="
+python3 exp0/phaseA_generate.py \
+  --out_root "$SCR/one_compbench" --prompts_json phaseW/qual/compbench_subset.json \
+  --label BASE_cfg7 --checkpoint base --cfg 7.0 --steps_list 4
+
+same=0; diff=0; missing=0
+check () {  # $1 = new root, $2 = reference root
+  for ref in "$2"/images/BASE_cfg7/p*/s4/cand0.png; do
+    p=$(basename "$(dirname "$(dirname "$ref")")")
+    new="$1/images/BASE_cfg7/$p/s4/cand0.png"
+    if [ ! -f "$new" ]; then echo "MISSING $new"; missing=$((missing+1))
+    elif cmp -s "$new" "$ref"; then same=$((same+1))
+    else echo "DIFFER  $new"; diff=$((diff+1)); fi
+  done
+}
+check "$SCR/two_compbench" phaseW/qual/gen_compbench
+check "$SCR/two_geneval2"  phaseW/qual/gen_geneval2
+check "$SCR/one_compbench" phaseW/qual/gen_compbench
+echo "identical=$same differ=$diff missing=$missing"
+if [ "$diff" -eq 0 ] && [ "$missing" -eq 0 ] && [ "$same" -ge 24 ]; then
+  echo "GENREFACTOR_RESULT PASS"; else echo "GENREFACTOR_RESULT FAIL"; fi

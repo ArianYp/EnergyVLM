@@ -1,0 +1,156 @@
+#!/usr/bin/env bash
+#BSUB -J sd-phaseN-coco-sel
+#BSUB -G s10396
+#BSUB -q training-parallel
+#BSUB -n 16
+#BSUB -W 24:00
+#BSUB -R "span[hosts=1]"
+# 256 GB, not 128: each of the four ranks loads an 11B clip-flant5-xxl into host memory before
+# moving it to the GPU. Job 106464 died with TERM_MEMLIMIT at 129,342 MB asking for 128 GB.
+#BSUB -R "select[mem>256000 && hname!='farm-gpu0504']"
+#BSUB -R "rusage[mem=256000]"
+#BSUB -M 256000
+#BSUB -gpu "num=4:mode=exclusive_process:gmem=78G"
+#BSUB -cwd /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM
+#BSUB -o /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-phaseN-cocosel-%J.out
+#BSUB -e /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-phaseN-cocosel-%J.err
+
+# Offline candidate cache for COCO training prompts, carrying the reference-image energy.
+#
+# For each prompt: roll N=4 frozen-teacher candidates on the seed convention train_pilot re-rolls,
+# compute the decoding-free energy against the real photograph, and VQAScore each decoded endpoint
+# so the oracle-weighted ceiling arms remain buildable.
+#
+# The energy is computed once here, offline, at the sigma=0.5 it was validated at. An earlier
+# ablation showed it does not need common random numbers (rho 38.75% shared vs 38.95% independent),
+# so no epsilon is cached or replayed and the trainer pays nothing at training time.
+set -euo pipefail
+
+export PATH="/software/cellgen/team361/ha11/envs/nichejepa/bin:$PATH"
+export HF_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/huggingface
+export TORCH_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/torch
+export XDG_CACHE_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/xdg
+export TOKENIZERS_PARALLELISM=false
+export NCCL_NVLS_ENABLE=0
+export WANDB_MODE=disabled
+source ~/.secrets/hf_token
+
+: "${COCO_POOL:?set COCO_POOL to a pool_manifest.json from phaseN/build_coco_pool.py}"
+N=${SEL_N:-4}
+K=${SEL_K:-8}
+CFG=${SEL_CFG:-7.0}
+# The energy config is a live hyperparameter, NOT a default to be trusted. An earlier phase lost a
+# run because an LSF script let the parser supply values that had since drifted, so both are passed
+# explicitly here and both are written into cache_meta.json from these same shell variables.
+ELAYER=${SEL_ENERGY_LAYER:-8}
+ESIGMA=${SEL_ENERGY_SIGMA:-0.5}
+# Reference-similarity baselines. Empty keeps the old behaviour exactly.
+# `bsub -env` splits its argument on COMMAS, so a comma list cannot be passed through it. Give the
+# list with '+' separators -- SEL_BASELINES=dino+clip+lpips -- and it is translated here.
+BASE=${SEL_BASELINES:-}
+BASE=${BASE//+/,}
+# Candidate generator. Empty = the frozen base model at $CFG (the original design). Set to a
+# guidance-distilled checkpoint to make the candidates come from a ONE-CALL model, so the later
+# step-distillation stage changes only the step count.
+GCKPT=${SEL_GEN_CKPT:-}
+GCFG=${SEL_GEN_CFG:-}
+
+JOB=${LSB_JOBID:-local}
+ROOT="phaseN/coco_selection_${JOB}"
+if [[ -e "$ROOT" ]]; then echo "Refusing to overwrite $ROOT" >&2; exit 2; fi
+mkdir -p "$ROOT"
+cp "$COCO_POOL" "$ROOT/pool_manifest.json"
+
+echo "[$(date --iso-8601=seconds)] Phase-N COCO selection cache | job=$JOB N=$N K=$K cfg=$CFG"
+echo "    energy layer=$ELAYER sigma=$ESIGMA | baselines='${BASE:-none}'"
+nvidia-smi --query-gpu=index,name,memory.total --format=csv
+python3 -c "
+import json, os
+m=json.load(open('$ROOT/pool_manifest.json'))
+assert all(os.path.exists(r['reference']) for r in m), 'missing reference images'
+assert len({r['prompt'] for r in m})==len(m), 'duplicate caption text'
+print(f'{len(m)} COCO prompts, all references present, all captions unique')
+"
+
+echo "=== smoke: 8 prompts on one rank ==="
+python3 - <<PY
+import json, pathlib
+m=json.load(open("$ROOT/pool_manifest.json"))
+pathlib.Path("$ROOT/_smoke").mkdir(parents=True, exist_ok=True)
+json.dump(m[:8], open("$ROOT/_smoke/pool_manifest.json","w"), indent=1)
+PY
+python3 phaseN/build_coco_selection.py \
+  --pool_manifest "$ROOT/_smoke/pool_manifest.json" --out_root "$ROOT/_smoke" \
+  --N "$N" --K "$K" --cfg "$CFG" \
+  --energy_layer "$ELAYER" --energy_sigma "$ESIGMA" ${BASE:+--baselines "$BASE"} \
+  ${GCKPT:+--gen_ckpt "$GCKPT"} ${GCFG:+--gen_cfg "$GCFG"}
+python3 - <<PY
+import json, glob, math
+rows=[json.loads(l) for f in glob.glob("$ROOT/_smoke/selection_rank*.jsonl") for l in open(f) if l.strip()]
+assert len(rows)==8, len(rows)
+for r in rows:
+    assert len(r["energy"])==$N and len(r["endpoint_vqa"])==$N
+    assert all(math.isfinite(x) for x in r["energy"]+r["endpoint_vqa"]), r["prompt"]
+    assert all(-1.001 <= x <= 1.001 for x in r["energy"]), r["energy"]
+    assert r["seed_base"] == r["idx"]*1000
+    # a degenerate cache would give every candidate the same energy
+    assert max(r["energy"]) - min(r["energy"]) > 0, r["energy"]
+    # the flags must have REACHED the scorer, not merely been typed on the command line
+    assert r["energy_layer"] == $ELAYER, (r["energy_layer"], $ELAYER)
+    assert abs(r["energy_sigma"] - $ESIGMA) < 1e-9, (r["energy_sigma"], $ESIGMA)
+    assert (r.get("gen_ckpt") or "") == "$GCKPT", (r.get("gen_ckpt"), "$GCKPT")
+import numpy as np
+e=np.array([r["energy"] for r in rows]); v=np.array([r["endpoint_vqa"] for r in rows])
+print(f"smoke OK | energy spread within prompt: {float((e.max(1)-e.min(1)).mean()):.4f}")
+print(f"          energy range {e.min():.4f}..{e.max():.4f} | vqa range {v.min():.4f}..{v.max():.4f}")
+fields={"dino":"dino_cos","clip":"clip_cos","lpips":"lpips_neg"}
+for b in [x for x in "$BASE".split(",") if x]:
+    f=fields[b]
+    assert all(f in r and len(r[f])==$N for r in rows), f"missing {f}"
+    a=np.array([r[f] for r in rows])
+    assert np.isfinite(a).all(), f
+    assert (a.max(1)-a.min(1)).mean() > 1e-6, f"{f} is degenerate"
+    print(f"          {f}: range {a.min():.4f}..{a.max():.4f} spread {float((a.max(1)-a.min(1)).mean()):.4f}")
+PY
+
+echo "=== full cache, 4 ranks ==="
+torchrun --standalone --nproc-per-node=4 phaseN/build_coco_selection.py \
+  --pool_manifest "$ROOT/pool_manifest.json" --out_root "$ROOT" \
+  --N "$N" --K "$K" --cfg "$CFG" \
+  --energy_layer "$ELAYER" --energy_sigma "$ESIGMA" ${BASE:+--baselines "$BASE"} \
+  ${GCKPT:+--gen_ckpt "$GCKPT"} ${GCFG:+--gen_cfg "$GCFG"}
+
+python3 - <<PY
+import json, glob, numpy as np
+rows=[json.loads(l) for f in glob.glob("$ROOT/selection_rank*.jsonl") for l in open(f) if l.strip()]
+pool=json.load(open("$ROOT/pool_manifest.json"))
+print(f"cached {len(rows)}/{len(pool)} prompts")
+assert len(rows) >= int(0.98*len(pool)), (len(rows), len(pool))
+e=np.array([r["energy"] for r in rows]); v=np.array([r["endpoint_vqa"] for r in rows])
+# The one number that decides whether the training arm can work at all: how much of the
+# best-of-N VQAScore headroom does an energy-argmax policy recover on THIS pool?
+den=v.max(1)-v.mean(1)
+def rho_of(a):
+    num=v[np.arange(len(v)), a.argmax(1)] - v.mean(1)
+    return float(num.sum()/den.sum()), float((a.argmax(1)==v.argmax(1)).mean())
+rho,agree=rho_of(e)
+print(f"energy-argmax rho on the training pool = {rho*100:.2f}%   top-1 agreement = {agree*100:.1f}%")
+verdict={"n":len(rows),"rho_energy_argmax":rho,"top1_agreement":agree,
+         "mean_headroom":float(den.mean()),"energy_layer":$ELAYER,"energy_sigma":$ESIGMA}
+# Every baseline is scored by the SAME rho on the SAME candidates, so the comparison is a
+# like-for-like selector comparison and not two numbers from two pools.
+for b,f in [("dino","dino_cos"),("clip","clip_cos"),("lpips","lpips_neg")]:
+    if f in rows[0]:
+        r_,a_=rho_of(np.array([x[f] for x in rows]))
+        verdict[f"rho_{b}_argmax"]=r_; verdict[f"top1_{b}"]=a_
+        print(f"{b}-argmax rho = {r_*100:.2f}%   top-1 agreement = {a_*100:.1f}%")
+json.dump(verdict, open("$ROOT/cache_verdict.json","w"), indent=2)
+json.dump({"K":$K,"cfg":float("$CFG"),"N":$N,"n_prompts":len(rows),
+           "energy_layer":$ELAYER,"energy_sigma":$ESIGMA,
+           "gen_ckpt":"$GCKPT" or None,"gen_cfg":rows[0].get("gen_cfg"),
+           "baselines":[x for x in "$BASE".split(",") if x]},
+          open("$ROOT/cache_meta.json","w"), indent=2)
+PY
+
+echo "[$(date --iso-8601=seconds)] complete: $ROOT"
+if command -v my-job-stats >/dev/null 2>&1; then my-job-stats -a -n -s; fi

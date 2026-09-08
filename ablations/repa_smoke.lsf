@@ -1,0 +1,48 @@
+#!/usr/bin/env bash
+#BSUB -J sd-repa-smoke
+#BSUB -G s10396
+#BSUB -U conf_july_2026
+#BSUB -q training-parallel
+#BSUB -n 16
+#BSUB -W 4:00
+#BSUB -R "span[hosts=1]"
+#BSUB -R "select[mem>256000 && hname!='farm-gpu0504']"
+#BSUB -R "rusage[mem=256000]"
+#BSUB -M 256000
+#BSUB -gpu "num=4:mode=exclusive_process:gmodel=NVIDIAH200"
+#BSUB -cwd /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM
+#BSUB -o /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-repa-smoke-%J.out
+#BSUB -e /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-repa-smoke-%J.err
+# SMOKE TEST for the REPA auxiliary loss. 300 steps, M1's recipe + --lambda_repa.
+# Checking three things only:
+#   1. it runs at all (hook fires on a REAL SD3.5-M, not the toy model it was unit-tested on)
+#   2. L_repa is finite, non-constant, and DESCENDS
+#   3. the consistency loss is not destabilised by the extra term
+#   4. DDP tolerates TWO forwards through the wrapped module before ONE backward under
+#      find_unused_parameters=False. Every param participates in both, so it should -- but that is
+#      reasoning, not evidence, and it is the one thing static review cannot settle.
+# Cross-checked against REPA's source: enc-depth 8 (projector after block INDEX 7), proj-coeff 0.5,
+# dinov2-vit-b, per-PATCH alignment on x_norm_patchtokens, encoder input 224*(res//256)=448 bicubic
+# so the 1024 DINO patches line up with SD3.5-M's 1024 image tokens at 512px.
+# Eleven bugs so far, incl. a DDP bypass that would have left this loss's gradients un-all-reduced
+# across ranks, and a silent no-op under --latent_matching_baseline. Do not skip this.
+set -euo pipefail
+export PATH="/software/cellgen/team361/ha11/envs/nichejepa/bin:$PATH"
+export HF_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/huggingface
+export TORCH_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/torch
+export XDG_CACHE_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/xdg
+export TOKENIZERS_PARALLELISM=false
+export NCCL_NVLS_ENABLE=0
+source ~/.secrets/hf_token
+echo "[`date`] REPA smoke | Host: $(hostname)"
+RUN=repa_smoke_$(date +%Y%m%d_%H%M%S)_${LSB_JOBID:-local}
+torchrun --standalone --nproc-per-node=4 train_self_distill.py \
+  --coco_split train2017 --latent_matching_baseline \
+  --lambda_repa 0.5 --repa_layer 8 \
+  --num_steps 300 --num_warmup_steps 50 \
+  --lr 1e-5 --projector_lr 1e-4 --weight_decay 0.0 \
+  --height 512 --grad_clip 1.0 \
+  --output_dir checkpoints/phaseR/${RUN} \
+  --save_every 100000 --log_every 10 \
+  --wandb_project sd-phaseR-repa --wandb_run_name "${RUN}"
+echo "[`date`] DONE"

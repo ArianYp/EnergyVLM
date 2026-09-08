@@ -1,0 +1,95 @@
+#!/usr/bin/env bash
+#BSUB -J sd-phaseX-candeval
+#BSUB -G s10396
+#BSUB -q training-parallel
+#BSUB -n 8
+#BSUB -W 12:00
+#BSUB -R "span[hosts=1]"
+#BSUB -R "select[mem>128000 && hname!='farm-gpu0504']"
+#BSUB -R "rusage[mem=128000]"
+#BSUB -M 128000
+#BSUB -gpu "num=1:mode=exclusive_process:gmem=78G"
+#BSUB -cwd /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM
+#BSUB -o /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-phaseX-candeval-%J.out
+#BSUB -e /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-phaseX-candeval-%J.err
+
+# Experiment B prerequisite: non-circular per-candidate labels for the 1024 pool.
+#
+# The only per-candidate score that exists today is VQAScore, and v5 section 10.2 forbids using it
+# as both the held-out target and the oracle baseline. So the CompBench and GenEval2 evaluators have
+# to run over EVERY candidate, not just the bo1/bo4/bo8 selections.
+#
+# ONE JOB PER CANDIDATE INDEX. The work is embarrassingly parallel across candidates and the queue
+# has capacity, so eight jobs at ~1 GPU-h each finish in about the wall-clock of one, instead of the
+# ~7.5 h a serial sweep would take. Sharding by candidate (not by category) also keeps each job's
+# output self-contained: if one dies, exactly one candidate index is missing and is cheap to redo.
+#
+# No symlink trees: both evaluators accept --image_name, so candidate j is read straight from the
+# shared pool. Building eight more trees over 19k images would have been pure waste.
+#
+#   bsub -env "all,CAND=3" < ablations/phaseX_candeval.lsf
+set -euo pipefail
+export PATH="/software/cellgen/team361/ha11/envs/nichejepa/bin:$PATH"
+export HF_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/huggingface
+export TORCH_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/torch
+export XDG_CACHE_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/xdg
+export TOKENIZERS_PARALLELISM=false
+export WANDB_MODE=disabled
+export PYTHONPATH="/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM:${PYTHONPATH:-}"
+source ~/.secrets/hf_token
+
+: "${CAND:?set CAND to a candidate index 0..7}"
+POOL=${CANDEVAL_POOL:-phaseN/bestofk_rec_113031}
+CBP=${CANDEVAL_CB_PROMPTS:-phaseFP/eval_pool_101203/compbench_prompts.json}
+G2P=${CANDEVAL_G2_PROMPTS:-phaseFP/eval_pool_101203/geneval2_prompts.json}
+STEPS=${CANDEVAL_STEPS:-40}
+OUT=phaseX/candeval/cand${CAND}
+mkdir -p "$OUT"
+
+CBIMG="$POOL/compbench/images/pool"
+G2IMG="$POOL/geneval2/images/pool"
+test -d "$CBIMG" && test -d "$G2IMG" || { echo "missing pool under $POOL" >&2; exit 2; }
+echo "[$(date --iso-8601=seconds)] candidate-level labels for cand${CAND}"
+echo "  compbench images: $(find "$CBIMG" -name "cand${CAND}.png" | wc -l)"
+echo "  geneval2  images: $(find "$G2IMG" -name "cand${CAND}.png" | wc -l)"
+
+for CAT in color shape texture spatial 3d_spatial numeracy non_spatial complex; do
+  D="$OUT/cb_${CAT}"
+  if [ -s "$D/scores.json" ]; then echo "  skip $CAT (done)"; continue; fi
+  t0=$(date +%s)
+  python3 phaseC/compbench_eval.py stage --images "$CBIMG" --prompts "$CBP" \
+    --steps "$STEPS" --image_name "cand${CAND}.png" --categories "$CAT" --out "$D"
+  python3 phaseC/compbench_eval.py run --dir "$D" --skip_done
+  python3 phaseC/compbench_eval.py collect --dir "$D" --routing_split val
+  echo "  TIMING cand${CAND} $CAT $(( $(date +%s) - t0 ))s"
+done
+
+D="$OUT/geneval2"
+if [ ! -s "$D/scores.json" ]; then
+  t0=$(date +%s)
+  python3 phaseC/geneval2_eval.py stage --images "$G2IMG" --pool "$G2P" \
+    --steps "$STEPS" --image_name "cand${CAND}.png" --out "$D"
+  python3 phaseC/geneval2_eval.py run --dir "$D" --method soft_tifa_gm --skip_done
+  python3 phaseC/geneval2_eval.py collect --dir "$D" --method soft_tifa_gm
+  echo "  TIMING cand${CAND} geneval2 $(( $(date +%s) - t0 ))s"
+fi
+
+python3 - "$OUT" "$CAND" <<'PY'
+import json, glob, os, sys
+out, cand = sys.argv[1], sys.argv[2]
+rec = {"candidate": int(cand), "compbench": {}, "geneval2": None}
+for p in sorted(glob.glob(f"{out}/cb_*/scores.json")):
+    d = json.load(open(p))
+    rec["compbench"][os.path.basename(os.path.dirname(p))[3:]] = {
+        "mean": d["mean"], "n": d["n"], "evaluator": d["evaluator"],
+        "per_prompt": [{"idx": r["idx"], "score": r["score"]} for r in d.get("per_prompt", [])]}
+g = f"{out}/geneval2/scores.json"
+if os.path.exists(g):
+    d = json.load(open(g)); rec["geneval2"] = {"mean": d["mean"], "n": d["n"]}
+rec["n_categories"] = len(rec["compbench"])
+json.dump(rec, open(f"{out}/candidate_labels.json", "w"))
+cb = [v["mean"] for v in rec["compbench"].values()]
+print(f"  cand{cand}: {len(cb)}/8 categories, macro mean "
+      f"{sum(cb)/max(len(cb),1):.4f}, geneval2 {rec['geneval2']}")
+PY
+echo "[$(date --iso-8601=seconds)] done -> $OUT"

@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+#BSUB -J sd-phaseG-oracle
+#BSUB -G s10396
+#BSUB -q training-parallel
+#BSUB -n 16
+#BSUB -W 72:00
+#BSUB -R "span[hosts=1]"
+#BSUB -R "select[mem>64000 && hname!='farm-gpu0504']"
+#BSUB -R "rusage[mem=64000]"
+#BSUB -M 64000
+#BSUB -gpu "num=4:mode=exclusive_process:gmodel=NVIDIAH200"
+#BSUB -cwd /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM
+#BSUB -o /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-phaseG-oracle-%J.out
+#BSUB -e /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-phaseG-oracle-%J.err
+# Phase G — branch-and-select, arm=oracle. Shared z_T and shared deterministic prefix mean both
+# arms see the IDENTICAL student input z_k; only the supervision target differs.
+set -euo pipefail
+export PATH="/software/cellgen/team361/ha11/envs/nichejepa/bin:$PATH"
+export HF_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/huggingface
+export TORCH_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/torch
+export XDG_CACHE_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/xdg
+export NCCL_NVLS_ENABLE=0
+source ~/.secrets/hf_token
+echo "[`date`] Phase G oracle | Host: $(hostname)"
+RUN=phaseG_oracle_$(date +%Y%m%d_%H%M%S)_${LSB_JOBID:-local}
+torchrun --standalone --nproc-per-node=4 phaseG/train_branch.py \
+  --arm oracle --cache_dir phaseG --output_dir checkpoints/phaseG/${RUN} \
+  --num_steps 6000 --num_warmup_steps 300 --lr 1e-5 \
+  --K 8 --cfg 7.0 --eta 0.9 --M 4 --branch_points 3 --gradient_checkpointing \
+  --save_every 2000 --log_every 10 \
+  --wandb_project sd-phaseG-branch --wandb_run_name "${RUN}"
+echo "[`date`] DONE oracle"

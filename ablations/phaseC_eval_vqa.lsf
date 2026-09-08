@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+#BSUB -J sd-phaseC-eval-vqa
+#BSUB -G s10396
+#BSUB -q training-parallel
+#BSUB -n 16
+#BSUB -W 12:00
+#BSUB -R "span[hosts=1]"
+#BSUB -R "select[mem>256000 && hname!='farm-gpu0504']"
+#BSUB -R "rusage[mem=256000]"
+#BSUB -M 256000
+#BSUB -gpu "num=4:mode=exclusive_process:gmodel=NVIDIAH200"
+#BSUB -cwd /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM
+#BSUB -o /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-phaseC-eval-vqa-%J.out
+#BSUB -e /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-phaseC-eval-vqa-%J.err
+
+# Phase C1 — VQAScore the val images (secondary/diagnostic) for the transfer ratio T.
+set -euo pipefail
+export PATH="/software/cellgen/team361/ha11/envs/nichejepa/bin:$PATH"
+export HF_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/huggingface
+export TORCH_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/torch
+export XDG_CACHE_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/xdg
+export NCCL_NVLS_ENABLE=0
+export TOKENIZERS_PARALLELISM=false
+source ~/.secrets/hf_token
+echo "[`date`] Phase C1 eval-vqa | Host: $(hostname)"
+torchrun --standalone --nproc-per-node=4 exp0/phaseA_score.py \
+  --out_root phaseC/eval --labels M1,B2,B4 --steps_list 4,8,28
+echo "[`date`] DONE -> phaseC/eval/scores"

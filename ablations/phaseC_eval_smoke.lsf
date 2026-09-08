@@ -1,0 +1,61 @@
+#!/usr/bin/env bash
+#BSUB -J sd-phaseC-eval-smoke
+#BSUB -G s10396
+#BSUB -q training-parallel
+#BSUB -n 4
+#BSUB -W 04:00
+#BSUB -R "span[hosts=1]"
+#BSUB -R "select[mem>64000]"
+#BSUB -R "rusage[mem=64000]"
+#BSUB -M 64000
+#BSUB -gpu "num=1:mode=exclusive_process:gmodel=NVIDIAH200"
+#BSUB -cwd /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM
+#BSUB -o /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-phaseC-eval-smoke-%J.out
+#BSUB -e /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-phaseC-eval-smoke-%J.err
+
+# Smoke-test the PRIMARY (selector-independent) evaluators of the Phase C1
+# pre-registration on Phase-A images that are already scored by VQAScore.
+# base@4 vs M1@4 is the ground truth: Phase A measured VQA 0.454 vs 0.785, so a
+# working BLIP-VQA / UniDet pipeline must also separate them by a wide margin.
+# If it does, the harness is trusted for the real B2-vs-B4 comparison.
+set -euo pipefail
+export PATH="/software/cellgen/team361/ha11/envs/nichejepa/bin:$PATH"
+export HF_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/huggingface
+export TORCH_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/torch
+export XDG_CACHE_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/xdg
+echo "[`date`] eval smoke | Host: $(hostname) | LSF: ${LSB_JOBID:-unknown}"
+nvidia-smi --query-gpu=name,memory.total --format=csv,noheader
+
+EV=phaseC/compbench_eval.py
+
+for M in base M1; do
+  for SPEC in "color:blip" "spatial:unidet_2d"; do
+    CAT="${SPEC%%:*}"; EVAL="${SPEC##*:}"
+    D=phaseC/eval_smoke/${M}_s4_${CAT}
+    echo ""
+    echo "=================== ${M} @4  ${CAT}  (${EVAL}) ==================="
+    python $EV run     --dir "$D" --evaluator "$EVAL"
+    python $EV collect --dir "$D" --evaluator "$EVAL"
+  done
+done
+
+echo ""
+echo "=========================== SUMMARY ==========================="
+python - <<'PY'
+import json, pathlib
+for cat in ("color", "spatial"):
+    got = {}
+    for m in ("base", "M1"):
+        p = pathlib.Path(f"phaseC/eval_smoke/{m}_s4_{cat}/scores.json")
+        if p.exists():
+            got[m] = json.loads(p.read_text())
+    if len(got) == 2:
+        b, m1 = got["base"]["mean"], got["M1"]["mean"]
+        print(f"{cat:8s} n={got['base']['n']:3d}  base@4={b:.4f}  M1@4={m1:.4f}  "
+              f"M1-base={m1-b:+.4f}")
+    else:
+        print(f"{cat:8s} INCOMPLETE ({sorted(got)})")
+PY
+
+echo "[`date`] DONE eval smoke"
+if command -v my-job-stats >/dev/null 2>&1; then my-job-stats -a -n -s; fi

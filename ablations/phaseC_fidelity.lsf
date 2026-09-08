@@ -1,0 +1,63 @@
+#!/usr/bin/env bash
+#BSUB -J sd-phaseC-fidelity
+#BSUB -G s10396
+#BSUB -q training-parallel
+#BSUB -n 16
+#BSUB -W 24:00
+#BSUB -R "span[hosts=1]"
+#BSUB -R "select[mem>256000 && hname!='farm-gpu0504']"
+#BSUB -R "rusage[mem=256000]"
+#BSUB -M 256000
+#BSUB -gpu "num=4:mode=exclusive_process:gmodel=NVIDIAH200"
+#BSUB -cwd /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM
+#BSUB -o /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-phaseC-fidelity-%J.out
+#BSUB -e /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-phaseC-fidelity-%J.err
+
+# Phase C1 — publication-scale FIDELITY gate: FID + CMMD vs COCO-val2017 real,
+# 5,000 COCO captions per set (the pre-registration asks for >=5k; Phase A's 640-image
+# CMMD was explicitly an internal gate).
+#
+# Sets: B4, B2, M1 at the headline 4 steps + the base teacher at 4 and 28 steps.
+# base@28 is the teacher's own distribution, which makes "did distillation preserve the
+# teacher's image distribution" answerable without leaning on the real-image reference.
+# 5 sets x 5,000 = 25,000 images.
+set -euo pipefail
+export PATH="/software/cellgen/team361/ha11/envs/nichejepa/bin:$PATH"
+export HF_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/huggingface
+export TORCH_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/torch
+export XDG_CACHE_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/xdg
+export TOKENIZERS_PARALLELISM=false
+export NCCL_NVLS_ENABLE=0
+source ~/.secrets/hf_token
+echo "[`date`] Phase C1 fidelity | Host: $(hostname)"
+nvidia-smi --query-gpu=index,name,memory.total --format=csv
+
+M1_CKPT=checkpoints/method/M1_pure_consistency_20260624_065127_55187/checkpoint_final.pt
+B2_CKPT=checkpoints/phaseC/phaseC_B2_20260724_230657_85487/checkpoint_final.pt
+B4_CKPT=checkpoints/phaseC/phaseC_B4_20260724_230700_85488/checkpoint_final.pt
+
+# pre-flight: fail in seconds rather than after hours of generation
+echo "=== metric maths guard ==="
+python3 phaseC/test_metrics.py
+
+python3 phaseC/build_eval_pool.py coco --n 5000 --out phaseC/fidelity/prompts.json
+
+echo "=== STAGE 1: generate 5,000 COCO captions per set ==="
+# students at CFG=1 as distilled; the base teacher at its natural CFG=7 (same
+# convention as Phase A, so the numbers are comparable with phaseA/fidelity_report.md)
+for spec in "M1:$M1_CKPT:1:4" "B2:$B2_CKPT:1:4" "B4:$B4_CKPT:1:4" "base:base:7:4,28"; do
+  IFS=: read -r LABEL CKPT CFG STEPS <<< "$spec"
+  echo "--- generate $LABEL (cfg=$CFG, steps=$STEPS) ---"
+  torchrun --standalone --nproc-per-node=4 exp0/phaseA_generate.py \
+    --out_root phaseC/fidelity --label "$LABEL" --checkpoint "$CKPT" --cfg "$CFG" \
+    --prompts_json phaseC/fidelity/prompts.json --steps_list "$STEPS"
+done
+
+echo "=== STAGE 2: FID + CMMD + precision/recall vs COCO-val2017 real ==="
+python3 phaseC/fidelity_eval.py --gen_root phaseC/fidelity/images \
+  --models B4,B2,M1,base --steps 4,28 --n_ref 5000 --min_gen 1000 \
+  --out phaseC/fidelity_report.md
+
+# Combined verdict: ablations/phaseC_verdict.lsf (avoids concurrent writers).
+echo "[`date`] DONE -> phaseC/fidelity_report.md"
+if command -v my-job-stats >/dev/null 2>&1; then my-job-stats -a -n -s; fi

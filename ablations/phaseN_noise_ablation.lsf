@@ -1,0 +1,76 @@
+#!/usr/bin/env bash
+#BSUB -J sd-phaseN-noise-abl
+#BSUB -G s10396
+#BSUB -q training-parallel
+#BSUB -n 4
+#BSUB -W 4:00
+#BSUB -R "span[hosts=1]"
+#BSUB -R "select[mem>128000 && hname!='farm-gpu0504']"
+#BSUB -R "rusage[mem=128000]"
+#BSUB -M 128000
+#BSUB -gpu "num=1:mode=exclusive_process:gmem=40G"
+#BSUB -cwd /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM
+#BSUB -o /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-phaseN-noiseabl-%J.out
+#BSUB -e /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-phaseN-noiseabl-%J.err
+
+# Does the hidden-state reference energy survive INDEPENDENT noise?
+#
+# The 38.75% we measured used common random numbers: reference and candidate were noised with the
+# same epsilon at the same sigma, so the two hidden states differed only in the image. A training
+# loop is not in that regime -- a candidate's noisy state comes from its own sampling trajectory.
+# Restoring common noise costs N extra denoiser forwards per step (re-noise x_hat with the cached
+# epsilon); reusing the state the student already computed is free.
+#
+# This decides which trainer to build, so it is measured rather than assumed. Everything else is
+# held fixed: same images, same VQAScore labels, same layer, same sigma.
+set -euo pipefail
+
+export PATH="/software/cellgen/team361/ha11/envs/nichejepa/bin:$PATH"
+export HF_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/huggingface
+export TORCH_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/torch
+export XDG_CACHE_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/xdg
+export TOKENIZERS_PARALLELISM=false
+export WANDB_MODE=disabled
+source ~/.secrets/hf_token
+
+: "${SRC:?set SRC to a completed phaseN/refsim_<job> directory}"
+JOB=${LSB_JOBID:-local}
+ROOT="phaseN/noise_ablation_${JOB}"
+if [[ -e "$ROOT" ]]; then echo "Refusing to overwrite $ROOT" >&2; exit 2; fi
+mkdir -p "$ROOT"
+
+echo "[$(date --iso-8601=seconds)] Phase-N noise ablation | job=$JOB"
+nvidia-smi --query-gpu=index,name,memory.total --format=csv
+
+for MODE in common independent; do
+  FLAG=""
+  [[ "$MODE" == independent ]] && FLAG="--independent_noise"
+  echo "=== $MODE noise ==="
+  python3 phaseN/ref_similarity.py \
+    --manifest "$SRC/pool_manifest.json" \
+    --images_root "$SRC/gen/images/Teacher" \
+    --scores_dir "$SRC/scores" \
+    --steps 8 --K 4 --variance 0.999 \
+    --repa --repa_layer 8 --repa_sigma 0.5 $FLAG \
+    --out "$ROOT/refsim_${MODE}.json" | tail -5
+done
+
+python3 - <<PY
+import json
+out={}
+for mode in ("common","independent"):
+    s=json.load(open(f"$ROOT/refsim_{mode}.json"))['summary']['spaces']['repa']
+    out[mode]={"rho":s['headroom_recovery_rho'],"ci":s['rho_ci'],
+               "within_spearman":s['within_spearman'],"ci_rs":s['within_spearman_ci'],
+               "mean_cosine":s['mean_cosine']}
+print(json.dumps(out, indent=2))
+d=out['common']['rho']-out['independent']['rho']
+print(f"\nrho: common {out['common']['rho']*100:.2f}%  independent {out['independent']['rho']*100:.2f}%"
+      f"  (drop {d*100:.2f} points)")
+print(f"within-prompt Spearman: common {out['common']['within_spearman']:+.4f}  "
+      f"independent {out['independent']['within_spearman']:+.4f}")
+json.dump(out, open("$ROOT/verdict.json","w"), indent=2)
+PY
+
+echo "[$(date --iso-8601=seconds)] complete: $ROOT"
+if command -v my-job-stats >/dev/null 2>&1; then my-job-stats -a -n -s; fi

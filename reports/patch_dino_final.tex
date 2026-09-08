@@ -1,0 +1,240 @@
+\documentclass[11pt,a4paper]{article}
+
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath,amssymb,amsfonts}
+\usepackage{booktabs}
+\usepackage{graphicx}
+\usepackage{microtype}
+\usepackage{hyperref}
+
+\hypersetup{
+    colorlinks=true,
+    linkcolor=blue,
+    citecolor=blue,
+    urlcolor=blue
+}
+
+\DeclareMathOperator*{\argmax}{arg\,max}
+\DeclareMathOperator{\Dec}{Dec}
+\DeclareMathOperator{\sg}{sg}
+
+\title{\textbf{Distillation Pipeline and Candidate Selection Mechanics}}
+\date{}
+
+\begin{document}
+
+\maketitle
+
+\subsection*{A. The teacher: SD3.5-Medium as a rectified flow}
+
+SD3.5-Medium generates in a VAE latent space. At 512px a latent is $z \in \mathbb{R}^{16\times 64\times 64}$, so $D = 16\cdot 64\cdot 64 = 65{,}536$ numbers.
+
+Rectified flow defines a straight path between a clean latent $x_0$ and Gaussian noise $\varepsilon \sim \mathcal{N}(0,I)$:
+\begin{equation}
+z_\sigma = (1-\sigma)\,x_0 + \sigma\,\varepsilon, \qquad \sigma \in [0,1].
+\end{equation}
+
+Differentiating gives the velocity that the network learns:
+\begin{equation}
+v = \frac{dz_\sigma}{d\sigma} = \varepsilon - x_0.
+\end{equation}
+
+The network $v_\theta(z_\sigma, \sigma, c)$ is an MMDiT. The caption $c$ enters twice: as a token sequence (T5 + CLIP) and as a pooled vector (CLIP-L + CLIP-G, 2048-d). Sampling is Euler integration down the $\sigma$ grid, which is exact for a straight path:
+\begin{equation}
+z_{k+1} = z_k + (\sigma_{k+1} - \sigma_k)\, v_\theta(z_k, \sigma_k, c).
+\end{equation}
+
+The grid runs $\sigma_0 \approx 1$ (noise) down to $\sigma_K = 0$ (image), with a timestep shift $\lambda = 3$ applied as $\sigma \mapsto \lambda\sigma / (1 + (\lambda-1)\sigma)$.
+
+The teacher uses classifier-free guidance with $w = 7$:
+\begin{equation}
+v^{\text{cfg}} = v_\theta(z,\sigma,\varnothing) + w\big(v_\theta(z,\sigma,c) - v_\theta(z,\sigma,\varnothing)\big).
+\end{equation}
+
+\subsection*{B. Building the candidate pool (offline, teacher frozen)}
+
+Each training example is a COCO caption $c$ \textbf{paired with its real photograph} $x^{\text{ref}}$. That photograph is what makes this method work, and it is the whole reason DINO has anything to say. The captions come from COCO \texttt{train2017}; a caption string that COCO attaches to more than one photograph is kept only for its first photograph, so every caption maps to exactly one reference. The results below use a random pool of 3{,}000 such captions. The evaluation references (Section~G) are drawn from \texttt{val2017}, so no training photograph or caption appears in any evaluation set.
+
+For each caption we draw $N = 4$ candidates at $512\times512$ with the same 8-step CFG-7 Euler sampler that Section~E rolls out, so a cached candidate and its training trajectory are the same object. Candidate $j$ uses seed $s_j = \texttt{seed\_base} + j$ with $\texttt{seed\_base} = 1000\cdot\texttt{idx}$, so the pool is exactly reproducible from an integer:
+\begin{equation}
+\varepsilon^{(j)} \sim \mathcal{N}(0,I) \ \text{ seeded by } s_j, \qquad \hat{x}_0^{(j)} = \text{Euler}_{K=8}\big(\varepsilon^{(j)};\, v^{\text{cfg}}, c\big).
+\end{equation}
+
+We decode each one to an image, $I_j = \Dec(\hat{x}_0^{(j)})$. Four candidates, same caption, same teacher --- they differ only by their noise seed. The candidate rollouts here and the selection index in Section~D are both computed with the same frozen teacher weights $\theta_T$ that supply the distillation targets in Section~E, so the entire pipeline contains exactly one set of trainable weights: the student's.
+
+\subsection*{C. The DINO score --- this is the part that changed}
+
+Run a frozen DINOv2 on an image. We use DINOv2-B (\texttt{facebook/dinov2-base}, $d = 768$) with its standard preprocessing: resize the short side to 256, centre-crop to $224\times224$, ImageNet normalisation. Generated candidates are decoded by the SD3.5 VAE at $512\times512$; the reference photograph is first resized (squashed, aspect ratio not preserved) to $512\times512$ with bicubic interpolation so that both enter the processor as squares and the centre crop discards nothing. Squashing was a deliberate choice: cropping the photograph loses captioned objects at the edges and costs about 2.6 points of selection headroom in an ablation. The model returns $1 + P$ tokens: one CLS token and $P = 256$ patch tokens (a $16\times16$ grid at 224px with patch size 14).
+\begin{equation}
+f(I) = \big[\,h_0,\; h_1, \ldots, h_P\,\big], \qquad h_p \in \mathbb{R}^d.
+\end{equation}
+
+\noindent\textbf{What we used to do (CLS).} Take the single global token and normalise it:
+\begin{equation}
+u^{\text{cls}} = \frac{h_0}{\lVert h_0 \rVert}.
+\end{equation}
+
+\noindent\textbf{What we do now (mean-pooled patches).} Throw the CLS token away. Average the $P$ patch tokens, then normalise:
+\begin{equation}
+u^{\text{pat}} = \frac{\frac{1}{P}\sum_{p=1}^{P} h_p}{\Big\lVert \frac{1}{P}\sum_{p=1}^{P} h_p \Big\rVert}.
+\end{equation}
+
+That single change is the whole difference between the two arms. CLS is a global ``what kind of image is this'' summary. The patch mean keeps spatial and object-level structure, which is what carries compositional content.
+
+Do the same to the reference photograph to get $r = u^{\text{pat}}(x^{\text{ref}})$. The score of candidate $j$ is a cosine similarity:
+\begin{equation}
+S_j = \big\langle\, u^{\text{pat}}(I_j),\; r \,\big\rangle = \cos\big(u^{\text{pat}}(I_j),\, r\big).
+\end{equation}
+
+In plain words: \textbf{how close does this generated image look to the real photograph that the caption actually describes}, measured in patch-averaged DINO space. There is no text encoder anywhere in this score. The caption enters only through its photograph.
+
+\subsection*{D. Selection}
+
+Take the best of the four, hard:
+\begin{equation}
+j^\star = \argmax_{j \in \{1,\ldots,N\}} S_j.
+\end{equation}
+
+This is computed once, offline, and frozen into a manifest keyed by caption index. It never changes during training and no gradient ever flows through DINO. The baseline \texttt{B2} is identical in every respect except that $j^\star$ is replaced by a fixed uniform draw, which is also stored in the manifest and therefore shared by all three training seeds. So the entire experimental contrast is \emph{which one of four teacher trajectories the student is taught to imitate}; the training seed changes only the state offsets $\Delta_k$ and the caption order, never the selection.
+
+\subsection*{E. Distillation}
+
+Roll out \textbf{only} the winning candidate, using the teacher with CFG 7 and $K = 8$ steps, to get a full trajectory $z_0, z_1, \ldots, z_8$. With the shift $\lambda = 3$ the 8-step grid is
+\begin{equation}
+\sigma = (1,\; 0.948,\; 0.883,\; 0.801,\; 0.694,\; 0.548,\; 0.338,\; 0.009,\; 0),
+\end{equation}
+and the network is conditioned on the timestep $t_k = 1000\,\sigma_k$. The rollout is re-run from the seed at every visit rather than stored, which is cheap (16 teacher forward passes: 8 steps, each with a conditional and an unconditional branch) and bit-reproducible.
+
+Pick the supervised part of the trajectory. The scoring window $[0.4, 0.9]$ gives $\mathcal{K} = \{3,4,5,6,7\}$, so $K_w = 5$ states per update.
+
+For each $k \in \mathcal{K}$, build the teacher's target. The realised chord across the teacher's own step is
+\begin{equation}
+\bar{v}_k = \frac{z_{k+1} - z_k}{\sigma_{k+1} - \sigma_k},
+\end{equation}
+and the Tweedie estimate of the clean latent implied by that chord is
+\begin{equation}
+\tilde{x}_0^{(k)} = z_k - \sigma_k \bar{v}_k.
+\end{equation}
+
+This is exact algebra, not an approximation: substituting $z_k = (1-\sigma_k)x_0 + \sigma_k\varepsilon$ and $\bar v = \varepsilon - x_0$ recovers $x_0$ identically.
+
+Now place the student at a \textbf{noisier} state. Draw $\Delta_k \sim \mathcal{U}\{1,2,3\}$ independently for each $k \in \mathcal{K}$ and afresh on every visit to the caption, and set $s = k - \Delta_k$. The five student inputs $z_{k-\Delta_k}$ are batched into one forward pass. The student makes one conditional forward pass --- no CFG, no unconditional branch --- and forms its own clean-latent estimate:
+\begin{equation}
+\hat{x}_0^{(s)} = z_s - \sigma_s\, v_\theta(z_s, \sigma_s, c).
+\end{equation}
+
+The loss is a pseudo-Huber distance in $x_0$ space, averaged over the window:
+\begin{equation}
+\mathcal{L}(\theta) = \frac{1}{K_w}\sum_{k \in \mathcal{K}} \left[ \sqrt{\big\lVert \hat{x}_0^{(k-\Delta_k)} - \sg\big[\tilde{x}_0^{(k)}\big] \big\rVert_2^2 + c^2} \;-\; c \right], \qquad c = 0.00054\sqrt{D} \approx 0.138.
+\end{equation}
+
+The norm is summed over all $D$ latent dimensions, then square-rooted, so this is one distance per sample rather than a per-pixel average. $\sg[\cdot]$ is stop-gradient: the teacher's target is a constant.
+
+\vspace{0.5em}
+\noindent\textbf{Teacher and target network.} The teacher is the pretrained SD3.5-Medium network with frozen weights $\theta_T$ (bf16, no gradient), always evaluated with classifier-free guidance $w = 7$. It is never updated: there is no exponential moving average, no momentum target, and no stop-gradient copy of the student. The student $v_\theta$ is initialised from $\theta_T$ and is the only network that trains. Every target $\tilde{x}_0^{(k)}$ is a deterministic function of the frozen teacher's own trajectory $\{z_k\}$, re-rolled from the selected candidate's seed on every visit, so the target for a given caption and $k$ is identical across epochs and independent of $\theta$. This differs from consistency models (Song et al., 2023; Song and Dhariwal, 2023), whose target is produced by an EMA or stop-gradient copy of the student at the adjacent point, and from latent consistency models (Luo et al., 2023), which maintain an EMA target network. We regress onto fixed teacher targets, so there is no bootstrapping and no target drift; the student's role in ``consistency'' is purely positional, standing $\Delta_k$ states noisier than the point at which the teacher's estimate was taken. The only randomness per visit is $\Delta_k$.
+
+\vspace{0.5em}
+\noindent\textbf{Why this is consistency distillation in one sentence.} The student stands at a noisier point $z_{k-\Delta}$ and is required to name the same clean image that the teacher only reaches from the less noisy point $z_k$ --- so it learns to skip ahead, and composing those skips is what collapses 8 teacher steps into 4 student steps.
+
+\vspace{0.5em}
+\noindent\textbf{Training details.} Each optimiser step processes one caption: one teacher rollout of its selected candidate and the $K_w = 5$ batched student forward passes above, so the loss is averaged over five latents per step. Training runs for 6{,}000 steps on a single H200, i.e.\ two passes over the 3{,}000 captions in a seeded random order, about 1.6 hours per run. The optimiser is AdamW with $\beta = (0.9, 0.999)$, $\epsilon = 10^{-8}$, no weight decay, learning rate $10^{-5}$ after a 300-step linear warm-up and constant thereafter. The student keeps fp32 master weights and runs its forward pass under bf16 autocast with gradient checkpointing; the teacher, the three text encoders (CLIP-L, CLIP-G, T5-XXL) and the VAE are frozen in bf16. Gradients are clipped to a global norm of 1.0. The raw gradient norm of this loss is of order $10^2$ throughout training, so the clip is active on every step and the update is effectively a normalised-gradient step of size $\eta = 10^{-5}$; every arm shares this, so it does not affect the comparison, but it means the learning rate and the clip threshold are not separately tunable. The reported checkpoint is the raw student weights after the last step; no weight averaging is applied. Three runs per arm differ only in the training seed, which controls the $\Delta_k$ draws and the caption order.
+
+\subsection*{F. Sampling the trained student}
+
+Because the student was trained with a single conditional forward against CFG-7 teacher trajectories, guidance is \textbf{absorbed into its conditional prediction}. It must therefore be sampled at $w = 1$:
+\begin{equation}
+z_{k+1} = z_k + (\sigma_{k+1}-\sigma_k)\, v_\theta(z_k,\sigma_k,c), \qquad 4 \text{ steps}.
+\end{equation}
+
+Sampling it at 7 would apply guidance twice and halve its scores. That is a real bug we hit and fixed, and every number below is verified to have come from a cfg-1.0 evaluation. The 4-step grid is the same shifted schedule at $K = 4$, $\sigma = (1,\; 0.858,\; 0.602,\; 0.009,\; 0)$, at $512\times512$.
+
+\subsection*{G. What this buys, measured}
+
+\noindent\textbf{Evaluation protocol.} Every arm is evaluated on one sealed prompt pool: 2{,}398 T2I-CompBench prompts (300 per category for color, shape, texture, 3D-spatial, non-spatial, complex and numeracy; 298 for 2D-spatial) and the 800 GenEval2 prompts. One image is generated per prompt with the seed fixed to the prompt index, so every arm and seed sees identical noise. CompBench uses the official scorers: BLIP-VQA for color, shape and texture; UniDet for spatial, 3D-spatial and numeracy; CLIPScore for non-spatial; the 3-in-1 score for complex. GenEval2 uses the Soft-TIFA score with Qwen3-VL as the judge, reported as the mean over prompts of the geometric mean of a prompt's atom scores. Confidence intervals come from a hierarchical bootstrap that resamples training seeds and prompts jointly, and every delta is paired on identical prompts against the random-selection baseline trained with the same seeds.
+
+Against the matched random-selection baseline, 3 seeds, hierarchical seed$\times$prompt bootstrap:
+
+\begin{table}[ht]
+\centering
+\begin{tabular}{lcc}
+\toprule
+Selector & CompBench & GenEval2 \\
+\midrule
+Mean-pooled patches & \textbf{+0.0140 [+0.0051, +0.0237]} & \textbf{+0.0217 [+0.0024, +0.0408]} \\
+CLS token & +0.0036 [$-$0.0062, +0.0142] & +0.0100 [$-$0.0080, +0.0286] \\
+VQAScore (reference) & +0.0233 [+0.0097, +0.0364] & +0.0234 [+0.0055, +0.0405] \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\noindent Head-to-head, patch against CLS on identical prompts: +0.0104 on CompBench overall, positive on 3/3 seeds.
+
+\subsection*{H. Absolute scores per category}
+
+The deltas above are paired contrasts. Tables~\ref{tab:geneval2_skills}--\ref{tab:compbench_categories} give the absolute scores of every model on the same sealed pools, so each arm can be read on its own and against the teacher. Two reference rows are added: the 28-step teacher and the 8-step CFG-7 teacher whose trajectories the students were distilled from.
+
+Three things to read off the tables. First, every 4-step student beats the 8-step teacher it was distilled from on CompBench (Table~\ref{tab:compbench_categories}), and the scored arms beat it by a wider margin. Second, on the GenEval2 geometric mean (Table~\ref{tab:geneval2_skills}) the teachers score \emph{below} every student while winning the arithmetic atom mean, the object and count skills, CompBench and VQAScore. This is a property of the soft metric, not of the images. On strict accuracy, the share of prompts with every atom scored above 0.5, the 28-step teacher leads (10.2\% against 6.7--8.2\% for the students), and it leads again with a 0.95 threshold (7.4\% against 3.2--4.8\%). The soft score reverses the order because it gives partial credit: the judge assigns the teacher's wrong atoms a probability near zero (its atoms are close to bimodal, 59\% above 0.95 and 32\% below 0.05), whereas the students' wrong atoms, mostly attribute and position atoms, receive mid-range probabilities. A single near-zero atom sends a prompt's geometric mean to zero, so 61\% of the teacher's prompts collapse against 35--39\% for the students, even though the teacher fails no more atoms per prompt (2.4 against 2.2). In a paired comparison the teacher collapses alone on about 31\% of prompts and a student alone on about 8\%. The geometric mean should therefore not be read as evidence that the students beat the teacher; the strict accuracy and the arithmetic atom mean both say otherwise. Third, the largest per-skill gain of DINO-patch selection is on \emph{position} (51.4 against 45.9 for naive), consistent with mean-pooled patches carrying layout, and its advantage grows with prompt complexity (Table~\ref{tab:geneval2_complexity}).
+
+\begin{table}[ht]
+\centering
+\caption{GenEval2 (Soft-TIFA, Qwen3-VL judge), $\times 100$, on the sealed 800-prompt pool. \emph{Overall} is the official score, the mean over prompts of the geometric mean of a prompt's atom scores ($\pm$ standard deviation over training seeds). Skill columns are the mean score of the atoms tagged with that skill. \emph{Atom mean} is the arithmetic mean over all atoms. \emph{Collapsed} is the share of prompts whose geometric mean falls below 0.05. Teacher and base rows are single deterministic runs. Bold marks the best 4-step distilled arm in each column.}
+\label{tab:geneval2_skills}
+\resizebox{\textwidth}{!}{%
+\begin{tabular}{l c c c ccccc c c}
+\toprule
+Model & Steps / CFG & Seeds & Overall & Object & Count & Attribute & Position & Verb & Atom mean & Collapsed (\%) \\
+\midrule
+Teacher, 28 steps, CFG 7 & 28 / 7 & 1 & 17.05 & 87.6 & 44.7 & 66.1 & 45.7 & 17.4 & 64.7 & 60.6 \\
+Teacher, 8 steps, CFG 7 (source) & 8 / 7 & 1 & 17.58 & 83.7 & 40.6 & 67.5 & 42.5 & 18.3 & 62.1 & 54.8 \\
+Base, 4 steps, CFG 7 & 4 / 7 & 1 & 7.32 & 43.2 & 20.8 & 49.9 & 26.9 & 4.4 & 36.2 & 79.0 \\
+\midrule
+Naive CD (random pick) & 4 / 1 & 3 & 20.73 $\pm$ 0.94 & 80.5 & 34.8 & 69.5 & 45.9 & 21.4 & 59.8 & 38.5 \\
+Scored CD, DINO CLS & 4 / 1 & 3 & 21.73 $\pm$ 0.76 & 82.7 & 34.4 & 70.1 & 48.5 & 24.2 & 60.9 & 37.0 \\
+Scored CD, DINO patches & 4 / 1 & 3 & 22.89 $\pm$ 1.01 & 82.8 & 34.6 & 70.5 & \textbf{51.4} & 26.0 & 61.4 & 35.4 \\
+Scored CD, VQAScore & 4 / 1 & 3 & \textbf{23.06 $\pm$ 0.15} & \textbf{84.3} & \textbf{35.6} & \textbf{70.7} & 47.8 & \textbf{26.6} & \textbf{62.1} & \textbf{34.8} \\
+\bottomrule
+\end{tabular}}
+\end{table}
+
+\begin{table}[ht]
+\centering
+\caption{GenEval2 by prompt complexity: mean prompt score ($\times 100$) in each atom-count bucket, 100 prompts per bucket, averaged over training seeds where applicable. Bold marks the best 4-step distilled arm in each column.}
+\label{tab:geneval2_complexity}
+\begin{tabular}{l cccccccc}
+\toprule
+Model & 3 & 4 & 5 & 6 & 7 & 8 & 9 & 10 \\
+\midrule
+Teacher, 28 steps, CFG 7 & 36.3 & 32.5 & 22.5 & 19.9 & 12.8 & 4.7 & 5.5 & 2.3 \\
+Teacher, 8 steps, CFG 7 (source) & 34.2 & 35.6 & 23.2 & 18.1 & 11.2 & 9.0 & 4.9 & 4.2 \\
+Base, 4 steps, CFG 7 & 21.0 & 8.3 & 8.7 & 6.9 & 3.9 & 4.7 & 3.0 & 2.1 \\
+\midrule
+Naive CD (random pick) & 38.9 & 34.2 & 22.8 & 20.9 & 15.9 & 13.6 & 11.7 & 7.8 \\
+Scored CD, DINO CLS & 43.2 & 34.2 & 24.4 & 22.2 & 15.5 & 13.7 & 13.0 & 7.5 \\
+Scored CD, DINO patches & 41.6 & \textbf{35.6} & \textbf{25.4} & \textbf{24.7} & \textbf{17.7} & \textbf{15.3} & \textbf{14.3} & 8.6 \\
+Scored CD, VQAScore & \textbf{48.4} & 33.4 & 24.6 & 24.1 & 17.3 & 14.0 & 13.2 & \textbf{9.4} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{table}[ht]
+\centering
+\caption{T2I-CompBench on the sealed 2{,}398-prompt pool, official scorers, one image per prompt. \emph{Mean} is the unweighted mean of the eight categories ($\pm$ standard deviation over training seeds); category columns are averaged over seeds. Bold marks the best 4-step distilled arm in each column.}
+\label{tab:compbench_categories}
+\resizebox{\textwidth}{!}{%
+\begin{tabular}{l c cccccccc}
+\toprule
+Model & Mean & Color & Shape & Texture & Spatial & 3D-spatial & Numeracy & Non-spatial & Complex \\
+\midrule
+Teacher, 28 steps, CFG 7 & 0.5053 & 0.7977 & 0.5732 & 0.7427 & 0.2716 & 0.3662 & 0.5915 & 0.3154 & 0.3837 \\
+Teacher, 8 steps, CFG 7 (source) & 0.4544 & 0.7142 & 0.4988 & 0.6750 & 0.2425 & 0.3276 & 0.5518 & 0.3093 & 0.3163 \\
+Base, 4 steps, CFG 7 & 0.2557 & 0.4168 & 0.2921 & 0.4053 & 0.0582 & 0.1406 & 0.2574 & 0.2707 & 0.2048 \\
+\midrule
+Naive CD (random pick) & 0.4584 $\pm$ 0.0075 & 0.7840 & 0.5435 & 0.7081 & 0.1783 & 0.2806 & 0.5015 & 0.3080 & 0.3634 \\
+Scored CD, DINO CLS & 0.4620 $\pm$ 0.0046 & 0.7904 & 0.5388 & 0.6983 & 0.1878 & 0.2830 & 0.5205 & 0.3088 & 0.3685 \\
+Scored CD, DINO patches & 0.4725 $\pm$ 0.0014 & 0.8041 & 0.5525 & \textbf{0.7172} & 0.2061 & 0.2839 & 0.5339 & 0.3093 & 0.3727 \\
+Scored CD, VQAScore & \textbf{0.4817 $\pm$ 0.0106} & \textbf{0.8120} & \textbf{0.5651} & 0.7157 & \textbf{0.2332} & \textbf{0.3063} & \textbf{0.5366} & \textbf{0.3096} & \textbf{0.3754} \\
+\bottomrule
+\end{tabular}}
+\end{table}
+
+\end{document}

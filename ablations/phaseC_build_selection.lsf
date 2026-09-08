@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+#BSUB -J sd-phaseC-build-sel
+#BSUB -G s10396
+#BSUB -q training-parallel
+#BSUB -n 16
+#BSUB -W 48:00
+#BSUB -R "span[hosts=1]"
+#BSUB -R "select[mem>256000 && hname!='farm-gpu0504']"
+#BSUB -R "rusage[mem=256000]"
+#BSUB -M 256000
+#BSUB -gpu "num=4:mode=exclusive_process:gmodel=NVIDIAH200"
+#BSUB -cwd /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM
+#BSUB -o /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-phaseC-build-sel-%J.out
+#BSUB -e /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-phaseC-build-sel-%J.err
+
+# Phase C1 stage 0 — offline candidate-selection cache (prereq for all variants).
+# Roll N=4 frozen-teacher candidates per CompBench-TRAIN prompt (~5600), VQA-score
+# endpoints, cache oracle/random selection indices -> phaseC/selection_rank*.jsonl.
+# 256GB RAM for the 22GB VQA checkpoint x4 ranks (Exp-0 OOM lesson).
+set -euo pipefail
+export PATH="/software/cellgen/team361/ha11/envs/nichejepa/bin:$PATH"
+export HF_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/huggingface
+export TORCH_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/torch
+export XDG_CACHE_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/xdg
+export NCCL_NVLS_ENABLE=0
+export TOKENIZERS_PARALLELISM=false
+source ~/.secrets/hf_token
+echo "[`date`] Phase C1 build-selection | Host: $(hostname) | LSF: ${LSB_JOBID:-unknown}"
+nvidia-smi --query-gpu=index,name,memory.total --format=csv
+torchrun --standalone --nproc-per-node=4 phaseC/build_selection.py --per_category 700
+echo "[`date`] DONE -> phaseC/selection_rank*.jsonl"
+if command -v my-job-stats >/dev/null 2>&1; then my-job-stats -a -n -s; fi

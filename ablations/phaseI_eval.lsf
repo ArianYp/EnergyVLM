@@ -1,0 +1,110 @@
+#!/usr/bin/env bash
+#BSUB -J sd-phaseI-eval
+#BSUB -G s10396
+#BSUB -q training-parallel
+#BSUB -n 16
+#BSUB -W 24:00
+#BSUB -R "span[hosts=1]"
+#BSUB -R "select[mem>256000 && hname!='farm-gpu0504']"
+#BSUB -R "rusage[mem=256000]"
+#BSUB -M 256000
+#BSUB -gpu "num=4:mode=exclusive_process:gmodel=NVIDIAH200"
+#BSUB -cwd /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM
+#BSUB -o /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-phaseI-eval-%J.out
+#BSUB -e /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-phaseI-eval-%J.err
+
+# Held-out causal verdict for Phase I. The submission must depend on all three
+# successful training jobs and pass their job ids through the PHASEI_*_JOB vars.
+set -euo pipefail
+
+export PATH="/software/cellgen/team361/ha11/envs/nichejepa/bin:$PATH"
+export HF_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/huggingface
+export TORCH_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/torch
+export XDG_CACHE_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/xdg
+export TOKENIZERS_PARALLELISM=false
+export NCCL_NVLS_ENABLE=0
+export WANDB_MODE=online
+source ~/.secrets/hf_token
+
+: "${PHASEI_GROUP:?missing PHASEI_GROUP}"
+: "${PHASEI_PLACEBO_JOB:?missing PHASEI_PLACEBO_JOB}"
+: "${PHASEI_PREFERENCE_JOB:?missing PHASEI_PREFERENCE_JOB}"
+: "${PHASEI_REPA_JOB:?missing PHASEI_REPA_JOB}"
+
+JOB=${LSB_JOBID:-local}
+ROOT="phaseI/eval_${JOB}"
+if [[ -e "$ROOT" ]]; then
+  echo "Refusing to overwrite existing evaluation root $ROOT" >&2
+  exit 2
+fi
+mkdir -p "$ROOT"
+
+M1_CKPT=checkpoints/method/M1_pure_consistency_20260624_065127_55187/checkpoint_final.pt
+PLACEBO_CKPT="checkpoints/phaseI/phaseI_placebo_${PHASEI_PLACEBO_JOB}/checkpoint_final.pt"
+PREFERENCE_CKPT="checkpoints/phaseI/phaseI_preference_${PHASEI_PREFERENCE_JOB}/checkpoint_final.pt"
+REPA_CKPT="checkpoints/phaseI/phaseI_preference_repa_${PHASEI_REPA_JOB}/checkpoint_final.pt"
+for checkpoint in "$M1_CKPT" "$PLACEBO_CKPT" "$PREFERENCE_CKPT" "$REPA_CKPT"; do
+  test -s "$checkpoint"
+done
+
+echo "[$(date --iso-8601=seconds)] Phase I held-out evaluation | job=$JOB root=$ROOT"
+nvidia-smi --query-gpu=index,name,memory.total --format=csv
+
+echo "=== Generate held-out CompBench-val and GenEval2 samples ==="
+python3 phaseC/build_eval_pool.py geneval2 --out "$ROOT/geneval2/prompts.json"
+for spec in "M1:$M1_CKPT" "Placebo:$PLACEBO_CKPT" "Preference:$PREFERENCE_CKPT" "PreferenceREPA:$REPA_CKPT"; do
+  LABEL=${spec%%:*}
+  CKPT=${spec#*:}
+  torchrun --standalone --nproc-per-node=4 exp0/phaseA_generate.py \
+    --out_root "$ROOT/compbench" --label "$LABEL" --checkpoint "$CKPT" --cfg 1 \
+    --split val --steps_list 4 --per_category 1000
+  torchrun --standalone --nproc-per-node=4 exp0/phaseA_generate.py \
+    --out_root "$ROOT/geneval2" --label "$LABEL" --checkpoint "$CKPT" --cfg 1 \
+    --prompts_json "$ROOT/geneval2/prompts.json" --steps_list 4
+done
+
+echo "=== Official T2I-CompBench evaluators ==="
+for MODEL in M1 Placebo Preference PreferenceREPA; do
+  for CAT in color shape texture spatial 3d_spatial numeracy non_spatial complex; do
+    D="$ROOT/compbench_scores/${MODEL}_s4_${CAT}"
+    python3 phaseC/compbench_eval.py stage \
+      --images "$ROOT/compbench/images/${MODEL}" --prompts "$ROOT/compbench/prompts.json" \
+      --steps 4 --categories "$CAT" --out "$D"
+    python3 phaseC/compbench_eval.py run --dir "$D" --skip_done
+    python3 phaseC/compbench_eval.py collect --dir "$D" --routing_split val
+  done
+done
+
+echo "=== Official GenEval2 Soft-TIFA ==="
+for MODEL in M1 Placebo Preference PreferenceREPA; do
+  D="$ROOT/geneval2_scores/${MODEL}_s4"
+  python3 phaseC/geneval2_eval.py stage --images "$ROOT/geneval2/images/${MODEL}" \
+    --pool "$ROOT/geneval2/prompts.json" --steps 4 --out "$D"
+  python3 phaseC/geneval2_eval.py run --dir "$D" --method soft_tifa_gm --skip_done
+  python3 phaseC/geneval2_eval.py collect --dir "$D" --method soft_tifa_gm
+done
+
+echo "=== Paired causal contrasts ==="
+python3 phaseC/eval_analyze.py --scores_dir "$ROOT/compbench_scores" --step 4 \
+  --models Preference,Placebo,M1 --geneval2_dir "$ROOT/geneval2_scores" \
+  --fidelity "$ROOT/not_run_yet.json" --diversity "$ROOT/not_run_yet.json" \
+  --title "Phase I preference signal" --out "$ROOT/preference_vs_placebo.md"
+python3 phaseC/eval_analyze.py --scores_dir "$ROOT/compbench_scores" --step 4 \
+  --models PreferenceREPA,Preference,Placebo --geneval2_dir "$ROOT/geneval2_scores" \
+  --fidelity "$ROOT/not_run_yet.json" --diversity "$ROOT/not_run_yet.json" \
+  --title "Phase I REPA increment" --out "$ROOT/preference_repa_vs_preference.md"
+
+echo "=== Matched-prompt internal fidelity gate ==="
+python3 phaseC/fidelity_eval.py --gen_root "$ROOT/compbench/images" \
+  --models M1,Placebo,Preference,PreferenceREPA --steps 4 --n_ref 2398 --min_gen 2000 \
+  --boot 1000 --out "$ROOT/fidelity.md"
+
+echo "=== Immutable W&B evaluation record ==="
+python3 phaseI/log_eval_wandb.py --root "$ROOT" --project sd-pref-repa-v1 \
+  --group "$PHASEI_GROUP" --run_name "phaseI_eval_${JOB}" \
+  --train_jobs "placebo=${PHASEI_PLACEBO_JOB},preference=${PHASEI_PREFERENCE_JOB},repa=${PHASEI_REPA_JOB}"
+
+echo "[$(date --iso-8601=seconds)] Phase I evaluation complete: $ROOT"
+if command -v my-job-stats >/dev/null 2>&1; then
+  my-job-stats -a -n -s
+fi

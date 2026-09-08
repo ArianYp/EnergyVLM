@@ -1,0 +1,39 @@
+#!/usr/bin/env bash
+#BSUB -J sd-phaseN-labelcost
+#BSUB -G s10396
+#BSUB -q training-parallel
+#BSUB -n 4
+#BSUB -W 4:00
+#BSUB -R "span[hosts=1]"
+# One rank, but clip-flant5-xxl is 11B and is loaded to host memory before it moves to the GPU.
+#BSUB -R "select[mem>96000 && hname!='farm-gpu0504']"
+#BSUB -R "rusage[mem=96000]"
+#BSUB -M 96000
+#BSUB -gpu "num=1:mode=exclusive_process:gmem=78G"
+#BSUB -cwd /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM
+#BSUB -o /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-phaseN-labelcost-%J.out
+#BSUB -e /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-phaseN-labelcost-%J.err
+
+# What every label really costs. ONE GPU on purpose: a per-prompt cost measured while three other
+# ranks share the node is a measurement of the queue, not of the label.
+set -euo pipefail
+
+export PATH="/software/cellgen/team361/ha11/envs/nichejepa/bin:$PATH"
+export HF_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/huggingface
+export TORCH_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/torch
+export XDG_CACHE_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/xdg
+export TOKENIZERS_PARALLELISM=false
+export WANDB_MODE=disabled
+source ~/.secrets/hf_token
+
+JOB=${LSB_JOBID:-local}
+echo "[$(date --iso-8601=seconds)] Phase-N label cost | job=$JOB"
+nvidia-smi --query-gpu=index,name,memory.total --format=csv
+
+python3 phaseN/label_cost.py \
+  --n_prompts "${COST_N:-20}" --N "${COST_CAND:-4}" --K "${COST_K:-8}" \
+  --energy_layer "${COST_LAYER:-8}" --energy_sigma "${COST_SIGMA:-0.5}" \
+  --out "phaseN/label_cost_${JOB}.json"
+
+echo "[$(date --iso-8601=seconds)] done"
+if command -v my-job-stats >/dev/null 2>&1; then my-job-stats -a -n -s; fi

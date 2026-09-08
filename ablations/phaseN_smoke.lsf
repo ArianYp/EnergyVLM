@@ -1,0 +1,55 @@
+#!/usr/bin/env bash
+#BSUB -J sd-phaseN-smoke
+#BSUB -G s10396
+#BSUB -q training-parallel
+#BSUB -n 8
+#BSUB -W 1:00
+#BSUB -R "span[hosts=1]"
+#BSUB -R "select[mem>96000 && hname!='farm-gpu0504']"
+#BSUB -R "rusage[mem=96000]"
+#BSUB -M 96000
+#BSUB -gpu "num=2:mode=exclusive_process:gmem=78G"
+#BSUB -cwd /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM
+#BSUB -o /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-phaseN-smoke-%J.out
+#BSUB -e /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-phaseN-smoke-%J.err
+
+# Run the ACTUAL trainer for a few steps in every configuration a batch is about to use.
+# Three batches have now died at startup on configurations that a proxy test had "verified":
+# a missing key on a score-free cache, and a parser choice that was not present at job time.
+# A proxy cannot catch either. This runs the real entry point, under torchrun, on the real cache.
+set -euo pipefail
+export PATH="/software/cellgen/team361/ha11/envs/nichejepa/bin:$PATH"
+export HF_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/huggingface
+export TORCH_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/torch
+export XDG_CACHE_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/xdg
+export TOKENIZERS_PARALLELISM=false
+export NCCL_NVLS_ENABLE=0
+export WANDB_MODE=disabled
+source ~/.secrets/hf_token
+
+fail=0
+run_one () {
+  local tag="$1"; shift
+  echo "--- SMOKE $tag"
+  if torchrun --standalone --nproc-per-node=2 phaseC/train_pilot.py \
+       --num_steps 4 --num_warmup_steps 1 --save_every 100000 --sample_every 0 --log_every 1 \
+       --no_wandb --gradient_checkpointing --N 4 --K 8 --cfg 7.0 --student_cfg 0.0 \
+       --output_dir "/tmp/smoke_${tag}" "$@" > "/tmp/smoke_${tag}.log" 2>&1; then
+    echo "    PASS $tag"
+  else
+    echo "    FAIL $tag"; tail -5 "/tmp/smoke_${tag}.log" | sed 's/^/      /'; fail=1
+  fi
+}
+
+# batch A: caption-count sweep on a SCORE-FREE cache
+for ARM in W_uniform_freeze W_uniform_soft; do
+  run_one "exp3_${ARM}" --variant "$ARM" --selection_dir phaseN/records_3k
+done
+# batch B: the noise-identity ablation, every coupling mode
+for C in fresh teacher perm_within perm_global fixed_unrelated; do
+  run_one "coup_${C}" --variant W_uniform_freeze --selection_dir phaseN/coco_selection_106573 \
+    --target_schedule one_fixed --support_m 1 --coupling "$C"
+done
+
+echo
+if [ "$fail" = 0 ]; then echo "ALL SMOKE CONFIGURATIONS PASS"; else echo "SMOKE FAILURES PRESENT"; exit 1; fi

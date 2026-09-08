@@ -1,0 +1,54 @@
+#!/usr/bin/env bash
+#BSUB -J sd-W-train-k28
+#BSUB -G s10396
+#BSUB -q training-parallel
+#BSUB -W 12:00
+#BSUB -n 4
+#BSUB -R "span[hosts=1]"
+#BSUB -R "select[mem>128000]"
+#BSUB -R "rusage[mem=128000]"
+#BSUB -M 128000
+#BSUB -gpu "num=1:mode=exclusive_process:gmem=78G"
+#BSUB -cwd /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM
+#BSUB -o /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-W-train-k28-%J.out
+#BSUB -e /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-W-train-k28-%J.err
+#
+# Teacher-quality ablation: the 6k-step B2 / CD_dinop_hard recipe on candidates and trajectories
+# from a 28-step guided teacher (cache phaseN/coco_selection_k28), same captions and seeds as the
+# 8-step runs. The trainer rolls K=28; the supervised window keeps the same SIGMA coverage as the
+# 8-step runs (k=3..7 of 8 <-> sigma .80 -> .01) by subsampling every 4th state, so the number of
+# student forwards per update (5) and the noise-level horizon (Delta scaled x3.5) are matched.
+#
+#   bsub -U iclr_2026 -env "all,VARIANT=CD_dinop_hard,SEED=0" < ablations/phaseW_train_k28.lsf
+set -euo pipefail
+export PATH="/software/cellgen/team361/ha11/envs/nichejepa/bin:$PATH"
+export HF_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/huggingface
+export TORCH_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/torch
+export XDG_CACHE_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/xdg
+export TOKENIZERS_PARALLELISM=false
+export PYTHONPATH="/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM:${PYTHONPATH:-}"
+source ~/.secrets/hf_token
+: "${VARIANT:?set VARIANT}"
+SEED=${SEED:-0}
+JOB=${LSB_JOBID:-manual}
+RUN="phaseW_${VARIANT}_k28_s${SEED}_${JOB}"
+OUT="checkpoints/phaseW/${RUN}"
+mkdir -p checkpoints/phaseW logs
+echo "[$(date --iso-8601=seconds)] train-k28 | variant=$VARIANT seed=$SEED -> $RUN"
+python3 phaseC/train_pilot.py \
+  --variant "$VARIANT" --coupling fresh --distill_loss x0_huber \
+  --seed "$SEED" --sel_seed "$SEED" \
+  --selection_dir phaseN/coco_selection_k28 \
+  --alpha 1.0 --temp 1.0 \
+  --N 4 --K 28 --cfg 7.0 --student_cfg 0.0 --cfg_mode composed \
+  --num_steps 6000 --num_warmup_steps 300 --lr 1e-5 --weight_decay 0.0 --grad_clip 1.0 \
+  --height 512 --sched_shift 3.0 --num_train_ts 1000.0 \
+  --delta_min 3 --delta_max 10 \
+  --scoring_window 0.36,0.93 --score_stride 4 \
+  --support_m 1 --assign_seed 982451653 \
+  --huber_c 0.0 --gradient_checkpointing \
+  --save_every 2000 --log_every 10 \
+  --sample_every 2000 --sample_prompts phaseW/sample_prompts.json --sample_steps 4 --sample_cfg 1.0 \
+  --wandb_project sd-phaseW-k28 --wandb_run_name "$RUN" \
+  --output_dir "$OUT"
+echo "[$(date --iso-8601=seconds)] train-k28 done: $RUN"

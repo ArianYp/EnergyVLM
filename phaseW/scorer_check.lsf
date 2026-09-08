@@ -1,0 +1,45 @@
+#!/usr/bin/env bash
+#BSUB -J sd-W-scorer-check
+#BSUB -G s10396
+#BSUB -q training-parallel
+#BSUB -n 4
+#BSUB -W 0:30
+#BSUB -R "span[hosts=1]"
+#BSUB -R "select[mem>64000]"
+#BSUB -R "rusage[mem=64000]"
+#BSUB -M 64000
+#BSUB -gpu "num=1:mode=exclusive_process:gmem=40G"
+#BSUB -cwd /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM
+#BSUB -o /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-W-scorer-check-%J.out
+#BSUB -e /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-W-scorer-check-%J.err
+# Validate the trainer's OnlineScorer against the offline dino_patch_cos in the 3k manifest, on the
+# cached candidate latents, and report the typical score range of good candidates.
+set -euo pipefail
+export PATH="/software/cellgen/team361/ha11/envs/nichejepa/bin:$PATH"
+export HF_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/huggingface
+export TORCH_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/torch
+export PYTHONPATH="/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM:/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/phaseC:${PYTHONPATH:-}"
+source ~/.secrets/hf_token
+python3 - <<'PY'
+import glob, json, torch, numpy as np
+from train_pilot import OnlineScorer
+from diffusers import StableDiffusion3Pipeline
+dev = torch.device("cuda")
+pipe = StableDiffusion3Pipeline.from_pretrained("stabilityai/stable-diffusion-3.5-medium", torch_dtype=torch.bfloat16).to(dev)
+pipe.vae.to(torch.bfloat16).eval()
+sc = OnlineScorer(pipe.vae, "facebook/dinov2-base", 512, dev)
+R = {}
+for f in sorted(glob.glob("phaseN/coco_selection_dinopatch/selection_rank*.jsonl")):
+    for l in open(f):
+        r = json.loads(l); R[r["idx"]] = r
+d = torch.load(sorted(glob.glob("phaseT/energy_cache/latents_shard*.pt"))[0], map_location="cpu")
+idx, cand = list(d["idx"])[:16], d["cand"][:16]
+on, off = [], []
+for k, i in enumerate(idx):
+    s = sc.score(cand[k].to(dev), R[i]["reference"]).cpu().numpy()
+    on.append(s); off.append(np.array(R[i]["dino_patch_cos"]))
+on, off = np.array(on), np.array(off)
+print("online scorer vs offline dino_patch_cos on 16 captions x 4 cached candidates:")
+print("  max |diff| %.4f   mean online %.4f   mean offline %.4f   argmax agreement %.2f" % (np.abs(on-off).max(), on.mean(), off.mean(), np.mean(on.argmax(1)==off.argmax(1))))
+print("  offline score range over the 3k manifest: mean %.4f  p5 %.4f  p95 %.4f" % (np.mean([np.mean(r["dino_patch_cos"]) for r in R.values()]), *np.percentile([x for r in R.values() for x in r["dino_patch_cos"]], [5, 95])))
+PY

@@ -1,0 +1,90 @@
+#!/usr/bin/env bash
+#BSUB -J sd-phaseN-refsim-proj
+#BSUB -G s10396
+#BSUB -q training-parallel
+#BSUB -n 4
+#BSUB -W 6:00
+#BSUB -R "span[hosts=1]"
+#BSUB -R "select[mem>128000 && hname!='farm-gpu0504']"
+#BSUB -R "rusage[mem=128000]"
+#BSUB -M 128000
+#BSUB -gpu "num=1:mode=exclusive_process:gmem=40G"
+#BSUB -cwd /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM
+#BSUB -o /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-phaseN-refsim-proj-%J.out
+#BSUB -e /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-phaseN-refsim-proj-%J.err
+
+# Adds the genuine CROSS-SPACE arm, now that a trained map exists:
+#
+#   repa_projected  cos( mean_tokens projector(hidden(candidate)) , mean_patches DINOv2(reference) )
+#   dino_patchmean  cos( mean_patches DINOv2(reference)           , mean_patches DINOv2(candidate) )
+#
+# The second is the MATCHED decoded upper bound. Comparing repa_projected against the CLS-based
+# `dino` arm would be unmatched, because the projector was trained to hit patch tokens, not CLS.
+#
+# Pooling before the cosine is not a shortcut, it is required. The projector was trained per token
+# against the patch grid of the SAME image, so token i of prediction and target are the same
+# spatial location. A candidate and a reference are different images and share no such
+# correspondence, so a per-token cosine between them would be meaningless.
+set -euo pipefail
+
+export PATH="/software/cellgen/team361/ha11/envs/nichejepa/bin:$PATH"
+export HF_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/huggingface
+export TORCH_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/torch
+export XDG_CACHE_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/xdg
+export TOKENIZERS_PARALLELISM=false
+export WANDB_MODE=disabled
+source ~/.secrets/hf_token
+
+: "${REFSIM_SRC:?set REFSIM_SRC to a completed phaseN/refsim_<job> directory}"
+: "${REFSIM_PROJECTOR:?set REFSIM_PROJECTOR to a trained projector .pt}"
+STEPS=${REFSIM_STEPS:-8}
+K=${REFSIM_K:-4}
+
+JOB=${LSB_JOBID:-local}
+ROOT="phaseN/refsim_proj_${JOB}"
+if [[ -e "$ROOT" ]]; then echo "Refusing to overwrite $ROOT" >&2; exit 2; fi
+mkdir -p "$ROOT"
+
+echo "[$(date --iso-8601=seconds)] Phase-N refsim + projected arm | job=$JOB"
+nvidia-smi --query-gpu=index,name,memory.total --format=csv
+test -s "$REFSIM_SRC/pool_manifest.json"; test -d "$REFSIM_SRC/scores"; test -s "$REFSIM_PROJECTOR"
+
+python3 -c "
+import torch
+b=torch.load('$REFSIM_PROJECTOR', map_location='cpu', weights_only=False)
+assert b['in_dim']==1536 and b['out_dim']==768, (b['in_dim'], b['out_dim'])
+assert b['layer']==8, b['layer']
+print(f\"projector layer {b['layer']} -> {b['encoder_id']} | val 1-cos {b['val_loss']:.4f} \"
+      f\"(cosine {1-b['val_loss']:.4f}) at step {b['step']}\")
+"
+
+echo "=== smoke: 6 captions ==="
+python3 phaseN/ref_similarity.py \
+  --manifest "$REFSIM_SRC/pool_manifest.json" \
+  --images_root "$REFSIM_SRC/gen/images/Teacher" \
+  --scores_dir "$REFSIM_SRC/scores" \
+  --steps "$STEPS" --K "$K" --variance 0.999 --bootstrap 200 \
+  --repa --repa_layer 8 --projector "$REFSIM_PROJECTOR" \
+  --smoke 6 --out "$ROOT/smoke.json"
+python3 -c "
+import json, math
+s=json.load(open('$ROOT/smoke.json'))['summary']
+for a in ('repa','repa_projected','dino_patchmean','dino','clip','latent'):
+    assert a in s['spaces'], sorted(s['spaces'])
+    v=s['spaces'][a]['mean_cosine']
+    assert math.isfinite(v) and -1.001 <= v <= 1.001, (a, v)
+print('smoke OK; arms:', sorted(s['spaces']))
+"
+
+echo "=== full run ==="
+python3 phaseN/ref_similarity.py \
+  --manifest "$REFSIM_SRC/pool_manifest.json" \
+  --images_root "$REFSIM_SRC/gen/images/Teacher" \
+  --scores_dir "$REFSIM_SRC/scores" \
+  --steps "$STEPS" --K "$K" --variance 0.999 \
+  --repa --repa_layer 8 --projector "$REFSIM_PROJECTOR" \
+  --out "$ROOT/ref_similarity_projected.json" | tee "$ROOT/run.log"
+test -s "$ROOT/ref_similarity_projected.json"
+
+echo "[$(date --iso-8601=seconds)] complete: $ROOT"
+if command -v my-job-stats >/dev/null 2>&1; then my-job-stats -a -n -s; fi

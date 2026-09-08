@@ -1,0 +1,73 @@
+#!/usr/bin/env bash
+#BSUB -J sd-cleanup-smoke
+#BSUB -G s10396
+#BSUB -U conf_july_2026
+#BSUB -q training-parallel
+#BSUB -n 16
+#BSUB -W 1:00
+#BSUB -R "span[hosts=1]"
+#BSUB -R "select[mem>256000 && hname!='farm-gpu0504']"
+#BSUB -R "rusage[mem=256000]"
+#BSUB -M 256000
+#BSUB -gpu "num=4:mode=exclusive_process:gmodel=NVIDIAH200"
+#BSUB -cwd /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM
+#BSUB -o /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-cleanup-smoke-%J.out
+#BSUB -e /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-cleanup-smoke-%J.err
+#
+# Verifies the DEAD-CODE CLEANUP of train_self_distill.py (2458 -> 2237 lines) still trains.
+# Removed, all with zero live references (AST + comment-stripped regex, then re-verified):
+#   probe_compbench (95 l), load_compbench_probe_prompts (21 l), the 66-line commented-out
+#   probe call site, its 17-line startup setup (probe_items / f_bar_probe_ref),
+#   make_hook (11 l), dino_embed + dino_preprocess (14 l), IMAGENET_MEAN/STD.
+# Plus: --probe_every is still ACCEPTED (8+ ablation scripts pass 0) but now raises if != 0
+# instead of silently loading prompts and logging nothing.
+#
+# Runs the SAME flag set as the production Phase R v2 job so the exercised path is the real
+# one (frozen teacher + CFG 7 + REPA hook + scoring window [3-7]), just for 30 steps.
+# Training only -- no eval, no REPAv2 label, throwaway output_dir, so it cannot collide with
+# the live job 91342 or its eval artifacts.
+set -euo pipefail
+export PATH="/software/cellgen/team361/ha11/envs/nichejepa/bin:$PATH"
+export HF_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/huggingface
+export TORCH_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/torch
+export XDG_CACHE_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/xdg
+export TOKENIZERS_PARALLELISM=false
+export NCCL_NVLS_ENABLE=0
+source ~/.secrets/hf_token
+echo "[`date`] cleanup smoke | Host: $(hostname) | $(grep -c '' train_self_distill.py) lines"
+
+OUT=checkpoints/phaseR/cleanup_smoke_${LSB_JOBID:-local}
+LOG=logs/cleanup_smoke_${LSB_JOBID:-local}.log
+torchrun --standalone --nproc-per-node=4 train_self_distill.py \
+  --coco_split train2017 --latent_matching_baseline \
+  --freeze_teacher --guidance_scale 7.0 \
+  --scoring_window 0.4,0.9 --delta_min 1 --delta_max 3 \
+  --lambda_repa 0.5 --repa_layer 8 \
+  --N_traj 4 --K_steps 8 --distance pseudo_huber --huber_c 0.0 \
+  --lr 1e-5 --projector_lr 1e-4 --weight_decay 0.0 \
+  --ema_decay 0.999 --grad_clip 1.0 --projector_grad_clip 5.0 \
+  --feature_encoder clip --reward_detach_projector \
+  --gradient_checkpointing --height 512 --seed 0 \
+  --probe_every 0 \
+  --num_steps 30 --num_warmup_steps 5 \
+  --output_dir "${OUT}" --save_every 100000 --log_every 5 \
+  --no_wandb 2>&1 | tee "${LOG}"
+
+python3 - "${LOG}" <<'PY'
+import re, sys, math
+raw = open(sys.argv[1], errors="replace").read().replace("\r", "\n")
+def series(k):
+    return [float(x) for x in re.findall(rf"{k}=([0-9eE.+-]+)", raw)
+            if re.fullmatch(r"[0-9eE.+-]+", x)]
+d, lrepa = series(r"\bd"), series("Lrepa")
+assert d,     "FAIL: no consistency-loss readings -- the loop did not run"
+assert lrepa, "FAIL: no L_repa readings -- the REPA hook did not fire"
+assert all(math.isfinite(v) for v in d),     f"FAIL: non-finite d: {d[:5]}"
+assert all(math.isfinite(v) for v in lrepa), f"FAIL: non-finite L_repa"
+assert "score_idxs=[3, 4, 5, 6, 7]" in raw, "FAIL: scoring window is not M1's [3-7]"
+assert "REPA ON" in raw, "FAIL: REPA was not enabled"
+print(f"d: {min(d):.4g}..{max(d):.4g} over {len(d)} logs | L_repa {lrepa[0]:.4f}->{lrepa[-1]:.4f}")
+print("CLEANUP SMOKE PASS: cleaned trainer runs, REPA fires, losses finite")
+PY
+rm -rf "${OUT}"
+echo "[`date`] DONE"

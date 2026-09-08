@@ -1,0 +1,94 @@
+#!/usr/bin/env bash
+#BSUB -J sd-W-equiv-s4h
+#BSUB -G s10396
+#BSUB -q training-parallel
+#BSUB -n 4
+#BSUB -W 3:00
+#BSUB -R "span[hosts=1]"
+#BSUB -R "select[mem>160000]"
+#BSUB -R "rusage[mem=160000]"
+#BSUB -M 160000
+#BSUB -gpu "num=1:mode=exclusive_process:gmem=78G"
+#BSUB -cwd /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM
+#BSUB -o /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-W-equiv-s4h-%J.out
+#BSUB -e /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-W-equiv-s4h-%J.err
+# Fourth equivalence round: the reward arms. Release `--reward_mode proj` (frozen / refreshed every
+# 3 updates) and `--reward_mode rgb` against the frozen experimental trainers that trained them
+# (s4g for the projector arms, s4h for the exact arm), 6 updates, deterministic kernels. Also
+# checks that data/build_reward_refs.py reproduces the reference-embedding and replay files.
+set -uo pipefail
+export PATH="/software/cellgen/team361/ha11/envs/nichejepa/bin:$PATH"
+export HF_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/huggingface
+export TORCH_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/torch
+export XDG_CACHE_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/xdg
+export TOKENIZERS_PARALLELISM=false
+export WANDB_MODE=disabled
+export CUBLAS_WORKSPACE_CONFIG=:4096:8
+source ~/.secrets/hf_token
+REPO=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM
+DET=$REPO/phaseW/_equiv/det
+OUT=$REPO/phaseW/_equiv/out_s4h
+rm -rf "$OUT"; mkdir -p "$OUT"
+CLEAN=$OUT/clean-snapshot
+rsync -a --exclude .git "$REPO/phaseW/_equiv/clean-tree/" "$CLEAN/"
+grep -q 'class RGBReward' "$CLEAN/train/distill.py" || { echo "snapshot lacks the reward code"; exit 1; }
+CACHE=$REPO/phaseN/coco_selection_dinopatch
+PROJ=$REPO/phaseW/latent_scorer/projector/projector.pt
+REF=$REPO/phaseW/latent_scorer/ref_emb_3k.pt
+REPLAY=$REPO/phaseW/latent_scorer/replay_2k.pt
+STEPS=6
+COMMON_ORIG="--coupling fresh --distill_loss x0_huber --seed 0 --sel_seed 0 --selection_dir $CACHE \
+  --alpha 1.0 --N 4 --K 8 --cfg 7.0 --student_cfg 0.0 --cfg_mode composed \
+  --num_warmup_steps 300 --lr 1e-5 --weight_decay 0.0 --grad_clip 1.0 --height 512 \
+  --sched_shift 3.0 --num_train_ts 1000.0 --delta_min 1 --delta_max 3 --scoring_window 0.4,0.9 \
+  --support_m 1 --assign_seed 982451653 --huber_c 0.0 --gradient_checkpointing --save_every 100000 \
+  --log_every 1 --sample_every 0 --no_wandb --num_steps $STEPS --variant CD_dinop_hard --temp 1.0 \
+  --reward_ref $REF --reward_replay $REPLAY --reward_monitor_every 3"
+COMMON_NEW="--selector dino_patch --cache_dir $CACHE --seed 0 --sel_seed 0 --num_warmup_steps 300 --lr 1e-5 --K 8 --cfg 7.0 \
+  --window 0.4,0.9 --delta_min 1 --delta_max 3 --height 512 --gradient_checkpointing --save_every 100000 --log_every 1 --num_steps $STEPS \
+  --reward_ref $REF --reward_replay $REPLAY --reward_monitor_every 3"
+echo "orig trainers sha s4g $(sha256sum $REPO/phaseW/train_pilot_frozen_s4g.py | cut -c1-8) s4h $(sha256sum $REPO/phaseW/train_pilot_frozen_s4h.py | cut -c1-8); release trainer sha $(sha256sum $CLEAN/train/distill.py | cut -c1-8); release commit $(git -C $REPO/phaseW/_equiv/clean-tree rev-parse --short HEAD)"
+run () { local out="$OUT/$1"; shift; local t0=$(date +%s); ( "$@" --output_dir "$out" ) > "$out.log" 2>&1; echo "$(basename "$out") rc=$? $(( $(date +%s) - t0 ))s losses: $(tr '\r' '\n' < "$out.log" | grep -oE 'loss=[0-9.e+-]+' | sed 's/loss=//' | awk 'NR%2==1' | tr '\n' ' ')"; grep -hE "^\[reward-rgb\]" "$out.log" | head -1; }
+cd "$REPO"
+OG="env PYTHONPATH=$DET:$REPO python3 phaseW/train_pilot_frozen_s4g.py"
+OH="env PYTHONPATH=$DET:$REPO python3 phaseW/train_pilot_frozen_s4h.py"
+run orig_rewF_a $OG $COMMON_ORIG --reward_proj $PROJ --reward_lambda 80
+run orig_rewF_b $OG $COMMON_ORIG --reward_proj $PROJ --reward_lambda 80
+run orig_rewR   $OG $COMMON_ORIG --reward_proj $PROJ --reward_lambda 80 --reward_refresh_every 3
+run orig_rewX_a $OH $COMMON_ORIG --reward_mode rgb --reward_lambda 15.504
+run orig_rewX_b $OH $COMMON_ORIG --reward_mode rgb --reward_lambda 15.504
+run orig_none   $OH $COMMON_ORIG --reward_monitor_every 0
+cd "$CLEAN"
+N="env PYTHONPATH=$DET:$CLEAN python3 train/distill.py"
+run new_rewF $N $COMMON_NEW --reward_mode proj --reward_proj $PROJ --reward_lambda 80
+run new_rewR $N $COMMON_NEW --reward_mode proj --reward_proj $PROJ --reward_lambda 80 --reward_refresh_every 3
+run new_rewX $N $COMMON_NEW --reward_mode rgb --reward_lambda 15.504
+echo "=== reward inputs: release builder vs the files the arms trained on ==="
+python3 data/build_reward_refs.py --shards $REPO/phaseW/latent_scorer/shards --out_dir $OUT/reward
+cd "$REPO"
+OUT="$OUT" REF="$REF" REPLAY="$REPLAY" python3 - <<'PY'
+import os, torch
+OUT = os.environ["OUT"]
+a = torch.load(os.environ["REF"], map_location="cpu", weights_only=False); b = torch.load(f"{OUT}/reward/ref_emb.pt", map_location="cpu", weights_only=False)
+ok = set(a) == set(b) and all(torch.equal(a[k], b[k]) for k in a)
+print(f"ref_emb: {len(a)} vs {len(b)} captions, identical={ok}")
+ra = torch.load(os.environ["REPLAY"], map_location="cpu", weights_only=False); rb = torch.load(f"{OUT}/reward/replay.pt", map_location="cpu", weights_only=False)
+ok2 = all(torch.equal(ra[k], rb[k]) for k in ra)
+print(f"replay: {tuple(ra['z'].shape)} vs {tuple(rb['z'].shape)}, identical={ok2}")
+def sd(p): return torch.load(p, map_location="cpu", weights_only=False)["model"]
+def cmp(a, b, label):
+    A, B = sd(f"{OUT}/{a}/checkpoint_final.pt"), sd(f"{OUT}/{b}/checkpoint_final.pt")
+    mx = max(float((A[k].float() - B[k].float()).abs().max()) for k in A); same = sum(int(torch.equal(A[k], B[k])) for k in A)
+    print(f"{label:58s}: {same}/{len(A)} tensors identical, max|diff|={mx:.3e}"); return mx
+cF = cmp("orig_rewF_a", "orig_rewF_b", "control: orig vs orig (projector reward, frozen)")
+cX = cmp("orig_rewX_a", "orig_rewX_b", "control: orig vs orig (exact rgb reward)")
+different = cmp("orig_rewF_a", "orig_none", "sanity: projector reward vs no reward (must differ)") > 0.0
+different &= cmp("orig_rewR", "orig_rewF_a", "sanity: refreshed vs frozen projector (must differ)") > 0.0
+dF = cmp("orig_rewF_a", "new_rewF", "orig vs release: projector reward, frozen")
+dR = cmp("orig_rewR", "new_rewR", "orig vs release: projector reward, refreshed every 3")
+dX = cmp("orig_rewX_a", "new_rewX", "orig vs release: exact rgb reward")
+# bit-exact where the original is bit-reproducible; otherwise no larger than the original's own run-to-run difference
+ok3 = dF <= cF and dR <= max(cF, 0.0) and dX <= cX
+print("EQUIV_S4H_RESULT", "PASS" if (ok and ok2 and ok3 and different) else "FAIL",
+      f"(controls {cF:.1e} / {cX:.1e}; pairs {dF:.1e} / {dR:.1e} / {dX:.1e})")
+PY

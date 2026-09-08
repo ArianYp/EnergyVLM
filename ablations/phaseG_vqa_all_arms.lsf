@@ -1,0 +1,46 @@
+#!/usr/bin/env bash
+#BSUB -J sd-phaseG-vqa-arms
+#BSUB -G s10396
+#BSUB -U conf_july_2026
+#BSUB -q training-parallel
+#BSUB -n 16
+#BSUB -W 8:00
+#BSUB -R "span[hosts=1]"
+#BSUB -R "select[mem>256000 && hname!='farm-gpu0504']"
+#BSUB -R "rusage[mem=256000]"
+#BSUB -M 256000
+#BSUB -gpu "num=4:mode=exclusive_process:gmodel=NVIDIAH200"
+#BSUB -cwd /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM
+#BSUB -o /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-phaseG-vqa-arms-%J.out
+#BSUB -e /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-phaseG-vqa-arms-%J.err
+# REVIEWER-DRIVEN, and it decides which paper we are writing.
+#
+# verdict_branch_k3.md: VQA(Gorc-Grnd) = -0.0238 vs primary -0.0222, T = 0.93. The arm trained
+# toward the ARGMAX of VQAScore got WORSE at VQAScore, by almost exactly the amount it got worse
+# on the primary. That is ISOTROPIC DEGRADATION, and it is an alternative to the variance account
+# that the current design does not exclude: the arms may differ in "how damaged the run is"
+# rather than in "how much reward the target carried".
+#
+# Gmed and Gant were never scored on the selector's own metric (their verdict files have no
+# transfer block). VQAScore CIs are +-0.007, TIGHTER than the primary's +-0.009, so this is the
+# most sensitive instrument we own and the images already exist.
+#
+#   VQA(Gant) ~= VQA(Gorc)  -> reward is not transmitted even into the selector's OWN metric.
+#                              Much stronger than the primary-metric null.
+#   VQA(Gant) <  VQA(Gorc)  -> reward IS transmitted; the primary-metric indifference is a small
+#                              reward effect superposed on a larger variance effect. Headline
+#                              weakens to "variance dominates reward by factor k".
+set -euo pipefail
+export PATH="/software/cellgen/team361/ha11/envs/nichejepa/bin:$PATH"
+export HF_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/huggingface
+export TORCH_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/torch
+export XDG_CACHE_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/xdg
+export TOKENIZERS_PARALLELISM=false
+export NCCL_NVLS_ENABLE=0
+source ~/.secrets/hf_token
+echo "[`date`] Phase G VQAScore on ALL FOUR arms | Host: $(hostname)"
+torchrun --standalone --nproc-per-node=4 exp0/phaseA_score.py \
+  --out_root phaseC/eval --labels Gmed,Gant,Gorc,Grnd --steps_list 4
+echo "=== IN-OBJECTIVE (VQAScore) DELTAS, ALL FOUR ARMS ==="
+python3 phaseG/vqa_transfer_table.py
+echo "[`date`] DONE"

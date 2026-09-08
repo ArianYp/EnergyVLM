@@ -1,0 +1,78 @@
+#!/usr/bin/env bash
+#BSUB -J sd-phaseA-triage
+#BSUB -G s10396
+#BSUB -q training-parallel
+#BSUB -n 16
+#BSUB -W 48:00
+#BSUB -R "span[hosts=1]"
+#BSUB -R "select[mem>256000 && hname!='farm-gpu0504']"
+#BSUB -R "rusage[mem=256000]"
+#BSUB -M 256000
+#BSUB -gpu "num=4:mode=exclusive_process:gmodel=NVIDIAH200"
+#BSUB -cwd /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM
+#BSUB -o /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-phaseA-triage-%J.out
+#BSUB -e /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-phaseA-triage-%J.err
+
+# ============================================================================
+# PHASE A — checkpoint triage (reuses the Exp-0 scoring harness; NO TRAINING)
+# Settles which stabilized baseline B1–B6 builds on, and closes the
+# encoder-redundancy question with real sample quality.
+#
+#   models (STUDENT weights ck['model'], sampled at 1/2/4/8/28 steps):
+#     base = frozen SD3.5-M, CFG=7   (teacher reference / upper bound)
+#     M1   = frozen-teacher pure consistency (--latent_matching_baseline)  CFG=1
+#     M2   = full encoder method                                           CFG=1
+#     K1   = fast-EMA + MSE-KL-to-base anchor                              CFG=1
+#   dev pool: 80/category x 8 = 640 T2I-CompBench train prompts (paired z_T)
+#   score: VQAScore clip-flant5-xxl (oracle) + CLIPScore
+#   analysis -> phaseA/triage_report.md answers:
+#     Q1 is M1 a usable 4-step generator?  Q2 does K1 beat M1?  Q3 does M2 beat M1?
+#
+# 256 GB RAM: 4 ranks each load the 22 GB VQA checkpoint (Exp-0 OOM lesson).
+# 640-prompt smoke-equivalent is small; the generate stage is cheap (1 img/
+# prompt/step). No separate smoke — generation is resumable and per-model.
+# ============================================================================
+
+set -euo pipefail
+ENVROOT=/software/cellgen/team361/ha11/envs/nichejepa
+export PATH="$ENVROOT/bin:$PATH"       # ffmpeg + torchrun
+export HF_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/huggingface
+export TORCH_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/torch
+export XDG_CACHE_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/xdg
+export NCCL_NVLS_ENABLE=0
+export TOKENIZERS_PARALLELISM=false
+source ~/.secrets/hf_token
+mkdir -p logs
+
+echo "[`date`] PHASE A triage"
+echo "Host: $(hostname) | LSF: ${LSB_JOBID:-unknown}"
+nvidia-smi --query-gpu=index,name,memory.total --format=csv
+
+M1=checkpoints/method/M1_pure_consistency_20260624_065127_55187/checkpoint_final.pt
+M2=checkpoints/method/M2_full_method_20260624_065133_55188/checkpoint_final.pt
+K1=checkpoints/ablation/K1_kl_mse_20260624_040350_55116/checkpoint_final.pt
+STEPS="1,2,4,8,28"
+PC=80
+
+echo "=== GENERATE: base (CFG=7 teacher reference) ==="
+torchrun --standalone --nproc-per-node=4 exp0/phaseA_generate.py \
+  --label base --checkpoint base --cfg 7 --steps_list $STEPS --per_category $PC
+echo "=== GENERATE: M1 (pure consistency, CFG=1) ==="
+torchrun --standalone --nproc-per-node=4 exp0/phaseA_generate.py \
+  --label M1 --checkpoint "$M1" --cfg 1 --steps_list $STEPS --per_category $PC
+echo "=== GENERATE: M2 (full method, CFG=1) ==="
+torchrun --standalone --nproc-per-node=4 exp0/phaseA_generate.py \
+  --label M2 --checkpoint "$M2" --cfg 1 --steps_list $STEPS --per_category $PC
+echo "=== GENERATE: K1 (EMA + MSE-KL, CFG=1) ==="
+torchrun --standalone --nproc-per-node=4 exp0/phaseA_generate.py \
+  --label K1 --checkpoint "$K1" --cfg 1 --steps_list $STEPS --per_category $PC
+
+echo "=== SCORE (all models) ==="
+torchrun --standalone --nproc-per-node=4 exp0/phaseA_score.py \
+  --labels base,M1,M2,K1 --steps_list $STEPS
+
+echo "=== ANALYZE ==="
+python3 exp0/phaseA_analyze.py
+echo "[`date`] PHASE A COMPLETE -> phaseA/triage_report.md"
+
+if command -v my-job-stats >/dev/null 2>&1; then my-job-stats -a -n -s; fi

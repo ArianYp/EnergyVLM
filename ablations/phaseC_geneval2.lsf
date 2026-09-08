@@ -1,0 +1,71 @@
+#!/usr/bin/env bash
+#BSUB -J sd-phaseC-geneval2
+#BSUB -G s10396
+#BSUB -q training-parallel
+#BSUB -n 16
+#BSUB -W 24:00
+#BSUB -R "span[hosts=1]"
+#BSUB -R "select[mem>256000 && hname!='farm-gpu0504']"
+#BSUB -R "rusage[mem=256000]"
+#BSUB -M 256000
+#BSUB -gpu "num=4:mode=exclusive_process:gmodel=NVIDIAH200"
+#BSUB -cwd /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM
+#BSUB -o /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-phaseC-geneval2-%J.out
+#BSUB -e /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-phaseC-geneval2-%J.err
+
+# Phase C1 — PRIMARY METRIC 2 of the pre-registration: GenEval2 (Soft-TIFA).
+# Generate B2/B4/M1 on the 800 GenEval2 prompts, then score with the official
+# GenEval2/evaluation.py (Qwen3-VL-8B judge — no clip-flant5 lineage, so independent
+# of the B4 selector, like the T2I-CompBench evaluators).
+#
+# GenEval2 prompts are held out by construction: the pilot trained on
+# T2I-CompBench *_train only, and GenEval2 is a separate benchmark.
+#
+# Two pythons on purpose: SD3.5 generation needs the shared env (transformers 4.49,
+# which the whole training stack is pinned against); Qwen3-VL needs >=4.57, so the
+# evaluator runs in cache/venv_geneval2, which shadows transformers for that step only.
+set -euo pipefail
+export PATH="/software/cellgen/team361/ha11/envs/nichejepa/bin:$PATH"
+export HF_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/huggingface
+export TORCH_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/torch
+export XDG_CACHE_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/xdg
+export TOKENIZERS_PARALLELISM=false
+export NCCL_NVLS_ENABLE=0
+source ~/.secrets/hf_token
+echo "[`date`] Phase C1 GenEval2 | Host: $(hostname)"
+nvidia-smi --query-gpu=index,name,memory.total --format=csv
+
+M1_CKPT=checkpoints/method/M1_pure_consistency_20260624_065127_55187/checkpoint_final.pt
+B2_CKPT=checkpoints/phaseC/phaseC_B2_20260724_230657_85487/checkpoint_final.pt
+B4_CKPT=checkpoints/phaseC/phaseC_B4_20260724_230700_85488/checkpoint_final.pt
+
+python3 phaseC/build_eval_pool.py geneval2 --out phaseC/geneval2/prompts.json
+
+echo "=== STAGE 1: generate 800 GenEval2 prompts x {4,8,28} steps ==="
+for spec in "M1:$M1_CKPT" "B2:$B2_CKPT" "B4:$B4_CKPT"; do
+  LABEL=${spec%%:*}; CKPT=${spec#*:}
+  echo "--- generate $LABEL ---"
+  torchrun --standalone --nproc-per-node=4 exp0/phaseA_generate.py \
+    --out_root phaseC/geneval2 --label "$LABEL" --checkpoint "$CKPT" --cfg 1 \
+    --prompts_json phaseC/geneval2/prompts.json --steps_list 4,8,28
+done
+
+echo "=== STAGE 2: official GenEval2 Soft-TIFA scoring (Qwen3-VL-8B) ==="
+# evaluation.py raises on the first benchmark prompt with no image, so generation
+# above must have completed; the loop below fails loudly rather than scoring a subset.
+for MODEL in M1 B2 B4; do
+  for STEP in 4 8 28; do
+    D=phaseC/geneval2_scores/${MODEL}_s${STEP}
+    [ -f "$D/scores.json" ] && { echo "skip $D (done)"; continue; }
+    echo "--- $MODEL @ ${STEP} steps ---"
+    python3 phaseC/geneval2_eval.py stage --images phaseC/geneval2/images/${MODEL} \
+      --pool phaseC/geneval2/prompts.json --steps ${STEP} --out "$D"
+    python3 phaseC/geneval2_eval.py run     --dir "$D" --method soft_tifa_gm --skip_done
+    python3 phaseC/geneval2_eval.py collect --dir "$D" --method soft_tifa_gm
+  done
+done
+
+# The combined verdict is written by ablations/phaseC_verdict.lsf once every metric is
+# in, so concurrent jobs never write phaseC/eval_verdict_s*.md at the same time.
+echo "[`date`] DONE -> phaseC/geneval2_scores/{M1,B2,B4}_s{4,8,28}/scores.json"
+if command -v my-job-stats >/dev/null 2>&1; then my-job-stats -a -n -s; fi

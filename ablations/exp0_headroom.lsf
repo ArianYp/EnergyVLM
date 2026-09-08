@@ -1,0 +1,75 @@
+#!/usr/bin/env bash
+#BSUB -J sd-exp0-headroom
+#BSUB -G s10396
+#BSUB -q training-parallel
+#BSUB -n 16
+#BSUB -W 48:00
+#BSUB -R "span[hosts=1]"
+#BSUB -R "select[mem>256000 && hname!='farm-gpu0504']"
+#BSUB -R "rusage[mem=256000]"
+#BSUB -M 256000
+#BSUB -gpu "num=4:mode=exclusive_process:gmodel=NVIDIAH200"
+#BSUB -cwd /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM
+#BSUB -o /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-exp0-headroom-%J.out
+#BSUB -e /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-exp0-headroom-%J.err
+
+# ============================================================================
+# EXPERIMENT 0 — Oracle best-of-N headroom & candidate diversity  (NO TRAINING)
+# THE existential gate for the verifier-guided trajectory-distillation pivot.
+#
+#   dev pool: 150 prompts x 8 T2I-CompBench *_train categories (=1200; the
+#             *_val splits + GenEval remain untouched for final evaluation)
+#   pool: 8 candidates/prompt, SAME z_T per candidate across configs (paired)
+#   configs: CFG {3,7} x steps {8 (matched/distillable), 28 (upper bound)}
+#   scoring: VQAScore clip-flant5-xxl (oracle), CLIPScore ViT-L-14,
+#            DINOv2 pairwise cosine (diversity)
+#   analysis: exact order-statistic E[max_N], N in {2,4,8}; bootstrap CIs;
+#             effect size H_N / candidate-SD; per-category; CLIP->VQA
+#             headroom-recovery preview.  ->  exp0/headroom_report.md
+#
+# KILL CONDITION (from the agreed protocol): no robust oracle advantage
+# (H_4 effect size < ~0.2 or CI includes 0), or advantage only at the cost of
+# quality/diversity, or headroom only at 28 steps (=> teacher-rollout problem).
+#
+# Runs a tiny end-to-end SMOKE first (2 prompts/category -> exp0_smoke/), so a
+# pipeline bug aborts in minutes, not after hours of generation.
+# ============================================================================
+
+set -euo pipefail
+ENVROOT=/software/cellgen/team361/ha11/envs/nichejepa
+export PATH="$ENVROOT/bin:$PATH"       # ffmpeg (t2v_metrics import) + torchrun
+export HF_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/huggingface
+export TORCH_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/torch
+export XDG_CACHE_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/xdg
+export NCCL_NVLS_ENABLE=0
+export TOKENIZERS_PARALLELISM=false
+source ~/.secrets/hf_token
+mkdir -p logs
+
+echo "[`date`] EXPERIMENT 0: oracle headroom (smoke, then full)"
+echo "Host: $(hostname) | LSF: ${LSB_JOBID:-unknown}"
+nvidia-smi --query-gpu=index,name,memory.total --format=csv
+
+# ---------- SMOKE (2/category = 16 prompts; ~15 min end-to-end) ----------
+echo "=== SMOKE: generate ==="
+torchrun --standalone --nproc-per-node=4 exp0/generate_candidates.py \
+  --out_root exp0_smoke --per_category 2
+echo "=== SMOKE: score ==="
+torchrun --standalone --nproc-per-node=4 exp0/score_candidates.py \
+  --out_root exp0_smoke
+echo "=== SMOKE: analyze ==="
+python3 exp0/analyze_headroom.py --out_root exp0_smoke
+echo "=== SMOKE PASSED ==="
+
+# ---------- FULL (170/category = 1200 prompts) ----------
+echo "=== FULL: generate (1200 prompts x 8 cands x 4 configs) ==="
+torchrun --standalone --nproc-per-node=4 exp0/generate_candidates.py \
+  --out_root exp0 --per_category 150
+echo "=== FULL: score ==="
+torchrun --standalone --nproc-per-node=4 exp0/score_candidates.py \
+  --out_root exp0
+echo "=== FULL: analyze ==="
+python3 exp0/analyze_headroom.py
+echo "[`date`] EXPERIMENT 0 COMPLETE -> exp0/headroom_report.md"
+
+if command -v my-job-stats >/dev/null 2>&1; then my-job-stats -a -n -s; fi

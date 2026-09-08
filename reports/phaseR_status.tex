@@ -1,0 +1,399 @@
+\documentclass[10pt,aspectratio=169]{beamer}
+
+\usetheme{Madrid}
+\usecolortheme{dolphin}
+\setbeamertemplate{navigation symbols}{}
+\setbeamertemplate{footline}[frame number]
+\setbeamerfont{frametitle}{size=\large}
+
+\usepackage[T1]{fontenc}
+\usepackage{lmodern}
+\usepackage{booktabs}
+\usepackage{xcolor}
+
+\definecolor{good}{RGB}{20,120,60}
+\definecolor{bad}{RGB}{175,30,30}
+\newcommand{\good}[1]{\textcolor{good}{\textbf{#1}}}
+\newcommand{\bad}[1]{\textcolor{bad}{\textbf{#1}}}
+
+\title[Phase R]{Few-Step Distillation of SD3.5-M}
+\subtitle{How we got here, and the Phase R result}
+\author{Hesam Asadollahzadeh}
+\date{30 July 2026}
+
+\begin{document}
+
+\begin{frame}[plain]
+  \titlepage
+\end{frame}
+
+\begin{frame}{The setting}
+  \textbf{Goal.} Turn a 28-step SD3.5-Medium teacher into a \textbf{4-step student}
+  --- a $7\times$ speed-up --- without giving up image quality or prompt alignment.
+
+  \vspace{1em}
+  \textbf{Two numbers we live by}
+  \begin{itemize}
+    \item \textbf{CMMD} vs.\ real COCO images --- fidelity. \emph{Lower is better.}
+    \item \textbf{VQAScore} --- prompt alignment. \emph{Higher is better.}
+  \end{itemize}
+
+  \vspace{1em}
+  \textbf{Our reference student: ``M1''} --- pure consistency distillation, 20k steps.
+  \begin{center}
+  \begin{tabular}{lcc}
+    \toprule
+    at 4 steps & CMMD & VQAScore \\
+    \midrule
+    base SD3.5-M      & 161.3 & --- \\
+    \textbf{M1 (ours)} & \textbf{69.7} & \textbf{0.7848} \\
+    teacher, 28 steps & 54.1 & 0.80 \\
+    \bottomrule
+  \end{tabular}
+  \end{center}
+
+  \begin{block}{}
+    \small CMMD on 640 images is an \emph{internal gate}, not publication FID (needs 5--10k).
+  \end{block}
+\end{frame}
+
+\begin{frame}{Previous result 1 --- the teacher must be frozen}
+  A 15-run campaign on why our self-distillation kept producing garbage.
+
+  \vspace{0.8em}
+  \textbf{Root cause.} The student was trained only to match \textbf{teacher = EMA(student)}.
+  That objective has \textbf{no fixed point} --- nothing pins the output scale, so student
+  and target inflate together.
+
+  \vspace{0.8em}
+  \begin{center}
+  \begin{tabular}{lll}
+    \toprule
+    teacher & result & \\
+    \midrule
+    EMA, decay 0.999   & diverges $\sim$step 2k   & \bad{garbage} \\
+    EMA, decay 0.9999  & diverges $\sim$step 20k  & \bad{delay, not cure} \\
+    \textbf{frozen}    & flat for the whole run   & \good{works} \\
+    \bottomrule
+  \end{tabular}
+  \end{center}
+
+  \vspace{0.8em}
+  \textbf{And a retraction.} A KL-to-base anchor \emph{looked} like it rescued the EMA
+  design --- scale held flat for 20k steps. We finally scored its images:
+  \bad{CMMD 467} vs.\ M1's 69.7.
+
+  \begin{alertblock}{Lesson}
+    Stable training diagnostics are \textbf{necessary but not sufficient}.
+    Never accept a fix without scoring generated images.
+  \end{alertblock}
+\end{frame}
+
+\begin{frame}{Previous result 2 --- our scoring machinery did nothing}
+  The original method scored trajectories with a learned projector into CLIP space,
+  plus a reward term and an alignment anchor.
+
+  \vspace{0.8em}
+  We ran it against pure consistency distillation, everything else identical:
+
+  \begin{center}
+  \begin{tabular}{lcc}
+    \toprule
+     & M1 (pure consistency) & M2 (full method) \\
+    \midrule
+    consistency loss $d$ & 59--61 & 59--61 \\
+    output scale         & $\sim$350 & $\sim$350 \\
+    CMMD @ 4 steps       & 69.7 & 69.1 \\
+    \bottomrule
+  \end{tabular}
+  \end{center}
+
+  \vspace{0.8em}
+  Identical at every step, within 1--3\%. The projector, the reward, the CLIP towers and a
+  118k-image feature precompute \textbf{changed nothing}.
+
+  \begin{block}{}
+    This is why the current runs use \texttt{-{}-latent\_matching\_baseline}:
+    plain consistency distillation, and we add \emph{one} thing at a time.
+  \end{block}
+\end{frame}
+
+\begin{frame}{Previous result 3 --- the four-channel decomposition}
+  Separate question, same codebase: picking the best of $N$ samples with a verifier
+  clearly helps at inference. \textbf{Can a student absorb that gain?}
+
+  \vspace{0.6em}
+  \begin{center}
+  \begin{tabular}{lll}
+    \toprule
+    channel & effect on the primary metric & \\
+    \midrule
+    Teacher best-of-4 at inference & $+0.0717$ & the prize \\
+    \midrule
+    \textbf{Input} (which prompts/states) & $+0.0004$ & \bad{null} \\
+    \textbf{Target} (which endpoint to copy) & $-0.0222$ & \bad{harmful} \\
+    \textbf{Noise} (which seed) & $+0.0485$ available & \good{real headroom} \\
+    \quad ...but learnable? & 3 attempts, all null & \bad{not amortisable} \\
+    \bottomrule
+  \end{tabular}
+  \end{center}
+
+  \vspace{0.6em}
+  Four candidate mechanisms for \emph{why} the target channel backfires were proposed and
+  then \textbf{refuted by our own controls}. The decomposition stands; the explanation does not.
+
+  \begin{block}{}
+    \small So we needed a second, independent line of attack on student quality.
+  \end{block}
+\end{frame}
+
+\begin{frame}{What redirected us: a motivation that failed a measurement}
+  \textbf{The story we were going to tell.} ``High guidance buys prompt alignment
+  but ruins image quality --- so fix it with representation alignment.''
+
+  \vspace{0.8em}
+  \textbf{We measured the curve first.} At 28 steps:
+  \begin{center}
+  \begin{tabular}{lcc}
+    \toprule
+    & fidelity optimum & alignment optimum \\
+    \midrule
+    guidance scale & CFG 3 & CFG 7 \\
+    CMMD & 54.1 & 55.5 \\
+    \bottomrule
+  \end{tabular}
+  \end{center}
+  A \textbf{1.4 CMMD} gap. \bad{There is no trade-off worth a method there.} Motivation dropped.
+
+  \vspace{0.8em}
+  \textbf{But the same measurement exposed a real gap:}
+  \begin{center}
+    \large our 4-step student \textbf{69.7} \quad vs.\quad teacher's best \textbf{54.1}
+    \quad$\Rightarrow$\quad \good{15.6 CMMD to close}
+  \end{center}
+
+  That gap --- not the guidance trade-off --- is the honest target.
+\end{frame}
+
+\begin{frame}{Phase R: what we are doing now, and why}
+  \textbf{REPA} (REPresentation Alignment) --- its published strength is exactly \textbf{FID},
+  which is the axis of our 15.6 CMMD gap.
+
+  \vspace{0.8em}
+  \textbf{The idea.} While the denoiser processes a \emph{noised real image}, take an
+  intermediate hidden state (block 8 of 24), project it, and align it to a frozen
+  \textbf{DINOv2} encoder's features of the \emph{clean} image:
+  \[
+    L_{\text{repa}} \;=\; 1 - \cos\big(\,P(h_8(z_t)),\; \text{DINOv2}(x_{\text{clean}})\,\big)
+  \]
+  \begin{itemize}
+    \item Runs on \textbf{real data}, in its own forward pass --- independent of the
+          distillation trajectory.
+    \item Weight $\lambda_{\text{repa}} = 0.5$ (REPA's own default).
+    \item Everything else is \textbf{M1's exact recipe}, so \textbf{M1 is the control}.
+  \end{itemize}
+
+  \begin{block}{Pre-registered read --- fixed before the run}
+    \begin{tabular}{ll}
+      CMMD $<$ 69.7 \emph{and} VQA $\geq$ 0.7848 & real win: alignment closes part of the gap \\
+      CMMD $\approx$ 69.7 & negative: REPA does not transfer to few-step \\
+      VQA $<$ 0.7848 & we moved \emph{along} the trade-off, not past it \\
+    \end{tabular}
+  \end{block}
+\end{frame}
+
+\begin{frame}{The first attempt broke --- and not for a scientific reason}
+  Job 91058 ran 15{,}000 steps over 10 hours and produced \bad{flat saturated colour blocks}.
+
+  \begin{center}
+  \begin{tabular}{lcc}
+    \toprule
+    at 4 steps & CMMD & VQAScore \\
+    \midrule
+    M1 (control) & 69.7 & 0.7848 \\
+    \textbf{job 91058} & \bad{502.1} & \bad{0.2519} \\
+    \bottomrule
+  \end{tabular}
+  \end{center}
+
+  \vspace{0.6em}
+  Its script claimed ``\emph{EXACT M1 control --- the only difference is
+  \texttt{-{}-lambda\_repa}}''. Diffing the two saved configs, \bad{four live
+  hyperparameters} had also moved, because the script passed none of them and inherited
+  \textbf{parser defaults that had drifted} since M1 was run:
+
+  \begin{center}
+  \begin{tabular}{lccl}
+    \toprule
+    flag & M1 & 91058 & controls \\
+    \midrule
+    \texttt{-{}-freeze\_teacher}  & True    & \bad{False}   & frozen vs.\ live EMA teacher \\
+    \texttt{-{}-guidance\_scale}  & 7.0     & \bad{0.0}     & teacher target quality \\
+    \texttt{-{}-scoring\_window}  & 0.4,0.9 & \bad{0.3,0.7} & which noise levels are trained \\
+    \texttt{-{}-delta\_max}       & 3       & \bad{2}       & student's timestep gap \\
+    \bottomrule
+  \end{tabular}
+  \end{center}
+
+  \vspace{0.4em}
+  \small The header even listed ``ema 0.999'' as copied --- true, but \emph{inert} for M1,
+  because \texttt{-{}-freeze\_teacher} skips the EMA entirely. The inert knob was copied;
+  the live one was dropped.
+\end{frame}
+
+\begin{frame}{Why nobody noticed for ten hours}
+  \textbf{1. The loss could not see the damage.}
+  With teacher $=$ EMA(student), the consistency loss compares the student to
+  \emph{its own running average}. Damage that moves both is invisible.
+
+  \begin{center}
+  \begin{tabular}{lcc}
+    \toprule
+    & consistency loss $d$ & model \\
+    \midrule
+    M1 (frozen teacher) & 40--92 & \good{good} \\
+    job 91058 (EMA)     & \textbf{20--42} & \bad{destroyed} \\
+    \bottomrule
+  \end{tabular}
+  \end{center}
+  The broken run's loss looked \emph{better} throughout.
+
+  \vspace{0.8em}
+  \textbf{2. Nobody was looking at the pictures.} Image sampling to W\&B was switched off,
+  so not one student sample was ever logged.
+
+  \vspace{0.8em}
+  \textbf{Also checked and ruled out:} this was \emph{not} the old output-scale runaway.
+  Measured 209 $\to$ 390, while M1 itself swings 258--396. \textbf{The ranges overlap.}
+  A model can be completely destroyed with textbook-clean scale diagnostics.
+\end{frame}
+
+\begin{frame}{What is running now --- job 91342}
+  Same experiment, made honest. \textbf{Pure config fix}: all four flags restored, and the
+  flag set is defined \emph{once} and shared, so the test run and the real run cannot drift apart.
+
+  \vspace{0.6em}
+  \textbf{Two gates that fail in 10 minutes instead of 11 hours}
+  \begin{itemize}
+    \item \textbf{Gate 0} --- 300-step smoke: is $L_{\text{repa}}$ finite and descending?
+          \good{PASS} (0.939 $\to$ 0.660)
+    \item \textbf{Gate 1} --- diff the saved config against M1's: is the \emph{only}
+          difference the treatment? \good{PASS} (diff $=$ \textbf{NONE})
+  \end{itemize}
+
+  \vspace{0.6em}
+  \textbf{Plus:} student images logged to W\&B every 500 steps, at 4 and 28 steps.
+
+  \begin{alertblock}{The gates already earned their cost}
+    Gate 0 caught a \emph{different} bug on the first try --- an ``improvement'' to the
+    gradient-sync path that crashed at step 1. Cost: 3 minutes of GPU instead of 11 hours.
+  \end{alertblock}
+\end{frame}
+
+\begin{frame}{RESULT --- the pre-registered read passes}
+  20\,000 steps, 12\,h\,18\,m, completed clean. Evaluated on the identical 640-prompt pool,
+  seeds and scorers as M1.
+
+  \begin{center}
+  \begin{tabular}{lccccc}
+    \toprule
+    steps & VQA REPAv2 & VQA M1 & $\Delta$VQA (95\,\% CI) & CMMD REPAv2 & CMMD M1 \\
+    \midrule
+    \textbf{4} & \textbf{0.7910} & 0.7848 & +0.0063 [$-$0.0053, +0.0179] & \good{67.4} & 69.7 \\
+    8 & 0.8161 & 0.8114 & +0.0047 [$-$0.0065, +0.0161] & 59.1 & 60.8 \\
+    28 & 0.8104 & 0.8012 & +0.0092 [$-$0.0019, +0.0204] & 59.9 & 60.3 \\
+    \bottomrule
+  \end{tabular}
+  \end{center}
+
+  \vspace{0.5em}
+  At \textbf{4 steps} --- the deployment regime --- the gap to the teacher's best (54.1) narrows
+  \good{15.6 $\rightarrow$ 13.3}, closing \good{14.7\,\%}, with alignment held.
+
+  \vspace{0.5em}
+  CMMD moves the right way at all three step counts, and most where it matters most.
+\end{frame}
+
+\begin{frame}{The obvious confound --- checked and excluded}
+  Our own comparison script warns that a CMMD gain may just mean REPA \emph{damped} the student:
+  a model that moves less stays nearer the base and can look more ``realistic'' for reasons that
+  have nothing to do with DINOv2.
+
+  \vspace{0.5em}
+  That warning's numbers are hardcoded from job \textbf{91058} --- the broken run. Measured for
+  \emph{this} run:
+
+  \begin{center}
+  \begin{tabular}{lccc}
+    \toprule
+    run & final $d$ & final $\Delta_{\theta\xi}$ & mean grad \\
+    \midrule
+    REPAv2 91342 & 66.0 & \textbf{42.9} & 198.3 \\
+    M1 control & 65.7 & \textbf{42.9} & 195.6 \\
+    91058 (broken) & 32.1 & 5.5 & 748.7 \\
+    \bottomrule
+  \end{tabular}
+  \end{center}
+
+  \vspace{0.5em}
+  Parameter drift \textbf{identical to three significant figures}; gradient norm within 1.4\,\%.
+  The student moved exactly as far as M1's. \good{Damping does not explain the result.}
+
+  \begin{block}{}
+    \small Note: REPA changed the learned function while leaving \emph{every} training-dynamics
+    statistic indistinguishable from the control. The loss curves could not have predicted this
+    in either direction.
+  \end{block}
+\end{frame}
+
+\begin{frame}{Reported honestly --- what this is not}
+  \textbf{REPAv2 wins at 4 steps only.} On the same pool, M2 (the encoder-scoring method we
+  previously called redundant) is better at 8 and 28 steps:
+
+  \begin{center}
+  \begin{tabular}{lccc}
+    \toprule
+    CMMD vs real COCO & 4 step & 8 step & 28 step \\
+    \midrule
+    M1 (control) & 69.7 & 60.8 & 60.3 \\
+    M2 & 69.1 & \textbf{58.2} & \textbf{57.2} \\
+    \textbf{REPAv2} & \textbf{67.4} & 59.1 & 59.9 \\
+    \bottomrule
+  \end{tabular}
+  \end{center}
+
+  \vspace{0.4em}
+  ``Best recipe we have'' is \bad{not} supported --- best \emph{at 4 steps} is.
+
+  \vspace{0.6em}
+  \textbf{Four limits, in order of how much they threaten the claim:}
+  \begin{enumerate}
+    \item \bad{No confidence interval on CMMD.} $-2.3$ is 3.3\,\% relative on 640 images and we
+          have no noise floor. A paired bootstrap needs no regeneration --- minutes of work.
+    \item \textbf{VQA gains are not significant} --- all three CIs cross zero. Alignment
+          \emph{held}; it did not improve.
+    \item \textbf{One seed.} Effects of this size are not separable from seed noise.
+    \item \textbf{Mechanism unknown.} Damping is excluded; nothing else is.
+  \end{enumerate}
+\end{frame}
+
+
+\begin{frame}{Takeaways}
+  \begin{enumerate}
+    \item \textbf{The teacher must be frozen.} Any EMA-of-student teacher eventually
+          collapses; slower decay only delays it.
+    \item \textbf{Score the images, not the loss curves.} Two separate ``fixes'' looked
+          healthy on diagnostics and produced garbage.
+    \item \textbf{Never trust a parser default as a baseline.} Pass every hyperparameter
+          explicitly and diff the saved config against the reference run --- 91058 lost
+          10 GPU-hours to exactly this.
+    \item \textbf{Cheap gates before expensive runs.} Two 10-minute checks caught two
+          separate bugs that would each have cost a full day.
+    \item \textbf{Result:} REPA on the M1 recipe improves 4-step CMMD
+          \good{69.7 $\rightarrow$ 67.4} (14.7\,\% of the gap) with alignment held and the
+          damping confound excluded --- but it needs a CMMD confidence interval and a
+          second seed before it is more than suggestive.
+  \end{enumerate}
+\end{frame}
+
+\end{document}

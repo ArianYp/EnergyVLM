@@ -1,0 +1,67 @@
+#!/usr/bin/env bash
+#BSUB -J sd-repa-full
+#BSUB -G s10396
+#BSUB -U conf_july_2026
+#BSUB -q training-parallel
+#BSUB -n 16
+#BSUB -W 24:00
+#BSUB -R "span[hosts=1]"
+#BSUB -R "select[mem>256000 && hname!='farm-gpu0504']"
+#BSUB -R "rusage[mem=256000]"
+#BSUB -M 256000
+#BSUB -gpu "num=4:mode=exclusive_process:gmodel=NVIDIAH200"
+#BSUB -cwd /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM
+#BSUB -o /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-repa-full-%J.out
+#BSUB -e /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-repa-full-%J.err
+# PHASE R — REPA auxiliary loss on the M1 distillation recipe.
+#
+# EXACT M1 CONTROL: every hyperparameter below is copied from
+# checkpoints/method/M1_pure_consistency_20260624_065127_55187/args.json
+# (K_steps 8, N_traj 4, pseudo_huber, huber_c 0 -> auto 0.1382, ema 0.999, grad_clip 1.0,
+#  gradient_checkpointing, seed 0, 20k steps, lr 1e-5, warmup 500, 512px, projector_grad_clip 5.0).
+# The ONLY difference from M1 is --lambda_repa 0.5 --repa_layer 8. That is what makes M1 a control
+# rather than a loose comparison.
+#
+# TARGET, measured not cited (phaseA/cfg_curve.json): the student's residual fidelity gap.
+#   M1 @4 steps: CMMD 69.7, VQAScore 0.7848      teacher best: CMMD 54.1  -> 15.6 CMMD to close.
+# The "high CFG ruins FID" motivation was REJECTED: the operating trade-off is 1.4 CMMD at 28 steps,
+# and at 4 steps our CFG-free student already dominates the entire CFG curve on both axes.
+#
+# PRE-REGISTERED READ (fixed before the run):
+#   CMMD < 69.7 and VQA >= 0.7848 -> representation alignment closes part of the gap. Real result.
+#   CMMD ~ 69.7 (within noise)    -> REPA does not transfer to few-step distillation. Negative.
+#   VQA < 0.7848                  -> we moved ALONG the trade-off, not beat it. Failure, not partial.
+# Caveat: CMMD on 640 images is an internal gate, NOT publication FID (needs 5-10k).
+set -euo pipefail
+export PATH="/software/cellgen/team361/ha11/envs/nichejepa/bin:$PATH"
+export HF_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/huggingface
+export TORCH_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/torch
+export XDG_CACHE_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/xdg
+export TOKENIZERS_PARALLELISM=false
+export NCCL_NVLS_ENABLE=0
+source ~/.secrets/hf_token
+echo "[`date`] Phase R REPA full run | Host: $(hostname)"
+RUN=repa_full_$(date +%Y%m%d_%H%M%S)_${LSB_JOBID:-local}
+torchrun --standalone --nproc-per-node=4 train_self_distill.py \
+  --coco_split train2017 --latent_matching_baseline \
+  --lambda_repa 0.5 --repa_layer 8 \
+  --N_traj 4 --K_steps 8 --distance pseudo_huber --huber_c 0.0 \
+  --num_steps 20000 --num_warmup_steps 500 \
+  --lr 1e-5 --projector_lr 1e-4 --weight_decay 0.0 \
+  --ema_decay 0.999 --grad_clip 1.0 --projector_grad_clip 5.0 \
+  --gradient_checkpointing --height 512 --seed 0 \
+  --output_dir checkpoints/phaseR/${RUN} \
+  --save_every 5000 --log_every 20 \
+  --wandb_project sd-phaseR-repa --wandb_run_name "${RUN}"
+echo "[`date`] TRAINING DONE -> checkpoints/phaseR/${RUN}"
+
+# ---- evaluate on the SAME Phase-A pool M1's 69.7 / 0.7848 came from ----
+CK=checkpoints/phaseR/${RUN}/checkpoint_final.pt
+torchrun --standalone --nproc-per-node=4 exp0/phaseA_generate.py \
+  --label REPA --checkpoint "$CK" --cfg 1 --steps_list 4,8,28 --per_category 80
+torchrun --standalone --nproc-per-node=4 exp0/phaseA_score.py --labels REPA --steps_list 4,8,28
+python3 exp0/fidelity_cmmd.py --steps 4,8,28 --out phaseA/fidelity_report_repa.md
+echo "=== REPA vs M1 (the pre-registered comparison) ==="
+python3 exp0/cfg_curve.py --steps 4,28 --fidelity_md phaseA/fidelity_report_repa.md \
+  --out phaseA/repa_vs_m1.json
+echo "[`date`] DONE"

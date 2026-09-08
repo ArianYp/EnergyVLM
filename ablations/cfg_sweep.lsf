@@ -1,0 +1,47 @@
+#!/usr/bin/env bash
+#BSUB -J sd-cfg-sweep
+#BSUB -G s10396
+#BSUB -U conf_july_2026
+#BSUB -q training-parallel
+#BSUB -n 16
+#BSUB -W 12:00
+#BSUB -R "span[hosts=1]"
+#BSUB -R "select[mem>256000 && hname!='farm-gpu0504']"
+#BSUB -R "rusage[mem=256000]"
+#BSUB -M 256000
+#BSUB -gpu "num=4:mode=exclusive_process:gmodel=NVIDIAH200"
+#BSUB -cwd /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM
+#BSUB -o /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-cfg-sweep-%J.out
+#BSUB -e /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-cfg-sweep-%J.err
+# WE MEASURED THE WRONG END OF THE CURVE.
+#
+# Job 90944 compared CFG 1 vs 7 and found guidance improves BOTH alignment (+0.1678 VQA) and
+# fidelity (CMMD 83.8 -> 55.5). That does not refute the "CFG trades quality for alignment" premise
+# -- it shows we sampled the low end. The literature's trade-off is a U-SHAPE: FID is minimised at
+# some MODERATE guidance and degrades at high guidance. With only CFG in {1, 7} we cannot see it.
+#
+# This fills in the curve: CFG in {2, 3, 5, 10, 15} at 28 and 4 steps, same 640 prompts, same seeds,
+# so every point is paired with the two we already have.
+#   have: CFG1 (0.6417 / 83.8)   CFG7 (0.8095 / 55.5)  @28 steps
+# If CMMD has an interior minimum below 55.5 (e.g. at CFG 3-5) and rises again by CFG 10-15, the
+# premise holds and the trade-off has a measured shape and location. If CMMD falls monotonically
+# through CFG 15, there is no trade-off to attack in this model and the REPA motivation must change.
+set -euo pipefail
+export PATH="/software/cellgen/team361/ha11/envs/nichejepa/bin:$PATH"
+export HF_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/huggingface
+export TORCH_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/torch
+export XDG_CACHE_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/xdg
+export TOKENIZERS_PARALLELISM=false
+export NCCL_NVLS_ENABLE=0
+source ~/.secrets/hf_token
+echo "[`date`] CFG sweep | Host: $(hostname)"
+for C in 2 3 5 10 15; do
+  torchrun --standalone --nproc-per-node=4 exp0/phaseA_generate.py \
+    --label baseCFG${C} --checkpoint base --cfg ${C} --steps_list 4,28 --per_category 80
+done
+LABELS=$(for C in 2 3 5 10 15; do printf "baseCFG%s," $C; done | sed 's/,$//')
+torchrun --standalone --nproc-per-node=4 exp0/phaseA_score.py --labels "$LABELS" --steps_list 4,28
+python3 exp0/fidelity_cmmd.py --steps 4,28 --out phaseA/fidelity_report_cfg.md
+echo "=== THE CFG CURVE ==="
+python3 exp0/cfg_curve.py
+echo "[`date`] DONE"

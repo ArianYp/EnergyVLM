@@ -1,0 +1,33 @@
+#!/usr/bin/env bash
+#BSUB -J sd-scorer-reliability
+#BSUB -G s10396
+#BSUB -U conf_july_2026
+#BSUB -q training-parallel
+#BSUB -n 16
+#BSUB -W 12:00
+#BSUB -R "span[hosts=1]"
+#BSUB -R "select[mem>256000 && hname!='farm-gpu0504']"
+#BSUB -R "rusage[mem=256000]"
+#BSUB -M 256000
+#BSUB -gpu "num=4:mode=exclusive_process:gmodel=NVIDIAH200"
+#BSUB -cwd /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM
+#BSUB -o /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-scorer-reliability-%J.out
+#BSUB -e /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-scorer-reliability-%J.err
+# THE WINNER'S-CURSE CONTROL (v4 reviewer). Zero training, existing images.
+# Re-score the same M=4 candidates under a SECOND VQAScore question template. Disagreement between
+# templates is scorer noise. Then measure how much of an argmax-under-A win survives under B.
+# Low retention => argmax selects noise => argmax and argmin are BOTH boundary order statistics of a
+# noisy score, both unrepresentative, the median interior and spared -- which is exactly the
+# two-tailed pattern the target channel shows, and unlike our |z| account it gets Gant-Gorc right.
+set -euo pipefail
+export PATH="/software/cellgen/team361/ha11/envs/nichejepa/bin:$PATH"
+export HF_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/huggingface
+export TORCH_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/torch
+export XDG_CACHE_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/xdg
+export TOKENIZERS_PARALLELISM=false
+export NCCL_NVLS_ENABLE=0
+source ~/.secrets/hf_token
+echo "[`date`] scorer reliability / winner's curse | Host: $(hostname)"
+torchrun --standalone --nproc-per-node=4 phaseH/scorer_reliability.py
+python3 phaseH/scorer_reliability.py analyse
+echo "[`date`] DONE"

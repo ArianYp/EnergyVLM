@@ -1,0 +1,1018 @@
+\documentclass[11pt]{article}
+\usepackage[margin=0.95in]{geometry}
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage{lmodern}
+\usepackage{microtype}
+\usepackage{amsmath,amssymb}
+\usepackage{booktabs}
+\usepackage{tabularx}
+\usepackage{array}
+\usepackage{xcolor}
+\usepackage{enumitem}
+\usepackage[hidelinks]{hyperref}
+\usepackage[capitalize,noabbrev]{cleveref}
+\usepackage{caption}
+
+\definecolor{obsblue}{HTML}{075FA8}
+\definecolor{badred}{HTML}{B42318}
+\newcommand{\obs}[1]{\textcolor{obsblue}{#1}}
+\newcommand{\bad}[1]{\textcolor{badred}{#1}}
+\setlist[itemize]{leftmargin=*,topsep=2pt,itemsep=2pt}
+\setlist[enumerate]{leftmargin=*,topsep=2pt,itemsep=2pt}
+\captionsetup{font=small,labelfont=bf}
+
+\title{\textbf{Pair the target with its own noise}\\[3pt]
+\large What actually helps when a few-step generator copies selected teacher images}
+\author{}
+\date{}
+
+\begin{document}
+\maketitle
+\vspace{-0.25in}
+
+\begin{abstract}
+\noindent
+A slow image generator makes four images for one caption. We train a fast generator to copy them.
+This report asks what makes that work, and finds that most of the answer depends on the training
+budget and on how often a caption is seen again. Measuring one factor at a time, three seeds each:
+pairing each chosen image with \textbf{the noise that produced it} is worth \obs{$+0.083$} on
+T2I-CompBench++ after \obs{6{,}000} updates, but only \obs{$+0.031$} after \obs{40{,}000}, where a
+plain label does as well. Keeping the chosen image \textbf{the same} between visits is worth
+\obs{$+0.042$} at \obs{3{,}000} captions and \bad{nothing} at \obs{24{,}000}, because it can only act
+when a caption is revisited. \textbf{Which} image is chosen is worth at most \obs{$+0.037$}. The
+order in which several images are visited is worth nothing at all. Two results survive scaling.
+Fixing the target buys alignment by \textbf{collapsing} what a caption can produce, failing a
+pre-registered diversity gate at \bad{$-0.167$}, while coupling raises alignment and variation
+together. And reward selection at \textbf{sampling} time --- best of four, no training --- beats the
+same signal used as a training label. The coupling method is not new; it is text-conditioned Reflow.
+The contribution is the diagnosis and the scope.
+\end{abstract}
+
+
+\section{Summary}
+
+\Cref{sec:goal} states the question we set out to answer and \cref{sec:story} tells what happened to
+it. \Cref{tab:summary} lists every factor we varied, each measured with the others held still, at
+the budget and pool size the campaign used throughout. \textbf{Read it with \cref{sec:scope}}, which
+shows that most of these numbers move --- some of them to zero --- when the budget or the number of
+captions changes.
+
+
+\begin{table}[h]
+\centering
+\caption{Every factor, measured with the others held still. Paired bootstrap over seeds and test
+captions. Three seeds per arm.}
+\label{tab:summary}
+\small
+\begin{tabular}{@{}llrl@{}}
+\toprule
+Factor & Change & Effect & 95\% interval \\
+\midrule
+Training recipe & flow matching $\to$ consistency & \obs{$+0.2043$} & \obs{$[+0.1770,+0.2254]$} \\
+\textbf{Coupling} & fresh noise $\to$ the target's own noise, one target & \obs{$\mathbf{+0.0832}$} & \obs{$[+0.0608,+0.1049]$} \\
+\textbf{Coupling} & fresh noise $\to$ each target's own noise, four targets & \obs{$\mathbf{+0.0863}$} & \obs{$[+0.0546,+0.1194]$} \\
+Persistence & target stops changing, \obs{40}k steps & \obs{$+0.0954$} & \obs{$[+0.0797,+0.1097]$} \\
+Persistence & target stops changing, \obs{6}k steps & \obs{$+0.0417$} & \obs{$[+0.012,+0.072]^{\ast}$} \\
+Label & random $\to$ VQAScore top-1, \obs{40}k steps & \obs{$+0.0366$} & \obs{$[+0.0268,+0.0461]$} \\
+Targets & four $\to$ one, churn held at \obs{100\%} & \obs{$+0.0266$} & \bad{$[-0.0028,+0.0580]$} \\
+Targets & four $\to$ two, churn held at \obs{100\%} & \obs{$+0.0275$} & \bad{$[-0.0028,+0.0594]$} \\
+Order & churn \obs{14\%} $\to$ \obs{100\%}, two targets & \bad{$+0.0017$} & \bad{$[-0.0176,+0.0212]$} \\
+Order & churn \obs{43\%} $\to$ \obs{100\%}, four targets & \bad{$-0.0019$} & \bad{$[-0.0420,+0.0408]$} \\
+\bottomrule
+\end{tabular}
+
+\vspace{2pt}
+{\footnotesize $^{\ast}$widened for the caption-to-target map, which a seed-only bootstrap does not
+resample (\cref{sec:assign}). Every other interval here is seed-and-prompt only.}
+\end{table}
+
+
+\section{What we set out to do}
+\label{sec:goal}
+
+A slow generator makes several images for one caption. They are not equally good: one may show both
+objects the caption asks for, another may miss one. A fast generator is then trained to copy the
+slow one. The obvious idea is to copy \emph{the best} image rather than a random one, and to get a
+better fast generator for free.
+
+To do that you must know which image is best. The reliable way is to decode every image and ask a
+vision--language model, which is slow. So we built a cheap score, \textbf{PRS}, that ranks images
+\emph{inside} the generator with no decode step (\cref{sec:scores}), and set out to answer:
+
+\begin{enumerate}[nosep]
+  \item Does copying a better image make a better fast generator?
+  \item Can a cheap score find the better image well enough to matter?
+\end{enumerate}
+
+Both answers turned out to be ``barely'', and the experiments that established that led somewhere
+more useful. \Cref{sec:story} tells it in order, because the final result only makes sense against
+what it replaced.
+
+\section{How the answer changed, in four stages}
+\label{sec:story}
+
+\paragraph{Stage 1. Choosing barely matters, but \emph{committing} to a choice helps a lot.}
+We compared rules that pick one of four teacher images per caption. Making the label better --- from
+a random pick to the VQAScore top-1 of four --- was worth almost nothing at \obs{6{,}000} training steps,
+\obs{$+0.0042$} with an interval crossing zero. But a rule that picked \emph{at random} and then
+\emph{kept its choice} beat a rule that redrew on every visit by \obs{$+0.0417$}
+(\cref{sec:stage1}). The gain had nothing to do with picking well. We called this
+\textbf{persistence} and assumed the mechanism was stability: a target that stops moving is easier
+to regress onto.
+
+\paragraph{Stage 2. That name was wrong. Order does not matter at all.}
+If stability were the mechanism, how \emph{often} the target changes should matter. We fixed the
+exact multiset of images a caption trains on and varied only the order, from changing once to
+changing every single visit. We did not detect any effect, with the switch rate varied sevenfold
+(\cref{sec:stage2}). A gradient-variance measurement agreed --- switching accounts for only
+\obs{11.2\%} of the variance, too little to explain the effect. So the benefit of ``fixing the
+target'' was not about the target being fixed.
+
+\paragraph{Stage 3. The real cause is which \emph{noise} is paired with the image.}
+Every teacher image was produced from a specific noise sample: the teacher started at
+$z_0$ and arrived at $x_0$. Our training loss discarded that pairing and re-noised the chosen image
+with a fresh random draw, asking the student to learn a straight line between two points the teacher
+never connected. Restoring the pairing is worth \obs{$+0.0832$}, twice the persistence effect and
+the largest thing here apart from the choice of objective (\cref{sec:stage3}).
+
+\paragraph{Why the earlier result looked like persistence.}
+Every arm that ``fixed the target'' also happened to use fewer distinct images, and fewer distinct
+images means fewer distinct \emph{mismatched} noise--image pairs. Fixing the target was an indirect,
+partial way of reducing the harm done by broken coupling. Fixing the coupling directly is better,
+and it removes the reason to discard images at all: \textbf{all four teacher images, each paired with
+its own noise, beat one image with random noise by \obs{$+0.0597$}}. So the original goal --- keep
+the best image, throw the rest away --- was solving the wrong problem.
+
+\paragraph{Stage 4. And then scale moved almost all of it.}
+Every number above is from \obs{6{,}000} updates over \obs{3{,}000} captions. Run the same arms
+longer, or over more captions, and the picture changes: the persistence gain vanishes when captions
+stop being revisited, the coupling gain more than halves, and the label gain grows
+(\cref{sec:scope}). Two findings survive. Fixing the target buys its alignment by collapsing what a
+caption can produce, while coupling does not (\cref{sec:diversity}); and reward selection applied at
+sampling time beats the same signal used as a training label (\cref{sec:refs}).
+
+\paragraph{And the cheap score does not earn its place.}
+Trained downstream, PRS is beaten by CLIP-I and is indistinguishable from using no score at all
+(\cref{sec:scores}). Skipping the decode also saves less than it sounds, because the decoder costs
+less than the two extra network calls the score needs.
+
+\section{Setup}
+
+\subsection{Model and data}
+Stable Diffusion 3.5-Medium. A \textbf{VAE} turns a $512\times512$ image into a
+$16\times64\times64$ \emph{latent} and back. Three \textbf{text encoders} turn the caption into
+vectors. A \textbf{denoiser} of 24 transformer blocks and 2.24 billion weights predicts how to move
+a latent. Only the denoiser is trained.
+
+Training uses \obs{3{,}000} COCO \texttt{train2017} captions, each with the photograph it was
+written for. We removed \obs{4{,}190} captions that repeat inside the split and \obs{179} that also
+appear in \texttt{val2017}. For each caption the frozen slow generator makes $N=\obs{4}$ images at
+\obs{8} steps and guidance \obs{7.0}. Image $j$ of caption $i$ starts from noise
+$z_0^{(i,j)}$ drawn with seed $1000\,i+j$; the trainer uses the same rule, so it always rebuilds the
+image that was scored.
+
+\subsection{The flow}
+The denoiser learns a straight path between a latent $x_0$ and noise $\varepsilon$:
+\begin{equation}
+  x_\sigma = (1-\sigma)x_0 + \sigma\varepsilon, \qquad
+  \frac{\mathrm{d}x_\sigma}{\mathrm{d}\sigma} = \varepsilon - x_0 .
+\label{eq:path}
+\end{equation}
+It predicts that speed as $v_\theta(x_\sigma,\tau,c)$, where $c$ is the caption and $\tau=T\sigma$
+with $T=\obs{1000}$, the \texttt{num\_train\_timesteps} of the released model. $T$ is a property of
+the checkpoint, not a free choice. Images are made with Euler steps,
+$x_{k+1}=x_k+(\sigma_{k+1}-\sigma_k)v_\theta$. The slow generator runs the denoiser twice per step
+and mixes the results, $g=v^-+w(v^+-v^-)$ with $w=\obs{7}$; our fast generator runs one call per
+step and learns the mixed result directly.
+
+\subsection{Two objectives}
+\label{sec:losses}
+Which objective runs is set by the arm name. An arm from one group must never be compared with an
+arm from the other.
+
+\paragraph{FM, endpoint flow matching.}
+Take the chosen image's endpoint latent $x_0$, add fresh noise at a random level, ask for the
+direction back out:
+\begin{equation}
+  u\sim\mathcal U(0,1),\quad \sigma=\frac{su}{1+(s-1)u},\ s=\obs{3.0},\qquad
+  \boxed{\;\mathcal L_{\mathrm{FM}}=\bigl\|v_\theta\bigl((1-\sigma)x_0+\sigma\varepsilon,\,T\sigma,\,c\bigr)-(\varepsilon-x_0)\bigr\|_2^2\;}
+\label{eq:lossfm}
+\end{equation}
+averaged over \obs{5} draws per update. \textbf{The choice of $\varepsilon$ is the subject of
+\cref{sec:stage3}.}
+
+\paragraph{CD, consistency distillation.}
+Here the teacher's whole path is used. With states $z_0..z_8$, teacher indices
+$\mathcal W=\{3..7\}$ and a gap $\Delta\in\{1,2,3\}$, the student at the noisier state $k_s=k_t-\Delta$
+predicts $\hat x_0=z_{k_s}-\sigma_{k_s}v_\theta$, against the teacher's
+$\tilde x_0=z_{k_t}-\sigma_{k_t}(z_{k_t+1}-z_{k_t})/(\sigma_{k_t+1}-\sigma_{k_t})$, under a
+pseudo-Huber distance with $c=\obs{0.13824}$.
+
+\subsection{Training and testing}
+\obs{6{,}000} updates unless stated, AdamW at \obs{$10^{-5}$}, \obs{300} warm-up, gradient clipping
+\obs{1.0}, \obs{5} supervised pairs per update, $512\times512$. Every arm shares prompts, order,
+optimiser, schedule, initialisation and compute; only the target and its noise differ.
+
+Testing uses a \textbf{one-sample variant} of T2I-CompBench++
+(\texttt{Karine-Huang/T2I-CompBench} at \texttt{1b70949}), \obs{2{,}398} prompts, the official
+per-category scorers, headline the macro average of the 8 categories. \textbf{The official protocol
+generates ten images per prompt; we generate one.} Our numbers are therefore internally comparable
+across arms, which is what this report needs, but they are \emph{not} comparable with published
+T2I-CompBench++ scores and should not be quoted as such. \textbf{GenEval2} (\texttt{facebookresearch/GenEval2} at \texttt{a6e82d2}), \obs{800}
+prompts as shipped, Soft-TIFA. \textbf{One} image per prompt, \obs{4} steps, guidance \obs{1.0},
+shift \obs{3.0}. Intervals are a paired bootstrap over seeds and captions, captions resampled within
+category.
+
+
+\section{Reference points}
+\label{sec:refs}
+
+Without these rows a student's score cannot be placed against anything.
+
+\begin{table}[h]
+\centering
+\caption{What the models we distil from actually score, at the same test settings.}
+\label{tab:refs}
+\small
+\begin{tabular}{@{}llrrr@{}}
+\toprule
+Model & Sampling & Calls & CompBench++ & GenEval2 \\
+\midrule
+SD3.5-M, best of \obs{8} & \obs{28} steps, guidance \obs{7} & \obs{448} & \obs{0.5495} & \obs{0.2537} \\
+SD3.5-M, best of \obs{4} & \obs{28} steps, guidance \obs{7} & \obs{224} & \obs{0.5428} & \obs{0.2304} \\
+SD3.5-M, one sample & \obs{28} steps, guidance \obs{7} & \obs{56} & \obs{0.5053} & \obs{0.1705} \\
+Teacher (SD3.5-M) & \obs{8} steps, guidance \obs{7} & \obs{16} & \obs{0.4544} & \obs{0.1758} \\
+$G$, guidance absorbed & \obs{8} steps, guidance \obs{1} & \obs{8} & \obs{0.4593} & \obs{0.1823} \\
+$G$ run at 4 steps & \obs{4} steps, guidance \obs{1} & \obs{4} & \obs{0.2859} & \obs{0.1146} \\
+Untrained & \obs{4} steps, guidance \obs{7} & \obs{8} & \obs{0.2557} & \obs{0.0732} \\
+Untrained & \obs{4} steps, guidance \obs{1} & \obs{4} & \obs{0.1743} & \obs{0.0335} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Four things follow. $G$ \textbf{matches the teacher at half the calls} (\cref{sec:g8}). Running $G$
+at \obs{4} steps with no step distillation already gives \obs{0.2859}, so that --- not the untrained
+model --- is the bar a 4-step student must clear. Every consistency-distilled student in this report
+\emph{beats} the \obs{8}-step teacher it copied (\cref{tab:main}), so that teacher is not a ceiling.
+
+And selection is worth more at \emph{sampling} time than anything we moved into the weights. Picking
+the best of \obs{4} samples by VQAScore adds \obs{$+0.0375$} on CompBench++ and \obs{$+0.0599$} on
+GenEval2, with no training at all; the same signal used as a training label added \obs{$+0.0336$}
+and \obs{$+0.0366$} after \obs{40{,}000} updates. The gain is largest exactly where every trained arm
+failed: \texttt{spatial} rises from \obs{0.2716} to \obs{0.3696} under best-of-\obs{4}. An earlier
+campaign in this project measured best-of-\obs{4} on the \obs{8}-step teacher at \obs{$+0.0529$}
+$[+0.0434,+0.0625]$; the smaller figure here is expected, since better base samples leave less to
+gain. \textbf{After two campaigns, the evidence is that reward selection works at inference and does
+not transfer into the weights.}
+
+
+\section{Stage 1: choosing barely matters, committing helps}
+\label{sec:stage1}
+
+\begin{table}[h]
+\centering
+\caption{The main campaign. Three seeds unless marked. \texttt{FM} blocks are comparable with each
+other; \texttt{CD} uses the other objective and is separate.}
+\label{tab:main}
+\small
+\begin{tabular}{@{}llrrr@{}}
+\toprule
+Arm & Target & $\rho$ & CompBench++ & GenEval2 \\
+\midrule
+\multicolumn{5}{@{}l@{}}{\emph{Flow matching, \obs{6{,}000} steps}} \\
+\texttt{PRS-top1}   & fixed  & \obs{0.379} & \obs{0.3022} & \obs{0.1384} \\
+\texttt{VQA-fix}    & fixed  & \obs{0.685} & \obs{0.3021} & \obs{0.1299} \\
+\texttt{PRS-fix}    & fixed  & \obs{0.260} & \obs{0.3001} & \obs{0.1363} \\
+\texttt{VQA-top1}   & fixed  & \obs{1.000} & \obs{0.2899} & \obs{0.1324} \\
+\texttt{RAND-fix}   & fixed  & \obs{0.000} & \obs{0.2857} & \obs{0.1246} \\
+\texttt{PRS-soft}   & moves  & \obs{0.260} & \obs{0.2709} & \obs{0.1056} \\
+\texttt{VQA-soft}   & moves  & \obs{0.685} & \obs{0.2475} & \obs{0.0958} \\
+\texttt{RAND-soft}  & moves  & \obs{0.001} & \obs{0.2440} & \obs{0.0922} \\
+\midrule
+\multicolumn{5}{@{}l@{}}{\emph{Flow matching, \obs{40{,}000} steps}} \\
+\texttt{VQA-top1}   & fixed  & \obs{1.000} & \obs{0.4131} & \obs{0.2349} \\
+\texttt{PRS-top1}   & fixed  & \obs{0.379} & \obs{0.4101} & \obs{0.2189} \\
+\texttt{RAND-fix}   & fixed  & \obs{0.000} & \obs{0.3765} & \obs{0.2049} \\
+\texttt{VQA-soft}   & moves  & \obs{0.685} & \obs{0.3199}$^{\dagger}$ & \obs{0.1512} \\
+\texttt{RAND-soft}  & moves  & \obs{0.001} & \obs{0.2810} & \obs{0.1172} \\
+\midrule
+\multicolumn{5}{@{}l@{}}{\emph{Consistency distillation, \obs{6{,}000} steps}} \\
+\texttt{CD-VQA-top1} & fixed & \obs{1.000} & \obs{0.4943} & \obs{0.2408} \\
+\texttt{CD-PRS-top1} & fixed & \obs{0.379} & \obs{0.4901} & \obs{0.2222} \\
+\texttt{CD-RAND-fix} & fixed & \obs{0.000} & \obs{0.4864} & \obs{0.2231} \\
+\bottomrule
+\end{tabular}
+
+\vspace{2pt}
+{\footnotesize $^{\dagger}$one seed.}
+\end{table}
+
+At \obs{40{,}000} steps the VQAScore top-1 is worth \obs{$+0.0366$} $[+0.0268,+0.0461]$ over no label,
+and a mediocre one (\obs{$\rho=0.379$}) already reaches \obs{$+0.0336$} $[+0.0239,+0.0431]$ of it.
+\textbf{Rank quality saturates early.} At \obs{6{,}000} steps neither is separable from zero. Under
+the consistency objective the VQAScore top-1 is worth \obs{$+0.0079$} $[+0.0010,+0.0149]$.
+
+
+\section{Stage 2: the order of targets does not matter}
+\label{sec:stage2}
+
+To separate \emph{how often the target changes} from \emph{how many targets there are}, we fixed the
+multiset of targets a caption sees and varied only the order. Each caption is visited exactly
+\obs{8} times (\obs{6{,}000} updates $\times$ \obs{4} workers $\div$ \obs{3{,}000} captions), so at
+support size $m$ every one of $m$ targets is used $8/m$ times in every condition. No label is used
+anywhere in this section.
+
+\begin{table}[h]
+\centering
+\caption{Same targets, same counts, different order. Churn is the measured share of revisits where
+the target changed, averaged over \obs{3{,}000} captions.}
+\label{tab:order}
+\small
+\begin{tabular}{@{}lrrrr@{}}
+\toprule
+Targets $m$ & Order & Churn & CompBench++ & GenEval2 \\
+\midrule
+1 & fixed        & \obs{0\%}     & \obs{0.2696} & \obs{0.1224} \\
+2 & long blocks  & \obs{14.3\%}  & \obs{0.2687} & \obs{0.1217} \\
+2 & shuffled     & \obs{57.1\%}  & \obs{0.2550} & \obs{0.1024} \\
+2 & alternating  & \obs{100\%}   & \obs{0.2704} & \obs{0.1112} \\
+4 & long blocks  & \obs{42.9\%}  & \obs{0.2449} & \obs{0.0867} \\
+4 & shuffled     & \obs{85.5\%}  & \obs{0.2494} & \obs{0.0916} \\
+4 & alternating  & \obs{100\%}   & \obs{0.2429} & \obs{0.0857} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{itemize}
+  \item \textbf{Order: nothing.} At two targets, \obs{14\%} against \obs{100\%} churn gives
+    \bad{$-0.0017$} $[-0.0209,+0.0180]$. At four targets, \obs{43\%} against \obs{100\%} gives
+    \bad{$+0.0019$} $[-0.0413,+0.0422]$. We did not detect an order effect at either support size. The four-target interval still admits an effect as large as \obs{0.042}, so this is a failure to detect, not a demonstration that order is irrelevant.
+  \item \textbf{Number of targets: marginal.} Two targets against four, both at \obs{100\%} churn,
+    gives \obs{$+0.0275$} $[-0.0029,+0.0589]$, an interval that touches zero.
+\end{itemize}
+
+\paragraph{So ``persistence'' was the wrong name.}
+The gain we first measured by fixing the target is not a gain from \emph{stability}. Making the
+target change on every single visit costs nothing, as long as the number of distinct targets is held
+down. And \cref{sec:stage3} shows even that is unnecessary when the noise is coupled.
+
+\paragraph{A limit of this design.}
+With the multiset fixed at \obs{8} visits, more targets means fewer repeats of each: $m=1$ shows one
+target \obs{8} times, $m=4$ shows each twice. So ``more targets'' and ``fewer repeats per target''
+cannot be separated here. Separating them needs a different budget, for example $m=4$ over
+\obs{16} visits against $m=2$ over \obs{8}.
+
+
+\section{Stage 3: pair each target with its own noise}
+\label{sec:stage3}
+
+\Cref{eq:lossfm} needs a noise $\varepsilon$. The obvious choice, and the one we used at first, is a
+fresh draw. But every $x_0$ came from a specific noise: the teacher rolled $z_0^{(i,j)}$ forward and
+arrived at $x_0^{(i,j)}$. Drawing a fresh $\varepsilon$ throws that pairing away and asks the student
+to learn a straight line between an unrelated pair of points.
+
+\begin{equation}
+  \text{fresh:}\quad \varepsilon\sim\mathcal N(0,I)
+  \qquad\text{against}\qquad
+  \text{coupled:}\quad \varepsilon = z_0^{(i,j)} .
+\label{eq:coupling}
+\end{equation}
+
+With coupling, $(1-\sigma)x_0+\sigma\varepsilon$ is the \emph{straight interpolation induced by the
+teacher's source--endpoint pairing}. It is not the teacher's trajectory: the numerical ODE path from
+$z_0$ to $x_0$ is generally curved, and this is the straight chord between its two ends.
+
+\begin{table}[h]
+\centering
+\caption{Coupling, at one target and at four. Three seeds each. Both rows of a pair share the same
+caption-to-image map, so that map cancels in the difference.}
+\label{tab:coupling}
+\small
+\begin{tabular}{@{}llrrl@{}}
+\toprule
+Targets per caption & Noise & CompBench++ & GenEval2 & Gain from coupling \\
+\midrule
+one, fixed & fresh & \obs{0.2696} & \obs{0.1224} & --- \\
+one, fixed & \textbf{its own} & \obs{\textbf{0.3528}} & \obs{0.1610} & \obs{$+0.0832$ $[+0.0608,+0.1049]$} \\
+four, maximum churn & fresh & \obs{0.2429} & \obs{0.0857} & --- \\
+four, maximum churn & \textbf{each its own} & \obs{\textbf{0.3293}} & \obs{0.1338} & \obs{$+0.0863$ $[+0.0546,+0.1194]$} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\paragraph{The one-line result.}
+Keeping \textbf{all four} teacher images, each paired with its own noise, scores \obs{0.3293}.
+Keeping \textbf{one} image with random noise scores \obs{0.2696}. \textbf{The problem the first
+two stages were circling --- why using fewer teacher images helped --- was never that there were
+several images. It was that the loss had thrown away which noise made which image.}
+
+\paragraph{Coupling is worth more than choosing, ordering or fixing the target.}
+It is \obs{$+0.083$}, against \obs{$+0.042$} for fixing the target at this budget and
+\obs{$+0.034$} for the VQAScore top-1. It is also the best identified of these numbers, because the two
+arms of each pair share one caption-to-image map (\cref{sec:assign}).
+
+\paragraph{Coupling and the number of targets are close to additive.}
+The gain from coupling is almost the same at one target (\obs{$+0.0832$}) and at four
+(\obs{$+0.0863$}); the interaction is \obs{$+0.0032$}. Equivalently, the cost of using four targets
+rather than one is \obs{$-0.0266$} $[-0.0581,+0.0026]$ without coupling and \obs{$-0.0235$}
+$[-0.0464,+0.0008]$ with it. \textbf{Coupling does not explain away the benefit of using fewer
+targets, and it does not remove it.} Four coupled targets still score below one coupled target.
+
+An earlier version of this report claimed all four targets could be kept ``at no cost in
+alignment''. That is contradicted by \obs{0.3293} against \obs{0.3528}. The supported statement is:
+correct coupling gives a large gain that is nearly independent of how many targets are used, and
+fewer targets separately gives a smaller one. Whether the \obs{$-0.0235$} is worth paying depends on
+the diversity measurement, which is not yet done (\cref{sec:limits}).
+
+\paragraph{This is not a new algorithm.}
+Pairing a generated endpoint with the noise that produced it, and training on the straight
+interpolation between them, is \textbf{Reflow}, introduced with rectified flow and used at scale by
+InstaFlow. Related coupling constructions appear in Multisample Flow Matching and StraightFM. Our
+contribution here is not the method: it is the measurement that this coupling, and not target
+stability or label quality, accounts for most of what we had attributed to selection, together with
+the controls in \cref{sec:stage2} that rule out the alternative. Read this report as an empirical
+diagnosis of a known mechanism in a setting where it had been discarded by accident.
+
+\paragraph{What is specific to our setting.}
+Reflow normally couples a model's own samples. Here the endpoints are \emph{teacher} samples that
+have been \emph{selected} by a reward, and the same caption is revisited many times. Selecting
+best-of-$N$ by a reward biases which source noises survive, so the source marginal seen by the
+student is no longer the Gaussian that Reflow assumes. We have not measured that bias, and it is
+the part of this problem we think is actually open.
+
+\paragraph{Predicted before it was measured.}
+We split the flow-matching gradient variance by the law of total variance over the four candidates
+$j$, on \obs{100} captions, using a fixed random \obs{200{,}000}-coordinate sketch:
+\begin{equation}
+  \operatorname{Var}(g)=\underbrace{\mathbb E_j\!\left[\operatorname{Var}(g\mid j)\right]}_{\text{noise inside one target}}
+  +\underbrace{\operatorname{Var}_j\!\left(\mathbb E[g\mid j]\right)}_{\text{switching between targets}} .
+\label{eq:varsplit}
+\end{equation}
+
+\begin{center}
+\small
+\begin{tabular}{@{}lrrr@{}}
+\toprule
+Noise & within a target & switching & switching share \\
+\midrule
+fresh & \obs{6.00e-4} & \obs{7.59e-5} & \obs{11.2\%} \\
+coupled & \obs{4.16e-4} & \obs{8.36e-5} & \obs{16.7\%} \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+Switching accounts for only \obs{11.2\%} of the variance, so removing it cannot explain a large
+effect. Coupling cuts the \emph{dominant} term by \obs{31\%}, and the total by \obs{26\%} --- about
+\obs{2.4} times what perfect persistence removes. We recorded the prediction that coupling would
+therefore beat persistence before those runs finished. Measured: \obs{$+0.083$} against
+\obs{$+0.042$}, a ratio of \obs{2.0}.
+
+
+\section{Scope: every effect here depends on budget and on how often a caption repeats}
+\label{sec:scope}
+
+The effects above were measured at \obs{6{,}000} updates over \obs{3{,}000} captions, which is
+\obs{8} visits per caption. Neither number is neutral. Changing the training budget and changing the
+number of unique captions each move the results, and they move them in \emph{opposite} directions.
+
+\subsection{Persistence needs revisits, and disappears without them}
+
+A fixed target can only differ from a redrawn one on a caption's second visit. We held the number of
+updates fixed and changed only how many unique captions they are spread over.
+
+\begin{table}[h]
+\centering
+\caption{Fixed against redrawn target, at three pool sizes and one budget
+(\obs{6{,}000} updates $\times$ \obs{4} workers = \obs{24{,}000} caption visits).}
+\label{tab:captioncount}
+\small
+\begin{tabular}{@{}lrrrl@{}}
+\toprule
+Captions & Visits each & Fixed & Redrawn & Gap \\
+\midrule
+\obs{3{,}000}  & \obs{8.0} & \obs{0.2679} & \obs{0.2376} & \obs{$+0.0303$} $[+0.0025,+0.0574]$ \\
+\obs{12{,}000} & \obs{2.0} & \obs{0.2466} & \obs{0.2355} & \obs{$+0.0111$} $[+0.0001,+0.0209]$ \\
+\obs{23{,}999} & \obs{1.0} & \obs{0.2450} & \obs{0.2438} & \bad{$+0.0012$} $[-0.0153,+0.0174]$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The gap falls monotonically and reaches zero exactly where it must: at one visit per caption the two
+arms are the \emph{same procedure}, so \obs{$+0.0012$} is this experiment's own noise floor and it
+validates the design. \textbf{The persistence result belongs to low-data, repeatedly recycled
+distillation.} It is not a general principle of few-step distillation, and a paper claiming it as one
+would be wrong.
+
+\subsection{Coupling, unlike persistence, does not shrink with pool size}
+
+Persistence decays across \cref{tab:captioncount} because its mechanism --- a target that stops
+changing --- needs revisits. Coupling has no such requirement, and it does not decay.
+
+\begin{table}[h]
+\centering
+\caption{Own source noise against fresh, at two pool sizes and one budget
+(\obs{6{,}000} updates). Reference-only: see the map caveat in \cref{sec:assign}.}
+\label{tab:couplingscope}
+\small
+\begin{tabular}{@{}lrrrl@{}}
+\toprule
+Captions & Visits each & Fresh & Own source & Gain \\
+\midrule
+\obs{3{,}000}  & \obs{8.0} & \obs{0.2679} ($n{=}3$) & \obs{0.3594} ($n{=}3$) & \obs{$+0.0915$} \\
+\obs{12{,}000} & \obs{2.0} & \obs{0.2466} ($n{=}2$) & \obs{0.3289} ($n{=}3$) & \obs{$+0.0823$} \\
+\obs{23{,}999} & \obs{1.0} & \obs{0.2450} ($n{=}2$) & \obs{0.3267} ($n{=}3$) & \obs{$+0.0817$} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The gain is nearly flat across an \obs{8}-fold change in visits per caption, and at \obs{1.0} visits
+persistence has no mechanism at all --- yet \obs{$+0.0817$} of it is still present. \textbf{So the
+drop from \obs{$+0.0832$} at \obs{6}k updates to \obs{$+0.0310$} at \obs{40}k is a \emph{budget}
+effect, not a data-scope effect, and it is not mainly persistence.} An earlier draft of this report
+described it as a data-scope effect; that was wrong.
+
+The residual gradient \obs{$+0.0915\to+0.0823\to+0.0817$} points the right way for a small
+persistence component --- \obs{3{,}000} captions is the only row where a caption is revisited --- and
+would put that component near \obs{$+0.010$} on top of a visit-independent \obs{$+0.082$}. We do not
+claim it: two of the three fresh cells are $n{=}2$, and \obs{0.010} is not separable from run noise
+here. It is a hypothesis for the controlled ladder, not a measurement.
+
+Two cautions. These two cells are the ones whose fresh and coupled arms used different
+caption-to-image maps (\cref{sec:assign}), so they are reference-only and their intervals are wider
+than a paired design would give. And a flat gain across pool size is here inseparable from a flat
+gain across revisit rate, because the two move together by construction: breaking that would need a
+cell at, say, \obs{3{,}000} captions and \obs{750} updates.
+
+\subsection{Coupling shrinks with budget; the label grows}
+
+\begin{table}[h]
+\centering
+\caption{The same three factors at two budgets. They do not move together.}
+\label{tab:budgetscope}
+\small
+\begin{tabular}{@{}lrr@{}}
+\toprule
+Factor & \obs{6{,}000} steps & \obs{40{,}000} steps \\
+\midrule
+Label, $\rho\;\obs{0}\to\obs{1}$, target fixed & \bad{$+0.0042$} (not detected) & \obs{$+0.0366$} \\
+Persistence, target stops changing & \obs{$+0.0417$} & \obs{$+0.0954$} \\
+\textbf{Coupling}, one target & \obs{$\mathbf{+0.0832}$} & \obs{$\mathbf{+0.0310}$} $[+0.0178,+0.0432]$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Coupling is the only factor that gets \emph{smaller} with more training, and it more than halves.
+At \obs{40{,}000} steps it also stops being the best option: a coupled single target reaches
+\obs{0.4074}, against \obs{0.4101} for a PRS label and \obs{0.4131} for a VQAScore label on the same
+budget. The difference between coupling and a PRS label there is \obs{$-0.0026$}
+$[-0.0149,+0.0092]$ --- nothing.
+
+\paragraph{What we think this means.}
+Coupling gives the student an easier regression problem: the interpolation it must invert is the
+straight chord of a pair the teacher realised, rather than a chord between unrelated points. An
+easier problem helps most when training is short and matters less once the student has had time to
+fit the harder one. On this reading coupling is an \emph{optimisation} aid rather than a change in
+what is learned, which is consistent with it shrinking while the label effect grows.
+
+\paragraph{So the headline must be stated with its scope.}
+Coupling is a large win at a short budget, worth about \obs{$+0.083$} at \obs{6{,}000} steps. By
+\obs{40{,}000} steps it is worth \obs{$+0.031$} and is matched by simply using a label. We do not
+have evidence that it helps at budgets longer than that.
+
+\subsection{Most of the coupling gain is that the noise stops changing, not that it is the right noise}
+
+If coupling works because the source and the endpoint belong together, then pairing an endpoint with
+some \emph{other} fixed noise should not help. We tested that directly, holding the target fixed and
+changing only which noise it is paired with.
+
+\begin{table}[h]
+\centering
+\caption{Same fixed target; only the paired noise differs. \obs{6{,}000} steps.}
+\label{tab:noiseid}
+\small
+\begin{tabular}{@{}llrl@{}}
+\toprule
+Noise & What it is & CompBench++ & Step \\
+\midrule
+fresh & a new draw on every visit & \obs{0.2696} & --- \\
+another caption's & a fixed draw, unrelated to this endpoint & \obs{0.3212}$^{\dagger}$ & \obs{$+0.0516$} $[+0.0333,+0.0672]$ \\
+its own & the source the teacher actually used & \obs{0.3528} & \obs{$+0.0316$} $[+0.0172,+0.0488]$ \\
+\bottomrule
+\end{tabular}
+
+\vspace{2pt}
+{\footnotesize $^{\dagger}$one seed; the remaining seeds and two further controls
+(another candidate of the same caption, and a fixed draw that was never a rollout source) are still
+running.}
+\end{table}
+
+The split is roughly \obs{60}/\obs{40}. Most of the benefit comes from the noise simply being
+\emph{fixed per target}: an unrelated noise from another caption recovers \obs{$+0.052$} of the
+\obs{$+0.083$}. Being the \emph{correct} source is worth a further \obs{$+0.032$} --- real, and
+comparable to the whole label effect at \obs{40{,}000} steps, but not the main part.
+
+\textbf{This narrows the claim.} An earlier version of this report said the loss had ``thrown away
+which noise made which image''. That is only \obs{40\%} of the story. The larger part is that the
+loss redrew the source on every visit, and stopping that redraw is most of the gain.
+
+\section{Diversity: the two ways of gaining alignment are not equivalent}
+\label{sec:diversity}
+
+Every alignment number here uses one image per prompt, so none of them can see a model that has
+learned to draw the same safe picture every time. A pre-registered gate from an earlier campaign in
+this project measures that directly: \obs{4} images per prompt differing only in initial noise, mean
+pairwise DINOv2 cosine distance and mean pairwise LPIPS, failing if the paired interval's upper
+bound falls below \obs{$-0.02$}. We ran the same harness, unchanged, on our arms.
+
+\begin{table}[h]
+\centering
+\caption{Conditional diversity: how different are \obs{4} images of the same caption? Higher is more
+varied. \obs{500} prompts.}
+\label{tab:diversity}
+\small
+\begin{tabular}{@{}llrr@{}}
+\toprule
+Arm & Budget & DINO $1-\cos$ & LPIPS \\
+\midrule
+untrained & --- & \obs{0.5942} & \obs{0.4905} \\
+\midrule
+\texttt{RAND-soft}, target moves & \obs{40}k & \obs{0.3909} & \obs{0.3339} \\
+\texttt{RAND-fix}, target fixed & \obs{40}k & \bad{0.2236} & \bad{0.2593} \\
+\texttt{PRS-top1} & \obs{40}k & \bad{0.2004} & \obs{0.2720} \\
+\texttt{VQA-top1} & \obs{40}k & \bad{0.1994} & \obs{0.2670} \\
+\midrule
+fresh noise, one target & \obs{6}k & \obs{0.4069} & \obs{0.3370} \\
+coupled, one target & \obs{6}k & \obs{0.4609} & \obs{0.6087} \\
+fresh noise, four targets & \obs{6}k & \obs{0.4580} & \obs{0.3720} \\
+\textbf{coupled, four targets} & \obs{6}k & \obs{\textbf{0.4618}} & \obs{\textbf{0.5871}} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\paragraph{Fixing the target fails the gate.}
+\texttt{RAND-fix} $-$ \texttt{RAND-soft} is \bad{$-0.1673$} $[-0.1761,-0.1589]$ on DINO and
+\bad{$-0.0746$} $[-0.0795,-0.0698]$ on LPIPS, against a failure threshold of \obs{$-0.02$}. The
+\obs{$+0.0954$} of alignment that a fixed target buys is paid for by losing \obs{43\%} of the
+variation the model had left. Adding a label collapses it further.
+
+\paragraph{Coupling passes it.}
+Coupled four targets $-$ fresh one target is \obs{$+0.0549$} $[+0.0447,+0.0649]$ on DINO and
+\obs{$+0.2501$} $[+0.2431,+0.2572]$ on LPIPS. Coupling raises alignment \emph{and} variation.
+
+We checked the images before believing the LPIPS figure, because a value above the untrained model's
+is what colour corruption would also produce. It is not corruption: the coupled columns are sharper
+and carry more detail, clipped pixels stay at \obs{3}--\obs{8\%} against \obs{55\%} for the failed
+student of \cref{sec:failures}, and high-frequency energy rises only slightly.
+
+\paragraph{This is the sharpest distinction in the report.}
+An earlier campaign here measured alignment against DINO diversity across twelve arms and found them
+trading at $r=\obs{-0.9622}$. \texttt{RAND-fix} obeys that line exactly. Coupling does not: it moves
+off it. So the two routes to alignment differ in kind, not only in size --- one narrows what a
+caption can produce and the other does not.
+
+\paragraph{Limit.}
+The coupled arms here are \obs{6{,}000}-step models and the failing arms are \obs{40{,}000}-step
+models. Less training leaves more variation, so the comparison across those two blocks is
+indicative; the \obs{2}$\times$\obs{2} inside the \obs{6}k block is matched and is what the claim
+rests on. Coupled arms at \obs{40{,}000} steps are training, and \cref{sec:scope} already shows the
+alignment advantage shrinks there.
+
+\section{The five scores}
+\label{sec:scores}
+
+Four of these compare a generated image with \textbf{the real photograph the caption was written
+for}. COCO gives us that photograph, so a generated image can be scored by how close it is to the
+one a person actually described. The fifth compares the image with the caption directly.
+
+\begin{table}[h]
+\centering
+\caption{What each score is and what it costs. ``Decode?'' is whether the image must be turned from
+a latent into pixels before the score can be computed.}
+\label{tab:scoredefs}
+\small
+\begin{tabularx}{\textwidth}{@{}llX@{}}
+\toprule
+Score & Decode? & What it computes \\
+\midrule
+\textbf{VQAScore} & yes & Decode the image, then ask an 11-billion-parameter vision--language model
+  (\texttt{clip-flant5-xxl}) how well the image matches the \emph{caption}. The only score here that
+  reads the caption. We treat it as ground truth for ``which image is best''. \\
+\textbf{CLIP-I} & yes & Decode the image, embed it with the CLIP image encoder
+  (\texttt{ViT-L/14}), embed the real photograph the same way, take the cosine between them. The
+  ``-I'' marks it as \emph{image-to-image}: unlike CLIPScore, it never looks at the caption. \\
+\textbf{DINOv2} & yes & The same idea with DINOv2 features (\texttt{dinov2-base}, CLS token) instead
+  of CLIP. DINOv2 is trained without text, so it responds to layout and object identity rather than
+  to anything caption-like. \\
+\textbf{LPIPS} & yes & A perceptual \emph{distance} between the decoded image and the photograph,
+  from AlexNet features. We negate it so that, like the others, larger means better. \\
+\textbf{PRS} (ours) & \textbf{no} & Paired-reference similarity. Take the denoiser's own hidden
+  states, averaged over image tokens, for the generated latent and for the encoded photograph at one
+  noise level, and take the cosine. It needs no decoder and no second network, because the denoiser
+  has already computed these states. \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+Formally, with $\overline{h}$ the token average of one denoiser block, $\mathcal E$ the VAE encoder
+and $x_\sigma$ the noising of \cref{eq:path},
+\begin{equation}
+  \mathrm{PRS}_j = \cos\Bigl(\overline{h}\bigl(x_\sigma(z_j),\,T\sigma,\,c\bigr),\;
+  \overline{h}\bigl(x_\sigma(\mathcal E(x_{\text{ref}})),\,T\sigma,\,c\bigr)\Bigr).
+\label{eq:prs}
+\end{equation}
+
+\paragraph{How well each one ranks.}
+We score four candidates per caption on \obs{3{,}000} captions and ask what share of the available
+gain an argmax over that score recovers. Writing $R_j$ for the VQAScore of candidate $j$ and
+$\hat\jmath$ for the one a score picks,
+\begin{equation}
+  \rho=\frac{\sum_{\text{captions}}\bigl(R_{\hat\jmath}-\tfrac1N\sum_j R_j\bigr)}
+            {\sum_{\text{captions}}\bigl(\max_j R_j-\tfrac1N\sum_j R_j\bigr)} ,
+\label{eq:rho}
+\end{equation}
+a ratio of sums, so each caption carries its own available gain as weight. A perfect ranker gives
+$\rho=1$, a random one $\rho=0$.
+
+\begin{table}[h]
+\centering
+\caption{Left: ranking ability on one shared pool, so all five see the same images and are graded
+against the same VQAScore table. Right: what happens when that score is used to pick the training
+target, all arms on the same candidates, three seeds each.}
+\label{tab:rankers}
+\small
+\begin{tabular}{@{}lrlrl@{}}
+\toprule
+Score & $\rho$ & PRS $-$ this, ranking & CompBench++ & this $-$ no score, trained \\
+\midrule
+CLIP-I & \obs{40.64\%} & \bad{$+1.20$ $[-4.16,+6.55]$} & \obs{\textbf{0.3094}} & \obs{$+0.0249$ $[+0.0115,+0.0368]$} \\
+\textbf{PRS} & \obs{\textbf{41.84\%}} & --- & \obs{0.2876} & \bad{$+0.0031$ $[-0.0202,+0.0235]$} \\
+DINOv2 & \obs{39.08\%} & \bad{$+2.77$ $[-2.46,+8.02]$} & \obs{0.2869} & \bad{$+0.0024$ $[-0.0162,+0.0214]$} \\
+LPIPS & \obs{23.26\%} & \obs{$+18.58$ $[+12.85,+24.38]$} & --- & --- \\
+no score & \obs{0\%} & --- & \obs{0.2845} & --- \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\textbf{Only CLIP-I is worth using.} PRS and DINOv2 cannot be told apart from using no score at all,
+and PRS is worse than CLIP-I by \obs{$-0.0218$} $[-0.0428,-0.0056]$.
+
+\paragraph{Ranking ability does not predict usefulness.}
+PRS has the best $\rho$ of the three and produces the second-worst model. The offline measure and the
+trained outcome disagree in \emph{order}, not merely in size, so $\rho$ should not be used to choose
+a score.
+
+\paragraph{The tuning did not fully replicate.}
+PRS has two settings, the noise level and which denoiser block to read. Sweeping \obs{11}$\times$
+\obs{9} of them on a separate pool of \obs{500} captions gave a best cell of \obs{45.84\%}; the same
+setting on the disjoint \obs{3{,}000}-caption pool gives \obs{41.84\%}. A drop of \obs{4} points is
+what choosing the best of \obs{99} cells on \obs{500} captions looks like.
+
+\paragraph{And ``no decode'' does not make it cheap.}
+The decoder PRS skips costs \obs{60.8}\,ms; the two extra denoiser calls it adds cost
+\obs{83.0}\,ms. \textbf{The step we skip is cheaper than the step we add.}
+
+\begin{table}[h]
+\centering
+\caption{Cost per caption in milliseconds: four candidates, \obs{8} teacher steps, one H100, mean of
+\obs{19} captions after a warm-up. ``Shared'' is text encoding plus the four teacher rollouts,
+\obs{847.9}\,ms, which every score pays before any of them starts.}
+\label{tab:cost}
+\small
+\begin{tabular}{@{}lrrrr@{}}
+\toprule
+Score & Needs a decode? & Score only & Shared $+$ score & GPU-hours / 1000 captions \\
+\midrule
+LPIPS & yes & \obs{73.2} & \obs{921.1} & \obs{0.2559} \\
+PRS & no & \obs{94.7} & \obs{942.5} & \obs{0.2618} \\
+DINOv2 & yes & \obs{104.1} & \obs{952.0} & \obs{0.2644} \\
+CLIP-I & yes & \obs{120.8} & \obs{968.6} & \obs{0.2691} \\
+VQAScore (11B) & yes & \obs{340.8} & \obs{1188.7} & \obs{0.3302} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Against VQAScore, PRS is \obs{3.6} times cheaper on the score alone but only \bad{\obs{1.26}} times
+cheaper end to end, because every score must first make the four images. Against LPIPS it is more
+expensive outright.
+
+\section{The training recipe, and what it trades}
+\label{sec:objective}
+
+With the label held identical, moving from the flow-matching recipe to the consistency-distillation
+recipe is worth \obs{$+0.2043$} $[+0.1770,+0.2254]$ under the VQAScore label and \obs{$+0.1879$}
+$[+0.1715,+0.2071]$ under PRS. That is the largest number in this report.
+
+\paragraph{This is a recipe difference, not an ``objective'' effect.}
+The two groups differ in more than the loss. They use different training states (endpoint versus the
+teacher's trajectory), a different time support, a different source--target construction, a different
+prediction target, and a different distance (MSE against pseudo-Huber). We cannot attribute
+\obs{$+0.20$} to any one of those. Factorising them is the obvious next study and we have not run
+it.
+
+It is not a free win. GenEval2 stores a score for every atom of every prompt, so the two poolings and
+the skill breakdown can be recomputed from what is on disk. The geometric mean asks ``did it get
+everything right?''; the arithmetic mean asks ``how much did it get right?''.
+
+\begin{table}[h]
+\centering
+\caption{GenEval2 re-pooled from stored atom scores. The geometric mean reproduces the recorded
+value for \obs{71/71} results, which validates the pooling.}
+\label{tab:skills}
+\small
+\begin{tabular}{@{}lrrrrrrr@{}}
+\toprule
+Group & GM & AM & object & attribute & position & count & verb \\
+\midrule
+CD, \obs{6}k & \obs{0.1912} & \obs{0.5548} & \obs{\textbf{0.7526}} & \obs{0.6262} & \obs{0.4216} & \obs{0.3317} & \obs{0.1997} \\
+FM, \obs{40}k, fixed & \obs{0.2196} & \obs{0.5795} & \obs{0.7201} & \obs{\textbf{0.6496}} & \obs{\textbf{0.5202}} & \obs{\textbf{0.3696}} & \obs{\textbf{0.2515}} \\
+FM, \obs{6}k, fixed & \obs{0.1318} & \obs{0.4566} & \obs{0.5467} & \obs{0.5540} & \obs{0.4190} & \obs{0.2712} & \obs{0.1040} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The consistency objective draws \emph{objects} better; flow matching at the longer budget is better
+at every \emph{relational} skill, and the gap on \texttt{position} is \obs{0.099}. T2I-CompBench++ is
+dominated by attribute binding on well-drawn objects, which is the consistency objective's strength,
+so the headline understates what flow matching is good at. Partial credit is large everywhere:
+AM $\approx\obs{0.58}$ against GM $\approx\obs{0.22}$.
+
+
+\section{Absorbing guidance on its own}
+\label{sec:g8}
+
+Our students learn two things at once: one network call per step instead of two, and \obs{4} steps
+instead of \obs{8}. Trying to keep guidance \emph{inside} a 4-step student failed three times
+(\cref{sec:failures}). Doing the first job alone works.
+
+We trained $G$ to reproduce the guided teacher with a single conditional call at the same \obs{8}
+steps. The target is free: Euler's own update gives the guided speed the teacher used, and we record
+it in float32 as the teacher computes it. Rebuilding it later by subtracting stored states would
+lose several percent, because those states are kept in bfloat16 and the difference between two
+neighbours is much smaller than either.
+
+\begin{center}
+\small
+\begin{tabular}{@{}lrrr@{}}
+\toprule
+ & untrained, 1 call & $G$, 1 call & teacher, 2 calls \\
+\midrule
+relative $L_2$ to the teacher & \obs{0.7730} & \obs{0.3339} & \obs{0} \\
+cosine to the teacher & \obs{0.6258} & \obs{0.9376} & \obs{1} \\
+VQAScore & \obs{0.7155} & \obs{0.8362} & \obs{0.8459} \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+$G$ removes \obs{56.8\%} of the speed error, keeps \obs{93\%} of the teacher's VQAScore advantage
+over the unguided model, and on the benchmarks matches it outright (\cref{tab:refs}) --- at half the
+network calls.
+
+
+\section{Uncertainty}
+\label{sec:assign}
+
+\paragraph{The caption-to-image map is a variance component, and we missed it at first.}
+A \texttt{fix} arm draws one candidate per caption from a seed that depends on the caption only. So
+all three seeds of an arm train on the \emph{same} map, and a bootstrap over seeds never resamples
+it. Running three more \texttt{RAND-fix} arms with different maps as well as different seeds:
+
+\begin{center}
+\small
+\begin{tabular}{@{}lrr@{}}
+\toprule
+ & mean & standard deviation \\
+\midrule
+one map, three seeds & \obs{0.2857} & \obs{0.0115} \\
+three maps, three seeds & \obs{0.2770} & \obs{0.0212} \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+The map contributes about \obs{0.018}, more than the optimiser noise it hid behind, so intervals on
+fixed-target arms were roughly \obs{1.8} times too narrow. Corrected, the \obs{6}k persistence effect
+is about \obs{$+0.042$} $[+0.012,+0.072]$ --- still clear of zero, and weaker than first reported.
+
+\textbf{The coupling result is better protected}: both arms of each pair in \cref{tab:coupling} use
+the same map --- verified from each run's resolved configuration, not from its name --- so the
+map's main effect cancels in the difference. That does not rule out a map-by-coupling interaction,
+which our design cannot see. Repeating the coupling comparison across several independent maps is
+the check we owe it.
+
+\paragraph{Two pairing defects found afterwards, with different scopes.}
+\emph{The caption-to-image map.} A fresh arm launched \emph{without} \texttt{-{}-target\_schedule}
+selects its target with \texttt{assign\_rng(seed,idx).choice}, while an arm launched with
+\texttt{one\_fixed, m{=}1} uses \texttt{assign\_rng(seed,idx).permutation(N)[:1]}. Same generator
+stream, different call: they agree on \obs{5991}/\obs{23999} captions, or \obs{0.250}, which is
+chance for $N=4$. This does \emph{not} affect \cref{tab:coupling}, whose arms both passed the
+schedule. It does affect the scope cells of \cref{sec:scope}, whose fresh arms did not --- so those
+two cells carry an extra $\sqrt2\times\obs{0.018}\approx\obs{0.026}$ of map uncertainty and are
+reference-only rather than matched comparisons.
+
+\emph{The noise levels.} The flow-matching $\sigma$ draw comes from the global generator, and
+\texttt{-{}-coupling fresh} then draws its noise from that same generator while every coupled mode
+uses a private one. A fresh arm therefore consumes more of the global stream per update, and the
+two arms walk different $\sigma$ sequences from update \obs{2} onward. This follows from the
+coupling mode rather than the schedule, so unlike the map defect it touches \emph{every}
+fresh-versus-coupled contrast here, \cref{tab:coupling} included. It does not bias any estimate ---
+$\sigma$ is drawn identically in distribution either way --- but it is unpaired noise in exactly the
+contrast being measured. Both are fixed for future runs (\texttt{-{}-paired\_sigma}, and a target
+map that is materialised and hash-checked before launch rather than assumed from the flags).
+
+\paragraph{No null here is a claim of absence.}
+An interval crossing zero means we failed to detect an effect. To claim ``no effect'' at a margin of
+\obs{$\pm0.01$} would need roughly \obs{44} seeds per arm; we ran three. The order nulls in
+\cref{sec:stage2} are strong because churn was varied sevenfold and both intervals are tight around
+zero, but they are still failures to detect.
+
+
+\section{What failed}
+\label{sec:failures}
+
+\paragraph{Keeping guidance inside a 4-step student.}
+Three attempts, all worse than not training at all (\obs{0.2557}): supervising only the guided
+mixture gave \bad{0.14--0.16}; giving each branch its own target through a common shift gave
+\bad{0.1165}; sampling the states from the student's own path gave \bad{0.1889}. A diagnostic ruled
+out loss scale, gradient magnitude and gradient cancellation: both losses start at the same value
+(\obs{78.87} against \obs{78.91}), the branch gradient is \obs{6.7} times \emph{smaller}, and the two
+branch gradients agree rather than cancel (cosine \obs{$+0.606$}). The last attempt produces correct
+shapes in destroyed colour: its latent is no larger than the untrained model's
+(\obs{5.16} against \obs{6.28}) but its channels collapse together --- spread of channel means
+\obs{1.348}$\to$\obs{0.675} --- so \obs{40\%} of the decoder output leaves $[-1,1]$. Its score comes
+almost entirely from the caption-model categories, while every detector category is near zero and
+spatial is exactly \obs{0.0000}. We use the two-stage separation instead (\cref{sec:g8}).
+
+\paragraph{A 28-step teacher.}
+Better images make selection pointless: $\rho$ for PRS falls from \obs{37.21\%} to \obs{1.17\%}, the
+gain available per caption from \obs{0.0893} to \obs{0.0416}, and ties rise from \obs{20.4\%} to
+\obs{44.3\%}. \textbf{Selection only helps when the candidates differ.}
+
+
+\section{Limits}
+\label{sec:limits}
+
+\begin{itemize}
+  \item \textbf{Same seed does not mean same image across hardware.} Rebuilding a cache with an
+    identical pool, seeds, steps and guidance reproduced the random index for \obs{3000/3000}
+    captions, but VQAScore moved by up to \obs{1.3e-2} and the best candidate changed for
+    \obs{116/3000} (\obs{3.9\%}). Runs landed on different GPU models and bfloat16 reductions differ.
+    Any comparison spanning two cache builds carries about \obs{4\%} label noise, which is why every
+    ranker in \cref{tab:rankers} is graded against one table.
+  \item \textbf{Score and appearance can move apart.} The failed student in \cref{sec:failures}
+    scored higher than a worse-looking one, because caption models see through colour damage that
+    detectors do not. Any surprising score deserves a look at the images.
+  \item \textbf{One image per prompt} at test time, so each number carries sampling noise of its own.
+  \item \textbf{Relations are not learned.} Every arm improves how objects are drawn. None fixes
+    spatial or counting relations, which is where the largest headroom remains.
+  \item \textbf{Diversity is not yet measured.} A fixed or coupled target could improve one-sample
+    alignment while narrowing the range of images a caption can produce. Generation for that
+    measurement is running and is not reported here.
+\end{itemize}
+
+
+\section{What to use}
+
+\begin{enumerate}
+  \item \textbf{Select at sampling time, not in the weights.} Best of \obs{4} by VQAScore adds
+    \obs{$+0.038$} with no training, against \obs{$+0.034$} from the same signal as a label after
+    \obs{40{,}000} updates. It also lifts \texttt{spatial}, which no trained arm moved.
+  \item \textbf{Pair every target with its own noise} if the training budget is short. Worth
+    \obs{$+0.083$} at \obs{6{,}000} steps, \obs{$+0.031$} at \obs{40{,}000}, and nothing over a plain
+    label by then. It costs nothing to implement.
+  \item \textbf{Do not fix the target to buy alignment.} It works, and it fails the diversity gate at
+    \bad{$-0.167$} DINO. Coupling reaches similar alignment without that cost.
+  \item \textbf{Do not spend on the ranker.} Only CLIP-I beat using no score at all. PRS and DINOv2
+    did not.
+  \item \textbf{Absorb guidance separately} from step reduction: half the calls, no loss
+    (\cref{sec:g8}).
+  \item \textbf{Measure against $G$ at \obs{4} steps} (\obs{0.2859}), and report the \obs{28}-step
+    generator (\obs{0.5053}), not an untrained model.
+\end{enumerate}
+
+\paragraph{What we would not repeat.}
+Measuring at one budget and one pool size. Three of the conclusions in earlier drafts of this report
+reversed or vanished when the same arms were run at \obs{40{,}000} steps or on \obs{24{,}000}
+captions. Treating $\rho$ as a forecast. Drawing the caption-to-image map from a seed that does not
+vary with the run. And editing the trainer while a batch is queued, which splits the batch silently
+across two versions of the code.
+
+\section{Files}
+
+\begin{table}[h]
+\centering
+\small
+\begin{tabular}{@{}ll@{}}
+\toprule
+Trainer, both objectives, coupling, target schedules & \texttt{phaseC/train\_pilot.py} \\
+Candidate cache, PRS and the ranker baselines & \texttt{phaseN/build\_coco\_selection.py} \\
+Guidance distillation and its gate & \texttt{phaseN/train\_guidance\_distill.py}, \texttt{verify\_g8.py} \\
+Gradient variance split & \texttt{phaseN/grad\_variance.py} \\
+Results and paired bootstrap & \texttt{phaseN/analyze\_arms.py}, \texttt{report\_experiments.py} \\
+GenEval2 re-pooling and skills & \texttt{phaseN/geneval2\_repool.py} \\
+Label timings & \texttt{phaseN/label\_cost.py} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+
+\end{document}

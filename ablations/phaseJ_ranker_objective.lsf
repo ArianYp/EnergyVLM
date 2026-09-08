@@ -1,0 +1,112 @@
+#!/usr/bin/env bash
+#BSUB -J sd-phaseJ-objective
+#BSUB -G s10396
+#BSUB -q training-parallel
+#BSUB -n 8
+#BSUB -W 24:00
+#BSUB -R "span[hosts=1]"
+#BSUB -R "select[mem>64000 && hname!='farm-gpu0504']"
+#BSUB -R "rusage[mem=64000]"
+#BSUB -M 64000
+#BSUB -gpu "num=1:mode=exclusive_process"
+#BSUB -cwd /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM
+#BSUB -o /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-phaseJ-objective-%J.out
+#BSUB -e /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-phaseJ-objective-%J.err
+
+set -euo pipefail
+export PATH="/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/venv_mmdit/bin:/software/cellgen/team361/ha11/envs/nichejepa/bin:$PATH"
+export HF_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/huggingface
+export TORCH_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/torch
+export XDG_CACHE_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/xdg
+export TOKENIZERS_PARALLELISM=false
+export WANDB_MODE=online
+source ~/.secrets/hf_token
+
+: "${PHASEJ_OBJECTIVE_ARM:?use listnet, bt, bt_text, or bt_text_interaction}"
+: "${PHASEJ_FUSION_TOKEN_JOB:?provide the immutable token-cache job id}"
+: "${PHASEJ_GROUP:?provide one unique W&B group}"
+
+JOB=${LSB_JOBID:-local}
+TOKEN_DIR="phaseJ/fusion_cache/full_${PHASEJ_FUSION_TOKEN_JOB}"
+OUT="phaseJ/runs/phaseJ_objective_${PHASEJ_OBJECTIVE_ARM}_${JOB}"
+AUDIT="phaseJ/audits/phaseJ_objective_${PHASEJ_OBJECTIVE_ARM}_${JOB}"
+
+case "$PHASEJ_OBJECTIVE_ARM" in
+  listnet)
+    LOSS_TYPE=listnet
+    TEXT_WEIGHT=0
+    TEXT_TYPE=absolute
+    MODEL_LABEL=mmdit_fusion_listnet
+    ;;
+  bt)
+    LOSS_TYPE=all_pairs_bt
+    TEXT_WEIGHT=0
+    TEXT_TYPE=absolute
+    MODEL_LABEL=mmdit_fusion_bt
+    ;;
+  bt_text)
+    LOSS_TYPE=all_pairs_bt
+    TEXT_WEIGHT=1
+    TEXT_TYPE=absolute
+    MODEL_LABEL=mmdit_fusion_bt_text
+    ;;
+  bt_text_interaction)
+    LOSS_TYPE=all_pairs_bt
+    TEXT_WEIGHT=1
+    TEXT_TYPE=interaction
+    MODEL_LABEL=mmdit_fusion_bt_text_interaction
+    ;;
+  *)
+    echo "invalid PHASEJ_OBJECTIVE_ARM=$PHASEJ_OBJECTIVE_ARM" >&2
+    exit 2
+    ;;
+esac
+
+test -s "$TOKEN_DIR/train_tokens.pt"
+test -s "$TOKEN_DIR/external_tokens.pt"
+test -s "$TOKEN_DIR/blank_text.pt"
+
+echo "[$(date --iso-8601=seconds)] arm=$PHASEJ_OBJECTIVE_ARM job=$JOB"
+nvidia-smi --query-gpu=index,name,memory.total --format=csv
+python phaseJ/validate_lucidrains_reference.py \
+  --output "phaseJ/lucidrains_validation_objective_${PHASEJ_OBJECTIVE_ARM}_${JOB}.json"
+python phaseJ/test_ranker.py
+python phaseJ/test_fusion_ranker.py
+
+python phaseJ/fusion_ranker.py train \
+  --token_dir "$TOKEN_DIR" \
+  --output_dir "$OUT" \
+  --model_label "$MODEL_LABEL" \
+  --condition aligned \
+  --loss_type "$LOSS_TYPE" \
+  --temperature 0.05 \
+  --pair_weight 0 \
+  --text_contrast_weight "$TEXT_WEIGHT" \
+  --text_contrast_margin 0 \
+  --text_contrast_type "$TEXT_TYPE" \
+  --depth 2 --heads 12 --dim_head 64 --width 256 \
+  --epochs 40 --patience 8 --batch_size 4 --lr 1e-4 \
+  --seeds 13,31,53 \
+  --wandb_project sd-mmdit-ranker-v1 \
+  --wandb_group "$PHASEJ_GROUP" \
+  --wandb_run_name "phaseJ_objective_${PHASEJ_OBJECTIVE_ARM}_${JOB}"
+
+test -s "$OUT/ranking_results.json"
+test -s "$OUT/fusion_rankers.pt"
+
+python phaseJ/audit_fusion_conditioning.py \
+  --run_dir "$OUT" \
+  --token_dir "$TOKEN_DIR" \
+  --output_dir "$AUDIT" \
+  --batch_size 4 \
+  --emit_selections \
+  --wandb_project sd-mmdit-ranker-v1 \
+  --wandb_group "$PHASEJ_GROUP" \
+  --wandb_run_name "phaseJ_objective_${PHASEJ_OBJECTIVE_ARM}_prompt_audit_${JOB}"
+
+test -s "$AUDIT/conditioning_audit.json"
+test -s "$AUDIT/conditioning_scores.npz"
+echo "[$(date --iso-8601=seconds)] complete run=$OUT audit=$AUDIT"
+if command -v my-job-stats >/dev/null 2>&1; then
+  my-job-stats -a -n -s
+fi

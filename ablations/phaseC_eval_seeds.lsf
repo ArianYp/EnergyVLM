@@ -1,0 +1,78 @@
+#!/usr/bin/env bash
+#BSUB -J sd-C1-eval-seeds
+#BSUB -G s10396
+#BSUB -q training-parallel
+#BSUB -n 16
+#BSUB -W 24:00
+#BSUB -R "span[hosts=1]"
+#BSUB -R "select[mem>128000 && hname!='farm-gpu0504']"
+#BSUB -R "rusage[mem=128000]"
+#BSUB -M 128000
+#BSUB -gpu "num=4:mode=exclusive_process:gmem=40G"
+#BSUB -cwd /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM
+#BSUB -o /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-C1-eval-seeds-%J.out
+#BSUB -e /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-C1-eval-seeds-%J.err
+
+# Evaluate the C1 seed replication (jobs 104031-104034), so the <=14.2% transfer bound stops
+# resting on a single treatment seed.
+#
+# This deliberately MIRRORS the seed-0 protocol in phaseC_eval_generate.lsf + phaseC_eval_score.lsf
+# rather than improving on it: same generator, same val split, same six categories, same analyzer.
+# The one departure is steps_list=4 instead of 4,8,28 - the C1 verdict is read at s4
+# (phaseC/eval_verdict_s4.json) and generating 8/28 would triple the cost for numbers nobody reads.
+# Everything else is held identical so the new seeds are comparable to seed 0 by construction.
+set -euo pipefail
+
+export PATH="/software/cellgen/team361/ha11/envs/nichejepa/bin:$PATH"
+export HF_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/huggingface
+export TORCH_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/torch
+export XDG_CACHE_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/xdg
+export TOKENIZERS_PARALLELISM=false
+export NCCL_NVLS_ENABLE=0
+source ~/.secrets/hf_token
+
+echo "[$(date --iso-8601=seconds)] C1 seed-replication eval | host=$(hostname) job=${LSB_JOBID:-local}"
+nvidia-smi --query-gpu=index,name,memory.total --format=csv
+
+# Resolve the four checkpoints by glob, so a rename cannot silently point this at the wrong run.
+declare -A CKPT
+for V in B4 B2; do
+  for S in 1 2; do
+    D=$(ls -d checkpoints/phaseC/phaseC_${V}_s${S}_*/ 2>/dev/null | head -1)
+    test -n "$D" || { echo "missing checkpoint dir for ${V}_s${S}" >&2; exit 2; }
+    test -s "${D}checkpoint_final.pt" || { echo "missing checkpoint_final.pt in $D" >&2; exit 2; }
+    CKPT["${V}_s${S}"]="${D}checkpoint_final.pt"
+    echo "  ${V}_s${S} -> ${D}checkpoint_final.pt"
+  done
+done
+
+echo "=== GENERATE (val split, 4 steps, CFG 1) ==="
+for LABEL in B4_s1 B2_s1 B4_s2 B2_s2; do
+  if [[ -d "phaseC/eval/images/${LABEL}" ]]; then echo "skip generate ${LABEL} (exists)"; continue; fi
+  echo "--- $LABEL ---"
+  torchrun --standalone --nproc-per-node=4 exp0/phaseA_generate.py \
+    --out_root phaseC/eval --label "$LABEL" --checkpoint "${CKPT[$LABEL]}" --cfg 1 \
+    --split val --steps_list 4 --per_category 1000
+done
+
+echo "=== SCORE (official CompBench evaluators, same six categories as seed 0) ==="
+for MODEL in B4_s1 B2_s1 B4_s2 B2_s2; do
+  for CAT in color shape texture spatial 3d_spatial numeracy; do
+    D=phaseC/eval_scores/${MODEL}_s4_${CAT}
+    [ -f "$D/scores.json" ] && { echo "skip $D (done)"; continue; }
+    python3 phaseC/compbench_eval.py stage --images phaseC/eval/images/${MODEL} \
+      --prompts phaseC/eval/prompts.json --steps 4 --categories ${CAT} --out "$D"
+    python3 phaseC/compbench_eval.py run     --dir "$D"
+    python3 phaseC/compbench_eval.py collect --dir "$D"
+  done
+done
+
+echo "=== VERDICT: B4 - B2 within each seed ==="
+python3 phaseC/eval_analyze.py --scores_dir phaseC/eval_scores --step 4 \
+  --models B4_s1,B2_s1 --out phaseC/eval_verdict_s4_seed1.md
+python3 phaseC/eval_analyze.py --scores_dir phaseC/eval_scores --step 4 \
+  --models B4_s2,B2_s2 --out phaseC/eval_verdict_s4_seed2.md
+
+echo "[$(date --iso-8601=seconds)] DONE -> phaseC/eval_verdict_s4_seed{1,2}.md"
+echo "Seed 0 for comparison: phaseC/eval_verdict_s4.md"
+if command -v my-job-stats >/dev/null 2>&1; then my-job-stats -a -n -s; fi

@@ -1,0 +1,113 @@
+#!/usr/bin/env bash
+#BSUB -J sd-phaseX-kw1smoke
+#BSUB -G s10396
+#BSUB -q training-parallel
+#BSUB -n 8
+#BSUB -W 1:00
+#BSUB -R "span[hosts=1]"
+#BSUB -R "select[mem>96000 && hname!='farm-gpu0504']"
+#BSUB -R "rusage[mem=96000]"
+#BSUB -M 96000
+#BSUB -gpu "num=2:mode=exclusive_process:gmem=78G"
+#BSUB -cwd /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM
+#BSUB -o /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-phaseX-kw1smoke-%J.out
+#BSUB -e /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-phaseX-kw1smoke-%J.err
+
+# Gate 0 for the Phase-X v5 Kw=1 origin screen.
+#
+# This does more than check that the trainer starts. It runs the REAL entry point under torchrun in
+# both Kw=1 configurations and then ASSERTS the invariants the screen depends on, from the logs the
+# runs themselves emit:
+#
+#   1. score_idxs resolves to [5] and Kw=1, so there is no chord to share
+#   2. both arms load the SAME target map hash -- the field that made every earlier fresh-vs-coupled
+#      contrast unpaired, at exactly chance agreement (0.250 for N=4)
+#   3. --paired_sigma is actually engaged, so the arms walk the same sigma sequence
+#   4. the two arms differ in --coupling and in nothing else
+#
+# A smoke test that only checks the exit code would pass while the screen measured the wrong thing.
+set -euo pipefail
+export PATH="/software/cellgen/team361/ha11/envs/nichejepa/bin:$PATH"
+export HF_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/huggingface
+export TORCH_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/torch
+export XDG_CACHE_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/xdg
+export TOKENIZERS_PARALLELISM=false
+export NCCL_NVLS_ENABLE=0
+export WANDB_MODE=disabled
+export PYTHONPATH="/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM:${PYTHONPATH:-}"
+source ~/.secrets/hf_token
+
+SCRIPT=${TRAIN_SCRIPT:-phaseC/train_pilot.py}
+SEL=${SMOKE_SEL:-phaseN/records_24k}
+# the map hash frozen in phaseX/PREREGISTRATION_kw1.md
+WANT_MAP=${SMOKE_MAP_SHA:-3a669e6640eba41699a1c7a688b24548189252f99cff11f32f164f4811247af7}
+OUT=/tmp/phasex_kw1_smoke_${LSB_JOBID:-local}
+mkdir -p "$OUT"
+
+test -s "$SCRIPT"
+python3 -c "import ast,sys; ast.parse(open(sys.argv[1]).read())" "$SCRIPT"
+echo "[trainer] $SCRIPT ($(md5sum "$SCRIPT" | cut -c1-8))"
+echo "[expect ] Kw=1, target_map_sha256=$WANT_MAP"
+nvidia-smi --query-gpu=index,name,memory.total --format=csv
+
+fail=0
+run_one () {
+  local tag="$1" coup="$2"
+  echo "--- SMOKE $tag (coupling=$coup)"
+  # NOTE: num_steps must exceed 1 or the sigma-divergence this screen controls for never occurs.
+  if torchrun --standalone --nproc-per-node=2 "$SCRIPT" \
+       --variant W_uniform_freeze --selection_dir "$SEL" \
+       --scoring_window 0.625,0.625 --target_schedule one_fixed --support_m 1 \
+       --coupling "$coup" --paired_sigma \
+       --num_steps 6 --num_warmup_steps 1 --save_every 100000 --sample_every 0 --log_every 1 \
+       --no_wandb --gradient_checkpointing --N 4 --K 8 --cfg 7.0 --student_cfg 0.0 \
+       --cfg_mode composed --output_dir "$OUT/$tag" > "$OUT/$tag.log" 2>&1; then
+    echo "    ran OK"
+  else
+    echo "    FAIL: trainer exited non-zero"; tail -15 "$OUT/$tag.log" | sed 's/^/      /'; fail=1
+    return
+  fi
+  grep -E "^\[window\]|^\[pairing\]" "$OUT/$tag.log" | sed 's/^/      /'
+  grep -q "score_idxs=\[5\] Kw=1" "$OUT/$tag.log" || { echo "    FAIL: Kw is not 1"; fail=1; }
+  grep -q "target_map_sha256=$WANT_MAP" "$OUT/$tag.log" || {
+    echo "    FAIL: target map hash does not match the frozen one"; fail=1; }
+  grep -q "paired_sigma=True" "$OUT/$tag.log" || { echo "    FAIL: --paired_sigma not engaged"; fail=1; }
+  grep -q "coupling=$coup " "$OUT/$tag.log" || { echo "    FAIL: coupling not $coup"; fail=1; }
+  return 0   # never let a failed assertion abort the script under `set -e`; collect them all
+}
+
+run_one fresh fresh
+run_one own   teacher
+run_one fixed fixed_unrelated
+
+echo
+echo "--- cross-arm checks"
+# The resolved args of the three arms must differ ONLY in `coupling`.
+python3 - "$OUT" <<'PY' || fail=1
+import json, sys, itertools
+from pathlib import Path
+root = Path(sys.argv[1])
+args = {}
+for tag in ("fresh", "own", "fixed"):
+    p = root / tag / "args.json"
+    if not p.exists():
+        print(f"    FAIL: {p} missing"); raise SystemExit(1)
+    args[tag] = json.load(open(p))
+bad = False
+for a, b in itertools.combinations(args, 2):
+    diff = {k for k in set(args[a]) | set(args[b])
+            if args[a].get(k) != args[b].get(k)} - {"output_dir", "coupling"}
+    if diff:
+        print(f"    FAIL: {a} vs {b} differ in {sorted(diff)}"); bad = True
+    else:
+        print(f"    OK: {a} vs {b} differ only in coupling")
+raise SystemExit(1 if bad else 0)
+PY
+
+
+echo
+if [ "$fail" = 0 ]; then
+  echo "GATE 0 PASS -- Kw=1 screen is safe to launch"
+else
+  echo "GATE 0 FAIL -- do not launch the screen"; exit 1
+fi

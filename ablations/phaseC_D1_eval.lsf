@@ -1,0 +1,93 @@
+#!/usr/bin/env bash
+#BSUB -J sd-phaseD-D1-eval
+#BSUB -G s10396
+#BSUB -q training-parallel
+#BSUB -n 16
+#BSUB -W 24:00
+#BSUB -R "span[hosts=1]"
+#BSUB -R "select[mem>256000 && hname!='farm-gpu0504']"
+#BSUB -R "rusage[mem=256000]"
+#BSUB -M 256000
+#BSUB -gpu "num=4:mode=exclusive_process:gmodel=NVIDIAH200"
+#BSUB -cwd /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM
+#BSUB -o /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-phaseD-D1-eval-%J.out
+#BSUB -e /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-phaseD-D1-eval-%J.err
+
+# Phase D — the H_mech ALIGNMENT eval for D1 (= B5_latent: fixed-input, reward-selected
+# ENDPOINT flow-match). Adds ONLY the B5_latent model to the already-scored C1 harness
+# (B2/M1 scores are reused, byte-identical prompts/seeds/steps), then computes the
+# D1-vs-B2 verdict on the SAME pre-registered independent metrics. C1 (B4 vs B2, null)
+# vs D1 (B5_latent vs B2) is therefore an exact A/B on one axis: input-selection vs
+# target-modification. See reports/phaseD_reward_target_preregistration.md.
+#
+# Fidelity + diversity (the "clean pass" side-gates) are the separate, heavier
+# phaseC_D1_gates.lsf — run only if this alignment gate passes.
+set -euo pipefail
+export PATH="/software/cellgen/team361/ha11/envs/nichejepa/bin:$PATH"
+export HF_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/huggingface
+export TORCH_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/torch
+export XDG_CACHE_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/xdg
+export TOKENIZERS_PARALLELISM=false
+export NCCL_NVLS_ENABLE=0
+source ~/.secrets/hf_token
+echo "[`date`] Phase D — D1 (B5_latent) alignment eval | Host: $(hostname)"
+nvidia-smi --query-gpu=index,name,memory.total --format=csv
+
+# newest B5_latent training checkpoint (single decisive run -> exactly one dir)
+CKPT=$(ls -dt checkpoints/phaseC/phaseC_B5_latent_*/checkpoint_final.pt 2>/dev/null | head -1)
+[ -n "$CKPT" ] && [ -f "$CKPT" ] || { echo "FATAL: no B5_latent checkpoint_final.pt found"; exit 1; }
+echo "D1 checkpoint = $CKPT"
+
+echo "=== STAGE 1: generate B5_latent on HELD-OUT CompBench-val ({4,8,28} steps) ==="
+torchrun --standalone --nproc-per-node=4 exp0/phaseA_generate.py \
+  --out_root phaseC/eval --label B5_latent --checkpoint "$CKPT" --cfg 1 \
+  --split val --steps_list 4,8,28 --per_category 1000
+
+echo "=== STAGE 2: official independent scoring (all 8 categories) ==="
+python3 phaseC/test_3in1_identity.py   # 3-in-1 composition identity guard (every run)
+for STEP in 4 8 28; do
+  for CAT in color shape texture spatial 3d_spatial numeracy non_spatial complex; do
+    D=phaseC/eval_scores/B5_latent_s${STEP}_${CAT}
+    [ -f "$D/scores.json" ] && { echo "skip $D (done)"; continue; }
+    python3 phaseC/compbench_eval.py stage --images phaseC/eval/images/B5_latent \
+      --prompts phaseC/eval/prompts.json --steps ${STEP} --categories ${CAT} --out "$D"
+    python3 phaseC/compbench_eval.py run     --dir "$D" --skip_done
+    python3 phaseC/compbench_eval.py collect --dir "$D" --routing_split val
+  done
+done
+
+echo "=== STAGE 3: in-objective VQAScore (secondary/diagnostic, for transfer ratio T) ==="
+torchrun --standalone --nproc-per-node=4 exp0/phaseA_score.py \
+  --out_root phaseC/eval --labels B5_latent --steps_list 4,8,28
+
+echo "=== STAGE 4: GenEval2 (PRIMARY 2) — generate + Soft-TIFA-gm score B5_latent ==="
+python3 phaseC/build_eval_pool.py geneval2 --out phaseC/geneval2/prompts.json
+torchrun --standalone --nproc-per-node=4 exp0/phaseA_generate.py \
+  --out_root phaseC/geneval2 --label B5_latent --checkpoint "$CKPT" --cfg 1 \
+  --prompts_json phaseC/geneval2/prompts.json --steps_list 4,8,28
+for STEP in 4 8 28; do
+  D=phaseC/geneval2_scores/B5_latent_s${STEP}
+  [ -f "$D/scores.json" ] && { echo "skip $D (done)"; continue; }
+  python3 phaseC/geneval2_eval.py stage --images phaseC/geneval2/images/B5_latent \
+    --pool phaseC/geneval2/prompts.json --steps ${STEP} --out "$D"
+  python3 phaseC/geneval2_eval.py run     --dir "$D" --method soft_tifa_gm --skip_done
+  python3 phaseC/geneval2_eval.py collect --dir "$D" --method soft_tifa_gm
+done
+
+echo "=== STAGE 5: VERDICT — D1 (B5_latent) vs B2, on the same harness as C1 ==="
+# fidelity/diversity point at D1-specific reports (produced by phaseC_D1_gates.lsf);
+# absent until then -> analyzer prints "not yet run", alignment verdict still complete.
+for STEP in 4 8 28; do
+  python3 phaseC/eval_analyze.py --scores_dir phaseC/eval_scores --step ${STEP} \
+    --models B5_latent,B2,M1 \
+    --geneval2_dir phaseC/geneval2_scores \
+    --vqa phaseC/eval/scores \
+    --fidelity phaseC/fidelity_report_D1.json \
+    --diversity phaseC/diversity_report_D1.json \
+    --out phaseC/eval_verdict_D1_s${STEP}.md
+done
+
+echo "=== headline (4-step) ==="
+cat phaseC/eval_verdict_D1_s4.md
+echo "[`date`] DONE -> phaseC/eval_verdict_D1_s{4,8,28}.md"
+if command -v my-job-stats >/dev/null 2>&1; then my-job-stats -a -n -s; fi

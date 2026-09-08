@@ -1,0 +1,14 @@
+cache 130089
+train B2 0 0 130090 130091 K16_B2
+train B2 0 1 130092 130093 K16_B2
+train B2 0 2 130094 130095 K16_B2
+train B2 0.2 0 130096 130097 K16_B2-real0.2
+train B2 0.2 1 130098 130099 K16_B2-real0.2
+train B2 0.2 2 130100 130101 K16_B2-real0.2
+train CD_dinop_hard 0 0 130102 130103 K16_CD_dinop_hard
+train CD_dinop_hard 0 1 130104 130105 K16_CD_dinop_hard
+train CD_dinop_hard 0 2 130106 130107 K16_CD_dinop_hard
+train CD_dinop_hard 0.2 0 130108 130109 K16_CD_dinop_hard-real0.2
+train CD_dinop_hard 0.2 1 130110 130111 K16_CD_dinop_hard-real0.2
+train CD_dinop_hard 0.2 2 130112 130113 K16_CD_dinop_hard-real0.2
+smoke 130114

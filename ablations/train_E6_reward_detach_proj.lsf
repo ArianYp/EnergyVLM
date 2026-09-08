@@ -1,0 +1,92 @@
+#!/usr/bin/env bash
+#BSUB -J sd-abl-reward-detach-proj
+#BSUB -G s10396
+#BSUB -q training-parallel
+#BSUB -n 16
+#BSUB -W 168:00
+#BSUB -R "span[hosts=1]"
+#BSUB -R "select[mem>64000 && hname!='farm-gpu0504']"
+#BSUB -R "rusage[mem=64000]"
+#BSUB -M 64000
+#BSUB -gpu "num=4:mode=exclusive_process:gmodel=NVIDIAH200"
+#BSUB -cwd /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM
+#BSUB -o /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-abl-reward-detach-proj-%J.out
+#BSUB -e /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-abl-reward-detach-proj-%J.err
+
+# ============================================================================
+# ABLATION E6_reward_detach_proj
+# Isolates ONE variable vs. the B0 baseline:
+#   cuts reward gradient into the projector (projector-corruption fix).
+#   single-variable override:  --reward_detach_projector
+# All other knobs are IDENTICAL across the whole suite (same seed=0), so any
+# difference in the W&B curves is attributable to this one change.
+# Diagnostics to compare in W&B (see reports/self_distill_divergence_report.md):
+#   train/param_l2_divergence  -> EMA self-reference runaway (||theta-xi||)
+#   train/d_mean, train/loss_consistency
+#   train/xhat_norm_mean vs train/xtea_norm_mean  -> student leads vs target drifts
+#   train/vstu_norm_mean, train/zK_norm
+#   train/d_byidx/*, train/xhat_byidx/*, train/xtea_byidx/*  -> which sigma band blows up
+#   train/loss_{consistency,reward_weighted,align_weighted,fm_weighted}
+#   train/align_cos, train/projector_grad_norm_pre_clip  -> projector health
+#   samples/teacher_ema  -> watercolor onset (logged every --sample_every)
+# ============================================================================
+
+set -euo pipefail
+
+export HF_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/huggingface
+export TORCH_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/torch
+export XDG_CACHE_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/xdg
+export NCCL_NVLS_ENABLE=0
+source ~/.secrets/hf_token
+mkdir -p "$HF_HOME" "$TORCH_HOME" "$XDG_CACHE_HOME" logs
+
+echo "[`date`] ablation E6_reward_detach_proj | override: --reward_detach_projector"
+echo "Host: $(hostname) | LSF: ${LSB_JOBID:-unknown}"
+nvidia-smi --query-gpu=index,name,memory.total --format=csv
+
+RUN_NAME="abl_E6_reward_detach_proj_$(date +%Y%m%d_%H%M%S)_${LSB_JOBID:-local}"
+
+# ---- BASELINE config (identical for every ablation). The single-variable
+#      override is appended AFTER, so argparse's last-occurrence wins. ----
+torchrun \
+  --standalone \
+  --nproc-per-node=4 \
+  train_self_distill.py \
+  --output_dir "checkpoints/ablation/${RUN_NAME}" \
+  --coco_split train2017 \
+  --feature_encoder clip \
+  --clip_id openai/clip-vit-large-patch14 \
+  --num_steps 10000 \
+  --num_warmup_steps 500 \
+  --lr 1e-5 \
+  --projector_lr 1e-4 \
+  --weight_decay 0.0 \
+  --grad_clip 1.0 \
+  --projector_grad_clip 5.0 \
+  --N_traj 4 \
+  --K_steps 8 \
+  --scoring_window 0.4,0.9 \
+  --delta_min 1 --delta_max 3 \
+  --tau_N 1.0 --tau_K 1.0 \
+  --score_norm zscore \
+  --ema_decay 0.999 \
+  --distance pseudo_huber \
+  --guidance_scale 7.0 \
+  --lambda_align 1.0 \
+  --lambda_reward 1.0 \
+  --lambda_fm 0.0 \
+  --gradient_checkpointing \
+  --save_every 2000 \
+  --sample_every 500 \
+  --probe_every 0 \
+  --log_every 10 \
+  --save_train_images_every 500 \
+  --log_image_samples \
+  --sample_inference_steps 28 \
+  --wandb_project sd-self-distill-ablation \
+  --wandb_run_name "${RUN_NAME}" \
+  --reward_detach_projector
+
+if command -v my-job-stats >/dev/null 2>&1; then
+  my-job-stats -a -n -s
+fi

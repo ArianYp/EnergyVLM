@@ -1,0 +1,44 @@
+#!/usr/bin/env bash
+#BSUB -J sd-phaseJ-fusion-smoke
+#BSUB -G s10396
+#BSUB -q training-parallel
+#BSUB -n 4
+#BSUB -W 1:00
+#BSUB -R "span[hosts=1]"
+#BSUB -R "select[mem>64000 && hname!='farm-gpu0504']"
+#BSUB -R "rusage[mem=64000]"
+#BSUB -M 64000
+#BSUB -gpu "num=1:mode=exclusive_process"
+#BSUB -cwd /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM
+#BSUB -o /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-phaseJ-fusion-smoke-%J.out
+#BSUB -e /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-phaseJ-fusion-smoke-%J.err
+
+set -euo pipefail
+export PATH="/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/venv_mmdit/bin:/software/cellgen/team361/ha11/envs/nichejepa/bin:$PATH"
+export HF_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/huggingface
+export TORCH_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/torch
+export XDG_CACHE_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/xdg
+export TOKENIZERS_PARALLELISM=false
+export WANDB_MODE=online
+source ~/.secrets/hf_token
+
+: "${PHASEJ_GROUP:?submit with a unique PHASEJ_GROUP}"
+JOB=${LSB_JOBID:-local}
+CACHE="phaseJ/fusion_cache/smoke_${JOB}"
+OUT="phaseJ/runs/phaseJ_fusion_smoke_${JOB}"
+echo "[$(date --iso-8601=seconds)] Phase J fusion lightweight smoke job=$JOB"
+nvidia-smi --query-gpu=index,name,memory.total --format=csv
+python phaseJ/validate_lucidrains_reference.py --output "phaseJ/lucidrains_validation_job${JOB}.json"
+python phaseJ/test_fusion_ranker.py
+python phaseJ/fusion_ranker.py extract \
+  --output_dir "$CACHE" --limit_train 16 --limit_external 16 \
+  --wandb_group "$PHASEJ_GROUP" --wandb_run_name "phaseJ_fusion_extract_smoke_${JOB}"
+python phaseJ/fusion_ranker.py train \
+  --token_dir "$CACHE" --output_dir "$OUT" \
+  --model_label mmdit_fusion --condition aligned \
+  --depth 1 --heads 8 --dim_head 64 --width 128 \
+  --epochs 2 --patience 2 --seeds 13 --batch_size 2 \
+  --wandb_group "$PHASEJ_GROUP" --wandb_run_name "phaseJ_fusion_train_smoke_${JOB}"
+test -s "$OUT/ranking_results.json"
+test -s "$OUT/fusion_rankers.pt"
+echo "Fusion smoke complete: $OUT"

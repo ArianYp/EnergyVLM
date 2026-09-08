@@ -1,0 +1,85 @@
+#!/usr/bin/env bash
+#BSUB -J sd-abl-ema-99999
+#BSUB -G s10396
+#BSUB -q training-parallel
+#BSUB -n 16
+#BSUB -W 168:00
+#BSUB -R "span[hosts=1]"
+#BSUB -R "select[mem>64000 && hname!='farm-gpu0504']"
+#BSUB -R "rusage[mem=64000]"
+#BSUB -M 64000
+#BSUB -gpu "num=4:mode=exclusive_process:gmodel=NVIDIAH200"
+#BSUB -cwd /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM
+#BSUB -o /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-abl-ema-99999-%J.out
+#BSUB -e /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-abl-ema-99999-%J.err
+
+# ============================================================================
+# ABLATION E9_ema_99999
+# Isolates ONE variable vs. the B0 baseline (ema_decay=0.999):
+#   very slow EMA: teacher lags ~100k steps (near-frozen).
+#   single-variable override:  --ema_decay 0.99999
+# Question: is there a STABLE slow-EMA regime, or does the teacher have to be
+# FULLY frozen (E1)? B0 (decay 0.999) diverges; E1 (frozen, decay->1.0) is
+# stable. This sweep finds whether decay->1 recovers stability or merely
+# DELAYS the onset (=> EMA self-distillation is unstable, must use frozen CD).
+# Watch in W&B: train/d_mean, train/xhat_norm_mean vs train/xtea_norm_mean,
+#   train/param_l2_divergence, samples/student.
+# ============================================================================
+
+set -euo pipefail
+
+export HF_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/huggingface
+export TORCH_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/torch
+export XDG_CACHE_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/xdg
+export NCCL_NVLS_ENABLE=0
+source ~/.secrets/hf_token
+mkdir -p "$HF_HOME" "$TORCH_HOME" "$XDG_CACHE_HOME" logs
+
+echo "[`date`] ablation E9_ema_99999 | override: --ema_decay 0.99999"
+echo "Host: $(hostname) | LSF: ${LSB_JOBID:-unknown}"
+nvidia-smi --query-gpu=index,name,memory.total --format=csv
+
+RUN_NAME="abl_E9_ema_99999_$(date +%Y%m%d_%H%M%S)_${LSB_JOBID:-local}"
+
+torchrun \
+  --standalone \
+  --nproc-per-node=4 \
+  train_self_distill.py \
+  --output_dir "checkpoints/ablation/${RUN_NAME}" \
+  --coco_split train2017 \
+  --feature_encoder clip \
+  --clip_id openai/clip-vit-large-patch14 \
+  --num_steps 10000 \
+  --num_warmup_steps 500 \
+  --lr 1e-5 \
+  --projector_lr 1e-4 \
+  --weight_decay 0.0 \
+  --grad_clip 1.0 \
+  --projector_grad_clip 5.0 \
+  --N_traj 4 \
+  --K_steps 8 \
+  --scoring_window 0.4,0.9 \
+  --delta_min 1 --delta_max 3 \
+  --tau_N 1.0 --tau_K 1.0 \
+  --score_norm zscore \
+  --ema_decay 0.999 \
+  --distance pseudo_huber \
+  --guidance_scale 7.0 \
+  --lambda_align 1.0 \
+  --lambda_reward 1.0 \
+  --lambda_fm 0.0 \
+  --gradient_checkpointing \
+  --save_every 2000 \
+  --sample_every 500 \
+  --probe_every 0 \
+  --log_every 10 \
+  --save_train_images_every 500 \
+  --log_image_samples \
+  --sample_inference_steps 28 \
+  --wandb_project sd-self-distill-ablation \
+  --wandb_run_name "${RUN_NAME}" \
+  --ema_decay 0.99999
+
+if command -v my-job-stats >/dev/null 2>&1; then
+  my-job-stats -a -n -s
+fi

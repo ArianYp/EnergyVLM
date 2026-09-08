@@ -1,0 +1,34 @@
+#!/usr/bin/env bash
+#BSUB -J sd-W-qual
+#BSUB -G s10396
+#BSUB -q training-parallel
+#BSUB -n 4
+#BSUB -W 4:00
+#BSUB -R "span[hosts=1]"
+#BSUB -R "select[mem>128000 && hname!='farm-gpu0504']"
+#BSUB -R "rusage[mem=128000]"
+#BSUB -M 128000
+#BSUB -gpu "num=1:mode=exclusive_process:gmem=40G"
+#BSUB -cwd /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM
+#BSUB -o /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-W-qual-%J.out
+#BSUB -e /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-W-qual-%J.err
+
+# Base-model reference columns for the qualitative figure, on the 16 selected prompts only.
+# The subset JSONs preserve each prompt's ORIGINAL pool index, and phaseA_generate seeds with
+# `--seed + idx`, so these images share initial noise with the existing model evals exactly.
+set -euo pipefail
+export PATH="/software/cellgen/team361/ha11/envs/nichejepa/bin:$PATH"
+export HF_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/huggingface
+export TORCH_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/torch
+export XDG_CACHE_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/xdg
+export TOKENIZERS_PARALLELISM=false
+source ~/.secrets/hf_token
+for B in compbench geneval2; do
+  for CFG in 1.0 7.0; do
+    TAG=$(echo "$CFG" | cut -d. -f1)
+    python3 exp0/phaseA_generate.py \
+      --out_root "phaseW/qual/gen_${B}" --label "BASE_cfg${TAG}" --checkpoint base \
+      --cfg "$CFG" --prompts_json "phaseW/qual/${B}_subset.json" --steps_list 4,28
+  done
+done
+echo "[$(date --iso-8601=seconds)] qualitative base generation done"

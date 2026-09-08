@@ -1,0 +1,42 @@
+#!/usr/bin/env bash
+#BSUB -J sd-W-cache-ext-smoke
+#BSUB -G s10396
+#BSUB -q training-parallel
+#BSUB -n 4
+#BSUB -W 1:00
+#BSUB -R "span[hosts=1]"
+#BSUB -R "select[mem>64000]"
+#BSUB -R "rusage[mem=64000]"
+#BSUB -M 64000
+#BSUB -gpu "num=1:mode=exclusive_process:gmem=40G"
+#BSUB -cwd /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM
+#BSUB -o /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-W-cache-ext-smoke-%J.out
+#BSUB -e /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-W-cache-ext-smoke-%J.err
+# Seed-convention and positional-field check for --j_start before extending the 118k cache.
+set -euo pipefail
+export PATH="/software/cellgen/team361/ha11/envs/nichejepa/bin:$PATH"
+export HF_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/huggingface
+export TORCH_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/torch
+export PYTHONPATH="/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM:${PYTHONPATH:-}"
+source ~/.secrets/hf_token
+S=phaseW/pool118k/_ext_smoke; rm -rf $S; mkdir -p $S
+RANK=0 LOCAL_RANK=0 WORLD_SIZE=1 python3 phaseN/build_coco_selection.py --pool_manifest phaseW/pool118k/pool_manifest_smoke.json \
+  --out_root $S/regen0 --N 1 --j_start 0 --K 8 --cfg 7.0 --height 512 --seed 0 --baselines dino --no_vqa
+RANK=0 LOCAL_RANK=0 WORLD_SIZE=1 python3 phaseN/build_coco_selection.py --pool_manifest phaseW/pool118k/pool_manifest_smoke.json \
+  --out_root $S/ext47 --N 8 --j_start 4 --K 8 --cfg 7.0 --height 512 --seed 0 --baselines dino --no_vqa
+python3 - <<'PY'
+import json, glob, numpy as np
+base = {}
+for f in glob.glob("phaseN/coco_selection_118k/selection_rank*.jsonl"):
+    for l in open(f):
+        r = json.loads(l)
+        if r["idx"] < 4: base[r["idx"]] = r
+regen = {json.loads(l)["idx"]: json.loads(l) for l in open("phaseW/pool118k/_ext_smoke/regen0/selection_rank0.jsonl")}
+ext = {json.loads(l)["idx"]: json.loads(l) for l in open("phaseW/pool118k/_ext_smoke/ext47/selection_rank0.jsonl")}
+ok = True
+for i in sorted(regen):
+    d = abs(regen[i]["dino_patch_cos"][0] - base[i]["dino_patch_cos"][0])
+    print(f"idx {i}: regenerated cand0 dino_patch_cos {regen[i]['dino_patch_cos'][0]:.4f} vs cache {base[i]['dino_patch_cos'][0]:.4f} (|diff| {d:.4f}); ext j_start={ext[i]['j_start']} N={ext[i]['N']} lens={len(ext[i]['dino_patch_cos'])} seed_base match={ext[i]['seed_base']==base[i]['seed_base']} ext scores {[round(x,3) for x in ext[i]['dino_patch_cos']]}")
+    ok &= d < 5e-3 and ext[i]["j_start"] == 4 and ext[i]["N"] == 8 and len(ext[i]["dino_patch_cos"]) == 4 and ext[i]["seed_base"] == base[i]["seed_base"]
+print("SMOKE_RESULT", "PASS" if ok else "FAIL")
+PY

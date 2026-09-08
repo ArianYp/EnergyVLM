@@ -1,0 +1,53 @@
+#!/usr/bin/env bash
+#BSUB -J sd-phaseG-branch-build
+#BSUB -G s10396
+#BSUB -q training-parallel
+#BSUB -n 16
+#BSUB -W 48:00
+#BSUB -R "span[hosts=1]"
+#BSUB -R "select[mem>256000 && hname!='farm-gpu0504']"
+#BSUB -R "rusage[mem=256000]"
+#BSUB -M 256000
+#BSUB -gpu "num=4:mode=exclusive_process:gmodel=NVIDIAH200"
+#BSUB -cwd /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM
+#BSUB -o /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-phaseG-branch-build-%J.out
+#BSUB -e /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-phaseG-branch-build-%J.err
+
+# Phase G stage 0 — branch-and-select cache.
+# The controlled test Phase C1 could not do: reward enters the TARGET while the student's INPUT
+# is held fixed by construction (shared z_T, shared deterministic prefix to z_k, then M
+# stochastic CPS continuations whose endpoints are scored). Treatment = best endpoint as target,
+# control = a random NON-oracle endpoint. Objective class unchanged, so no Phase-D1 confound.
+# 256GB host RAM because VQAScore (clip-flant5-xxl) is resident.
+set -euo pipefail
+export PATH="/software/cellgen/team361/ha11/envs/nichejepa/bin:$PATH"
+export HF_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/huggingface
+export TORCH_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/torch
+export XDG_CACHE_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/xdg
+export TOKENIZERS_PARALLELISM=false
+export NCCL_NVLS_ENABLE=0
+source ~/.secrets/hf_token
+echo "[`date`] Phase G branch-selection build | Host: $(hostname)"
+torchrun --standalone --nproc-per-node=4 phaseG/build_branch_selection.py \
+  --out_dir phaseG --M 4 --K 8 --cfg 7.0 --eta 0.9 --branch_points 3,6 --per_category 1000
+echo "=== cache summary ==="
+python3 - <<'PY'
+import glob, json
+import numpy as np
+from collections import defaultdict
+recs=[]
+for f in glob.glob("phaseG/branch_rank*.jsonl"):
+    for ln in open(f):
+        ln=ln.strip()
+        if ln:
+            try: recs.append(json.loads(ln))
+            except: pass
+print(f"records: {len(recs)}")
+by=defaultdict(list)
+for r in recs:
+    ev=r["endpoint_vqa"]
+    by[r["k"]].append(ev[r["oracle_j"]]-ev[r["random_j"]])
+for k in sorted(by):
+    a=np.array(by[k]); print(f"  k={k}: oracle-random target gap = {a.mean():+.4f} (n={len(a)}, frac>0 {(a>0).mean():.2f})")
+PY
+echo "[`date`] DONE"

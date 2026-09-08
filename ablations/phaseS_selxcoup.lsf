@@ -1,0 +1,70 @@
+#!/usr/bin/env bash
+#BSUB -J sd-phaseS-selcoup
+#BSUB -G s10396
+#BSUB -q training-parallel
+#BSUB -n 4
+#BSUB -W 6:00
+#BSUB -R "span[hosts=1]"
+#BSUB -R "select[mem>128000 && hname!='farm-gpu0504']"
+#BSUB -R "rusage[mem=128000]"
+#BSUB -M 128000
+#BSUB -gpu "num=1:mode=exclusive_process:gmem=78G"
+#BSUB -cwd /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM
+#BSUB -o /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-phaseS-%J.out
+#BSUB -e /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-phaseS-%J.err
+#
+# Phase-S: does candidate SELECTION interact with source COUPLING?
+#
+# One cell of a 2x2. Submit with:
+#   bsub -env "all,ARM=W_oracle_hard,COUP=teacher,SEED=0" < ablations/phaseS_selxcoup.lsf
+#
+# Why all four cells are run fresh rather than reusing existing checkpoints. The 69 coupling runs
+# use `--target_schedule one_fixed`, and pick_index IGNORES the variant's label entirely when a
+# schedule is set -- that was deliberate, to isolate coupling from selection. They also run on
+# phaseN/records_24k, which is COCO captions with `oracle_idx: -1` and no per-candidate scores at
+# all, so an oracle arm cannot even be expressed there. The phaseG selection runs (Gorc/Grnd) used
+# the scored phaseC cache instead. The two existing "cells" therefore differ in caption set, record
+# schema and target policy, and cannot be assembled into one factorial. Everything below runs on the
+# scored phaseC cache with no schedule, so selection is live and the only things that vary are ARM,
+# COUP and SEED.
+#
+# Every live hyperparameter is passed explicitly, copied from
+# checkpoints/phaseN/phaseN_W_uniform_freeze-kw1-psig-one_fixedm1-teacher-24k_a1.0_t1.0_s0_113175/args.json
+# Run 91058 produced a garbage model by trusting parser defaults, four of which had drifted.
+# `--scoring_window` is hardcoded because `bsub -env` splits its value on commas.
+set -euo pipefail
+export PATH="/software/cellgen/team361/ha11/envs/nichejepa/bin:$PATH"
+export HF_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/huggingface
+export TORCH_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/torch
+export XDG_CACHE_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/xdg
+export TOKENIZERS_PARALLELISM=false
+export PYTHONPATH="/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM:${PYTHONPATH:-}"
+source ~/.secrets/hf_token
+
+: "${ARM:?set ARM=W_uniform_freeze|W_oracle_hard}"
+: "${COUP:?set COUP=fresh|teacher}"
+: "${SEED:?set SEED}"
+JOB=${LSB_JOBID:-manual}
+RUN="phaseS_${ARM}-${COUP}_s${SEED}_${JOB}"
+OUT="checkpoints/phaseS/${RUN}"
+mkdir -p checkpoints/phaseS logs
+
+echo "[$(date --iso-8601=seconds)] Phase-S | arm=$ARM coupling=$COUP seed=$SEED -> $RUN"
+
+python3 phaseC/train_pilot.py \
+  --variant "$ARM" --coupling "$COUP" \
+  --seed "$SEED" --sel_seed "$SEED" \
+  --selection_dir phaseC \
+  --alpha 1.0 --temp 1.0 \
+  --N 4 --K 8 --cfg 7.0 --student_cfg 0.0 --cfg_mode composed \
+  --num_steps 6000 --num_warmup_steps 300 --lr 1e-5 --weight_decay 0.0 --grad_clip 1.0 \
+  --height 512 --sched_shift 3.0 --num_train_ts 1000.0 \
+  --delta_min 1 --delta_max 3 \
+  --scoring_window 0.625,0.625 --paired_sigma \
+  --support_m 1 --assign_seed 982451653 \
+  --huber_c 0.0 --gradient_checkpointing \
+  --save_every 2000 --log_every 10 --sample_every 0 \
+  --wandb_project sd-phaseS-selcoup --wandb_run_name "$RUN" \
+  --output_dir "$OUT"
+
+echo "[$(date --iso-8601=seconds)] Phase-S done: $RUN"

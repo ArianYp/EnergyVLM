@@ -1,0 +1,48 @@
+#!/usr/bin/env bash
+#BSUB -J sd-phaseK-cf-ranker
+#BSUB -G s10396
+#BSUB -q training-parallel
+#BSUB -n 8
+#BSUB -W 24:00
+#BSUB -R "span[hosts=1]"
+#BSUB -R "select[mem>64000 && hname!='farm-gpu0504']"
+#BSUB -R "rusage[mem=64000]"
+#BSUB -M 64000
+#BSUB -gpu "num=1:mode=exclusive_process"
+#BSUB -cwd /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM
+#BSUB -o /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-phaseK-cf-ranker-%J.out
+#BSUB -e /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-phaseK-cf-ranker-%J.err
+
+set -euo pipefail
+export PATH="/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/venv_mmdit/bin:/software/cellgen/team361/ha11/envs/nichejepa/bin:$PATH"
+export HF_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/huggingface
+export TORCH_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/torch
+export XDG_CACHE_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/xdg
+export TOKENIZERS_PARALLELISM=false
+export WANDB_MODE=online
+source ~/.secrets/hf_token
+
+: "${PHASEK_ORACLE_JOB:?provide completed Phase-K full oracle job}"
+: "${PHASEK_GROUP:?provide matching W&B group}"
+JOB=${LSB_JOBID:-local}
+ORACLE="phaseK/oracle/phaseK_counterfactual_full_${PHASEK_ORACLE_JOB}"
+OUT="phaseK/runs/phaseK_counterfactual_${JOB}"
+
+python phaseK/test_counterfactual.py
+python phaseJ/validate_lucidrains_reference.py \
+  --output "phaseK/lucidrains_validation_counterfactual_${JOB}.json"
+python phaseK/train_counterfactual_ranker.py \
+  --base_token_dir phaseJ/fusion_cache/full_99742 \
+  --counterfactual_cache "$ORACLE/cache" --output_dir "$OUT" \
+  --temperature 0.05 --interaction_weight 1 \
+  --depth 2 --heads 12 --dim_head 64 --width 256 \
+  --epochs 40 --patience 8 --batch_size 4 --lr 1e-4 \
+  --seeds 13,31,53 \
+  --wandb_group "$PHASEK_GROUP" \
+  --wandb_run_name "phaseK_cf_ranker_${JOB}"
+
+test -s "$OUT/counterfactual_rankers.pt"
+test -s "$OUT/ranking_results.json"
+test -s "$OUT/counterfactual_scores.npz"
+echo "[$(date --iso-8601=seconds)] Phase-K ranker complete: $OUT"
+if command -v my-job-stats >/dev/null 2>&1; then my-job-stats -a -n -s; fi

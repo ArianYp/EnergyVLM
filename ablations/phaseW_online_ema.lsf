@@ -1,0 +1,78 @@
+#!/usr/bin/env bash
+#BSUB -J sd-W-online
+#BSUB -G s10396
+#BSUB -q training-parallel
+#BSUB -W 12:00
+#BSUB -n 4
+#BSUB -R "span[hosts=1]"
+#BSUB -R "select[mem>128000]"
+#BSUB -R "rusage[mem=128000]"
+#BSUB -M 128000
+#BSUB -gpu "num=1:mode=exclusive_process:gmem=78G"
+#BSUB -cwd /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM
+#BSUB -o /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-W-online-%J.out
+#BSUB -e /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-W-online-%J.err
+#
+# Evolving-teacher retest. Warm start from the 118k weight-averaged DINO-patch student; the EMA
+# copy of the student generates N fresh candidates per caption every step (cfg 1, K=8); the
+# scorer picks one (VARIANT=CD_dinop_hard: DINO-patch vs the reference photo; B2: uniform); the
+# targets are the EMA teacher's own trajectory (TMODE=ema) or the frozen pretrained teacher's
+# rollout of the selected seed at cfg 7 (TMODE=frozen, the anchored control). 3k pool, 6,000
+# updates, 1 GPU, lr 1e-5, 300 warm-up, as the paper's 3k configuration.
+#
+#   bsub -U iclr_2026 -env "all,VARIANT=CD_dinop_hard,TMODE=ema,EMA=0.999,SEED=0"  < ablations/phaseW_online_ema.lsf
+#   bsub -U iclr_2026 -env "all,VARIANT=B2,TMODE=ema,EMA=0.999,SEED=0"             < ablations/phaseW_online_ema.lsf
+#   bsub -U iclr_2026 -env "all,VARIANT=CD_dinop_hard,TMODE=ema,EMA=0.999,ANCHOR=0.5,SEED=0" < ...
+set -euo pipefail
+export PATH="/software/cellgen/team361/ha11/envs/nichejepa/bin:$PATH"
+export HF_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/huggingface
+export TORCH_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/torch
+export XDG_CACHE_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/xdg
+export TOKENIZERS_PARALLELISM=false
+export PYTHONPATH="/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM:${PYTHONPATH:-}"
+source ~/.secrets/hf_token
+
+: "${VARIANT:?set VARIANT (B2 | CD_dinop_hard)}"
+SEED=${SEED:-0}
+TMODE=${TMODE:-ema}
+EMA=${EMA:-0.999}
+ANCHOR=${ANCHOR:-0.0}
+N=${N:-4}
+STEPS=${STEPS:-6000}
+LR=${LR:-1e-5}
+INIT=${INIT:-checkpoints/phaseW/phaseW_CD_dinop_hard_118k_s0_128710/checkpoint_avg_last5.pt}
+SELDIR=${SELDIR:-phaseN/coco_selection_dinopatch}
+JOB=${LSB_JOBID:-manual}
+TAG="${VARIANT}-${TMODE}-ema${EMA}"
+[ "$ANCHOR" != "0.0" ] && TAG="${TAG}-anchor${ANCHOR}"
+[ "$N" != "4" ] && TAG="${TAG}-N${N}"
+RUN="phaseW_online_${TAG}_s${SEED}_${JOB}"
+OUT="checkpoints/phaseW_online/${RUN}"
+mkdir -p checkpoints/phaseW_online logs
+test -s "$INIT"
+
+echo "[$(date --iso-8601=seconds)] online | variant=$VARIANT teacher_mode=$TMODE ema=$EMA anchor=$ANCHOR N=$N seed=$SEED init=$INIT -> $RUN"
+
+# TMODE=frozen keeps --teacher_mode frozen (cached candidates + frozen-teacher targets) but still
+# warm-starts and keeps the EMA copy, so it is the matched control for the ema arms.
+python3 phaseW/train_pilot_frozen_online.py \
+  --variant "$VARIANT" --coupling fresh --distill_loss x0_huber \
+  --seed "$SEED" --sel_seed "$SEED" \
+  --selection_dir "$SELDIR" \
+  --alpha 1.0 --temp 1.0 \
+  --N 4 --K 8 --cfg 7.0 --student_cfg 0.0 --cfg_mode composed \
+  --num_steps "$STEPS" --num_warmup_steps 300 --lr "$LR" --weight_decay 0.0 --grad_clip 1.0 \
+  --height 512 --sched_shift 3.0 --num_train_ts 1000.0 \
+  --delta_min 1 --delta_max 3 \
+  --scoring_window 0.4,0.9 \
+  --support_m 1 --assign_seed 982451653 \
+  --huber_c 0.0 --gradient_checkpointing \
+  --save_every 2000 --log_every 10 \
+  --sample_every "${SAMPLE_EVERY:-1000}" --sample_prompts "${SAMPLE_PROMPTS:-phaseW/sample_prompts.json}" \
+  --sample_steps 4 --sample_cfg 1.0 \
+  --ema_decay "$EMA" --ema_no_warmup --teacher_mode "$TMODE" --online_N "$N" --online_cfg 1.0 --anchor_prob "$ANCHOR" \
+  --init_ckpt "$INIT" \
+  --wandb_project sd-phaseW-online --wandb_run_name "$RUN" \
+  --output_dir "$OUT"
+
+echo "[$(date --iso-8601=seconds)] online done: $RUN"

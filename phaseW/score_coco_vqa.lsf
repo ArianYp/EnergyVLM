@@ -1,0 +1,29 @@
+#!/usr/bin/env bash
+#BSUB -J sd-W-coco-vqa
+#BSUB -G s10396
+#BSUB -q training-parallel
+#BSUB -n 4
+#BSUB -W 6:00
+#BSUB -R "span[hosts=1]"
+#BSUB -R "select[mem>128000]"
+#BSUB -R "rusage[mem=128000]"
+#BSUB -M 128000
+#BSUB -gpu "num=1:mode=exclusive_process:gmem=40G"
+#BSUB -cwd /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM
+#BSUB -o /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-W-coco-vqa-%J.out
+#BSUB -e /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-W-coco-vqa-%J.err
+# In-domain alignment (VQAScore on 5,000 held-out COCO captions) for every fidelity pool listed in
+# LABELS (COLON-separated: bsub -env splits on commas), e.g.  bsub -env "all,LABELS=T_B2_s0:T_B4_s0" < phaseW/score_coco_vqa.lsf
+set -euo pipefail
+export PATH="/software/cellgen/team361/ha11/envs/nichejepa/bin:$PATH"
+export HF_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/huggingface
+export TOKENIZERS_PARALLELISM=false
+source ~/.secrets/hf_token
+: "${LABELS:?colon-separated pool labels under phaseT/fidelity/images}"
+STEPS=${STEPS:-4}
+mkdir -p phaseW/coco_vqa
+for L in ${LABELS//:/ }; do
+  [ -s "phaseW/coco_vqa/$L.json" ] && { echo "skip $L (done)"; continue; }
+  python3 phaseW/score_coco_vqa.py --images "phaseT/fidelity/images/$L" --steps "$STEPS" \
+    --prompts phaseT/fidelity/prompts.json --out "phaseW/coco_vqa/$L.json"
+done

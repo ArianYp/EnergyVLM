@@ -1,0 +1,70 @@
+#!/usr/bin/env bash
+#BSUB -J sd-phaseJ-objective-smoke
+#BSUB -G s10396
+#BSUB -q training-parallel
+#BSUB -n 4
+#BSUB -W 1:00
+#BSUB -R "span[hosts=1]"
+#BSUB -R "select[mem>16000 && hname!='farm-gpu0504']"
+#BSUB -R "rusage[mem=16000]"
+#BSUB -M 16000
+#BSUB -gpu "num=1:mode=exclusive_process"
+#BSUB -cwd /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM
+#BSUB -o /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-phaseJ-objective-smoke-%J.out
+#BSUB -e /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-phaseJ-objective-smoke-%J.err
+
+set -euo pipefail
+export PATH="/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/venv_mmdit/bin:/software/cellgen/team361/ha11/envs/nichejepa/bin:$PATH"
+export HF_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/huggingface
+export TORCH_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/torch
+export XDG_CACHE_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/xdg
+export TOKENIZERS_PARALLELISM=false
+export WANDB_MODE=online
+source ~/.secrets/hf_token
+
+: "${PHASEJ_GROUP:?provide one unique W&B group}"
+
+JOB=${LSB_JOBID:-local}
+TOKEN_DIR=phaseJ/fusion_cache/smoke_99727
+OUT="phaseJ/runs/phaseJ_objective_smoke_${JOB}"
+AUDIT="phaseJ/audits/phaseJ_objective_smoke_${JOB}"
+
+test -s "$TOKEN_DIR/train_tokens.pt"
+test -s "$TOKEN_DIR/external_tokens.pt"
+test -s "$TOKEN_DIR/blank_text.pt"
+
+python phaseJ/test_ranker.py
+python phaseJ/test_fusion_ranker.py
+python phaseJ/fusion_ranker.py train \
+  --token_dir "$TOKEN_DIR" \
+  --output_dir "$OUT" \
+  --model_label mmdit_fusion_bt_text_smoke \
+  --condition aligned \
+  --loss_type all_pairs_bt \
+  --temperature 0.05 \
+  --pair_weight 0 \
+  --text_contrast_weight 1 \
+  --text_contrast_margin 0 \
+  --text_contrast_type interaction \
+  --depth 1 --heads 4 --dim_head 32 --width 64 \
+  --epochs 3 --patience 2 --batch_size 4 --lr 1e-4 \
+  --seeds 13 \
+  --wandb_project sd-mmdit-ranker-v1 \
+  --wandb_group "$PHASEJ_GROUP" \
+  --wandb_run_name "phaseJ_objective_smoke_train_${JOB}"
+
+python phaseJ/audit_fusion_conditioning.py \
+  --run_dir "$OUT" \
+  --token_dir "$TOKEN_DIR" \
+  --output_dir "$AUDIT" \
+  --batch_size 4 \
+  --emit_selections \
+  --wandb_project sd-mmdit-ranker-v1 \
+  --wandb_group "$PHASEJ_GROUP" \
+  --wandb_run_name "phaseJ_objective_smoke_audit_${JOB}"
+
+test -s "$OUT/ranking_results.json"
+test -s "$OUT/fusion_rankers.pt"
+test -s "$AUDIT/conditioning_audit.json"
+test -s "$AUDIT/conditioning_scores.npz"
+echo "[$(date --iso-8601=seconds)] objective smoke complete: $OUT $AUDIT"

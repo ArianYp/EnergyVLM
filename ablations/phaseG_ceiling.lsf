@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+#BSUB -J sd-phaseG-ceiling
+#BSUB -G s10396
+#BSUB -q training-parallel
+#BSUB -n 16
+#BSUB -W 12:00
+#BSUB -R "span[hosts=1]"
+#BSUB -R "select[mem>256000 && hname!='farm-gpu0504']"
+#BSUB -R "rusage[mem=256000]"
+#BSUB -M 256000
+#BSUB -gpu "num=4:mode=exclusive_process:gmodel=NVIDIAH200"
+#BSUB -cwd /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM
+#BSUB -o /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-phaseG-ceiling-%J.out
+#BSUB -e /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-phaseG-ceiling-%J.err
+# Does the selection tilt survive a DETERMINISTIC MAP? Inference-only.
+# Var(x0|z_k) is both the dose and the irreducible regression error, so the tilt that can actually
+# survive training is r(mean of top-M latents) - r(mean of random-M latents), not the per-sample gap.
+set -euo pipefail
+export PATH="/software/cellgen/team361/ha11/envs/nichejepa/bin:$PATH"
+export HF_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/huggingface
+export TORCH_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/torch
+export XDG_CACHE_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/xdg
+export TOKENIZERS_PARALLELISM=false
+export NCCL_NVLS_ENABLE=0
+source ~/.secrets/hf_token
+echo "[`date`] Phase G ceiling measurement | Host: $(hostname)"
+torchrun --standalone --nproc-per-node=4 phaseG/measure_ceiling.py \
+  --n_prompts 400 --N 32 --M 4 --branch_points 3,6 --K 8 --cfg 7.0 --eta 0.9
+python3 phaseG/measure_ceiling.py summarize
+echo "[`date`] DONE -> phaseG/ceiling_report.md"

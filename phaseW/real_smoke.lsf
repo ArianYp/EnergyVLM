@@ -1,0 +1,45 @@
+#!/usr/bin/env bash
+#BSUB -J sd-W-real-smoke
+#BSUB -G s10396
+#BSUB -q training-parallel
+#BSUB -n 4
+#BSUB -W 0:40
+#BSUB -R "span[hosts=1]"
+#BSUB -R "select[mem>128000]"
+#BSUB -R "rusage[mem=128000]"
+#BSUB -M 128000
+#BSUB -gpu "num=1:mode=exclusive_process:gmem=78G"
+#BSUB -cwd /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM
+#BSUB -o /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-W-real-smoke-%J.out
+#BSUB -e /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-W-real-smoke-%J.err
+# 30-step smoke test of --ema_decay: EMA files written, EMA weights close to but not equal to the raw weights.
+set -euo pipefail
+export PATH="/software/cellgen/team361/ha11/envs/nichejepa/bin:$PATH"
+export HF_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/huggingface
+export TORCH_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/torch
+export XDG_CACHE_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/xdg
+export TOKENIZERS_PARALLELISM=false
+export WANDB_MODE=disabled
+export PYTHONPATH="/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM:${PYTHONPATH:-}"
+source ~/.secrets/hf_token
+OUT=checkpoints/phaseW_smoke/real_smoke_${LSB_JOBID}
+python3 phaseW/train_pilot_frozen_k16.py --variant CD_dinop_hard --coupling fresh --distill_loss x0_huber \
+  --seed 0 --sel_seed 0 --selection_dir phaseN/coco_selection_dinopatch --alpha 1.0 --temp 1.0 \
+  --N 4 --K 8 --cfg 7.0 --student_cfg 0.0 --cfg_mode composed --num_steps 30 --num_warmup_steps 5 --lr 1e-5 \
+  --weight_decay 0.0 --grad_clip 1.0 --height 512 --sched_shift 3.0 --num_train_ts 1000.0 --delta_min 1 --delta_max 3 \
+  --scoring_window 0.4,0.9 --support_m 1 --assign_seed 982451653 --huber_c 0.0 --gradient_checkpointing \
+  --save_every 10 --log_every 10 --sample_every 0 --ema_decay 0 --lambda_real 0.2 --real_states 2 --no_wandb --output_dir "$OUT"
+python3 - "$OUT" <<'PY'
+import sys, torch, glob
+from pathlib import Path
+out = Path(sys.argv[1]); print(sorted(p.name for p in out.glob("*.pt")))
+raw = torch.load(out / "checkpoint_final.pt", map_location="cpu", mmap=True, weights_only=False)
+ema = torch.load(out / "checkpoint_ema_final.pt", map_location="cpu", mmap=True, weights_only=False)
+assert raw["step"] == ema["step"] == 30 and set(raw["model"]) == set(ema["model"])
+num = den = 0.0; mx = 0.0
+for k in list(raw["model"])[:400]:
+    a, b = raw["model"][k].float(), ema["model"][k].float()
+    num += (a - b).pow(2).sum().item(); den += a.pow(2).sum().item(); mx = max(mx, (a - b).abs().max().item())
+print(f"EMA vs raw: relative L2 {num**.5/den**.5:.3e}, max abs {mx:.3e} (expect small but nonzero)")
+PY
+echo "[$(date --iso-8601=seconds)] smoke done: $OUT"

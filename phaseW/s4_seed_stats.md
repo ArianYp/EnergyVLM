@@ -17,6 +17,7 @@
 | latent scorer, Boltzmann T=0.04, exact | 0.4732 / 0.4747 / 0.4572 | 0.4684 +- 0.0097 | 21.62 / 21.22 / 20.63 | 21.16 +- 0.50 | 11.1 | 1.6 |
 | argmax + projector reward (frozen) | 0.4825 / 0.4689 / 0.4760 | 0.4758 +- 0.0068 | 23.36 / 22.48 / 22.96 | 22.93 +- 0.44 | 3.5 | 1.6 |
 | argmax + projector reward (refreshed) | 0.4810 / 0.4706 / 0.4802 | 0.4773 +- 0.0058 | 23.81 / 21.71 / 21.68 | 22.40 +- 1.22 | 3.6 | 1.6 |
+| argmax + exact DINO reward | 0.4783 / 0.4949 / 0.4865 | 0.4866 +- 0.0083 | 22.69 / 26.58 / 26.37 | 25.21 +- 2.18 | 4.1 | 1.6 |
 
 ## Seed-paired contrasts, raw final checkpoints
 
@@ -49,6 +50,10 @@
 | argmax + projector reward (frozen) vs random (fixed draw) | +0.0334 / +0.0296 / +0.0148 | +0.0259 +- 0.0098 | [+0.0015, +0.0503] | 0.045 | -0.06 / +1.21 / +4.31 | +1.82 +- 2.25 | 0.297 |
 | argmax + projector reward (refreshed) vs random (fixed draw) | +0.0319 / +0.0313 / +0.0190 | +0.0274 +- 0.0073 | [+0.0092, +0.0456] | 0.023 | +0.39 / +0.44 / +3.03 | +1.29 +- 1.51 | 0.278 |
 | argmax + projector reward (refreshed) vs argmax + projector reward (frozen) | -0.0015 / +0.0017 / +0.0041 | +0.0015 +- 0.0028 | [-0.0055, +0.0084] | 0.464 | +0.45 / -0.77 / -1.28 | -0.53 +- 0.89 | 0.409 |
+| argmax + exact DINO reward vs argmax | +0.0093 / +0.0358 / +0.0040 | +0.0164 +- 0.0171 | [-0.0260, +0.0588] | 0.239 | +1.78 / +3.56 / +2.91 | +2.75 +- 0.90 | 0.034 |
+| argmax + exact DINO reward vs random (fixed draw) | +0.0292 / +0.0557 / +0.0252 | +0.0367 +- 0.0165 | [-0.0044, +0.0778] | 0.062 | -0.73 / +5.31 / +7.71 | +4.10 +- 4.35 | 0.244 |
+| argmax + exact DINO reward vs argmax + projector reward (refreshed) | -0.0027 / +0.0243 / +0.0063 | +0.0093 +- 0.0138 | [-0.0249, +0.0435] | 0.362 | -1.11 / +4.87 / +4.69 | +2.81 +- 3.40 | 0.288 |
+| argmax + exact DINO reward vs argmax + projector reward (frozen) | -0.0042 / +0.0260 / +0.0104 | +0.0108 +- 0.0151 | [-0.0267, +0.0483] | 0.342 | -0.66 / +4.10 / +3.40 | +2.28 +- 2.57 | 0.264 |
 
 ## Per-seed scores, average of the checkpoints at 2k, 4k and 6k updates
 
@@ -67,6 +72,7 @@
 | latent scorer, Boltzmann T=0.04, exact | 0.4818 / 0.4874 / 0.4731 | 0.4807 +- 0.0072 | 24.29 / 22.73 / 23.03 | 23.35 +- 0.83 |  |  |
 | argmax + projector reward (frozen) | 0.4833 / 0.4780 / 0.4928 | 0.4847 +- 0.0075 | 24.60 / 23.92 / 24.05 | 24.19 +- 0.36 |  |  |
 | argmax + projector reward (refreshed) | 0.4878 / 0.4779 / 0.4971 | 0.4876 +- 0.0096 | 23.98 / 24.31 / 23.63 | 23.97 +- 0.34 |  |  |
+| argmax + exact DINO reward | 0.4968 / 0.5027 / 0.4957 | 0.4984 +- 0.0038 | 25.41 / 25.44 / 24.88 | 25.25 +- 0.31 |  |  |
 
 ## Seed-paired contrasts, average of the checkpoints at 2k, 4k and 6k updates
 
@@ -99,6 +105,10 @@
 | argmax + projector reward (frozen) vs random (fixed draw) | +0.0077 / +0.0056 / +0.0196 | +0.0109 +- 0.0075 | [-0.0078, +0.0297] | 0.128 | +0.97 / +1.99 / +2.01 | +1.66 +- 0.60 | 0.040 |
 | argmax + projector reward (refreshed) vs random (fixed draw) | +0.0121 / +0.0055 / +0.0239 | +0.0138 +- 0.0093 | [-0.0092, +0.0369] | 0.123 | +0.35 / +2.38 / +1.58 | +1.44 +- 1.02 | 0.136 |
 | argmax + projector reward (refreshed) vs argmax + projector reward (frozen) | +0.0045 / -0.0001 / +0.0043 | +0.0029 +- 0.0026 | [-0.0035, +0.0093] | 0.189 | -0.62 / +0.39 / -0.43 | -0.22 +- 0.54 | 0.552 |
+| argmax + exact DINO reward vs argmax | +0.0119 / +0.0166 / +0.0047 | +0.0111 +- 0.0060 | [-0.0037, +0.0259] | 0.085 | +1.24 / +0.44 / +2.88 | +1.52 +- 1.25 | 0.169 |
+| argmax + exact DINO reward vs random (fixed draw) | +0.0212 / +0.0303 / +0.0225 | +0.0246 +- 0.0049 | [+0.0124, +0.0369] | 0.013 | +1.78 / +3.51 / +2.84 | +2.71 +- 0.87 | 0.033 |
+| argmax + exact DINO reward vs argmax + projector reward (refreshed) | +0.0090 / +0.0248 / -0.0014 | +0.0108 +- 0.0132 | [-0.0219, +0.0435] | 0.292 | +1.43 / +1.14 / +1.26 | +1.28 +- 0.15 | 0.005 |
+| argmax + exact DINO reward vs argmax + projector reward (frozen) | +0.0135 / +0.0247 / +0.0029 | +0.0137 +- 0.0109 | [-0.0134, +0.0408] | 0.161 | +0.81 / +1.53 / +0.83 | +1.06 +- 0.41 | 0.046 |
 
 ## Boltzmann weights on the 3k cache (N = 4)
 

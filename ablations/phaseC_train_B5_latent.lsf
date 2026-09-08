@@ -1,0 +1,38 @@
+#!/usr/bin/env bash
+#BSUB -J sd-phaseC-B5_latent
+#BSUB -G s10396
+#BSUB -q training-parallel
+#BSUB -n 16
+#BSUB -W 72:00
+#BSUB -R "span[hosts=1]"
+#BSUB -R "select[mem>64000 && hname!='farm-gpu0504']"
+#BSUB -R "rusage[mem=64000]"
+#BSUB -M 64000
+#BSUB -gpu "num=4:mode=exclusive_process:gmodel=NVIDIAH200"
+#BSUB -cwd /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM
+#BSUB -o /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-phaseC-B5_latent-%J.out
+#BSUB -e /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-phaseC-B5_latent-%J.err
+
+# Phase C1 pilot — variant B5_latent, frozen-teacher M1 recipe. Reads phaseC/selection*.
+# All variants matched (steps/lr/schedule/init/#target-pairs); differ ONLY in
+# selection rule + supervision. No VQA in the loop -> 64GB. Requires the
+# selection cache (run phaseC_build_selection first).
+set -euo pipefail
+export PATH="/software/cellgen/team361/ha11/envs/nichejepa/bin:$PATH"
+export HF_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/huggingface
+export TORCH_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/torch
+export XDG_CACHE_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/xdg
+export NCCL_NVLS_ENABLE=0
+source ~/.secrets/hf_token
+echo "[`date`] Phase C1 B5_latent | Host: $(hostname) | LSF: ${LSB_JOBID:-unknown}"
+RUN=phaseC_B5_latent_$(date +%Y%m%d_%H%M%S)_${LSB_JOBID:-local}
+torchrun --standalone --nproc-per-node=4 phaseC/train_pilot.py \
+  --variant B5_latent \
+  --selection_dir phaseC \
+  --output_dir checkpoints/phaseC/${RUN} \
+  --num_steps 6000 --num_warmup_steps 300 --lr 1e-5 \
+  --N 4 --K 8 --cfg 7.0 --scoring_window 0.4,0.9 --delta_min 1 --delta_max 3 \
+  --gradient_checkpointing --save_every 2000 --sample_every 1000 --log_every 10 \
+  --wandb_project sd-phaseC-pilot --wandb_run_name "${RUN}"
+echo "[`date`] DONE B5_latent"
+if command -v my-job-stats >/dev/null 2>&1; then my-job-stats -a -n -s; fi

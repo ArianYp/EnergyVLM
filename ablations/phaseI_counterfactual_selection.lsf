@@ -1,0 +1,67 @@
+#!/usr/bin/env bash
+#BSUB -J sd-phaseI-cf-data
+#BSUB -G s10396
+#BSUB -q training-parallel
+#BSUB -n 16
+#BSUB -W 36:00
+#BSUB -R "span[hosts=1]"
+#BSUB -R "select[mem>256000 && hname!='farm-gpu0504']"
+#BSUB -R "rusage[mem=256000]"
+#BSUB -M 256000
+#BSUB -gpu "num=4:mode=exclusive_process:gmodel=NVIDIAH200"
+#BSUB -cwd /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM
+#BSUB -o /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-phaseI-cf-data-%J.out
+#BSUB -e /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-phaseI-cf-data-%J.err
+
+# Reconstruct the exact Phase-I candidate pools and cache two matched views:
+# scores under the original prompt and scores under a one-atom counterfactual.
+set -euo pipefail
+
+export PATH="/software/cellgen/team361/ha11/envs/nichejepa/bin:$PATH"
+export HF_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/huggingface
+export TORCH_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/torch
+export XDG_CACHE_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/xdg
+export TOKENIZERS_PARALLELISM=false
+export NCCL_NVLS_ENABLE=0
+export WANDB_MODE=online
+source ~/.secrets/hf_token
+
+: "${PHASEI_GROUP:?submit with one unique W&B group}"
+PHASEI_CF_LIMIT_PER_CATEGORY=${PHASEI_CF_LIMIT_PER_CATEGORY:-0}
+PHASEI_CF_GATE_MODE=${PHASEI_CF_GATE_MODE:-full}
+PHASEI_CF_VERIFY_ORIGINAL=${PHASEI_CF_VERIFY_ORIGINAL:-0}
+
+JOB=${LSB_JOBID:-local}
+ROOT="phaseI/counterfactual_data_${JOB}"
+RUN="phaseI_counterfactual_data_${JOB}"
+if [[ -e "$ROOT" ]]; then
+  echo "Refusing to overwrite $ROOT" >&2
+  exit 2
+fi
+
+echo "[$(date --iso-8601=seconds)] Phase-I counterfactual selection | job=$JOB root=$ROOT"
+echo "  group=$PHASEI_GROUP limit_per_category=$PHASEI_CF_LIMIT_PER_CATEGORY gate=$PHASEI_CF_GATE_MODE verify_original=$PHASEI_CF_VERIFY_ORIGINAL"
+nvidia-smi --query-gpu=index,name,memory.total --format=csv
+python3 phaseI/test_counterfactual_distillation.py
+
+VERIFY_ARGS=()
+if [[ "$PHASEI_CF_VERIFY_ORIGINAL" == 1 ]]; then
+  VERIFY_ARGS+=(--verify_original)
+fi
+
+torchrun --standalone --nproc-per-node=4 phaseI/build_counterfactual_selection.py \
+  --source_selection_dir phaseC --output_dir "$ROOT" \
+  --K 8 --cfg 7 --height 512 \
+  --limit_per_category "$PHASEI_CF_LIMIT_PER_CATEGORY" \
+  --min_coverage 0.90 --gate_mode "$PHASEI_CF_GATE_MODE" \
+  --min_top_flip 0.20 --min_pair_change 0.30 --min_absolute_score_effect 0.05 \
+  --wandb_project sd-pref-repa-v1 --wandb_group "$PHASEI_GROUP" \
+  --wandb_run_name "$RUN" "${VERIFY_ARGS[@]}"
+
+jq -e '.pass == true' "$ROOT/summary.json" >/dev/null
+test -s "$ROOT/correct/selection_rank0.jsonl"
+test -s "$ROOT/counterfactual/selection_rank0.jsonl"
+echo "[$(date --iso-8601=seconds)] Phase-I counterfactual selection complete: $ROOT"
+if command -v my-job-stats >/dev/null 2>&1; then
+  my-job-stats -a -n -s
+fi

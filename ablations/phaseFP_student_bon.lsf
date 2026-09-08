@@ -1,0 +1,93 @@
+#!/usr/bin/env bash
+#BSUB -J sd-FP-student-bon
+#BSUB -G s10396
+#BSUB -q training-parallel
+#BSUB -n 8
+#BSUB -W 12:00
+#BSUB -R "span[hosts=1]"
+#BSUB -R "select[mem>128000 && hname!='farm-gpu0504']"
+#BSUB -R "rusage[mem=128000]"
+#BSUB -M 128000
+#BSUB -gpu "num=1:mode=exclusive_process:gmem=40G"
+#BSUB -cwd /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM
+#BSUB -o /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-FP-student-bon-%J.out
+#BSUB -e /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-FP-student-bon-%J.err
+
+# Student-side best-of-4 — the matched-compute opponent the deck was missing.
+#
+# The amortization claim is currently argued against the TEACHER's best-of-4 (64 NFE). The fairer
+# opponent is the student's own best-of-4: 16 NFE plus a scorer call, against the trained student's
+# 4 NFE with none. This needs NO generation: the diversity evaluation already wrote 4 seeds per
+# prompt per model to disk (400 prompts x 4 candidates), so this is scorer calls only.
+#
+# It also answers stack-or-substitute: if preference training has consumed the seed-level variance
+# best-of-N feeds on, the BoN headroom over the TRAINED student is smaller than over M1.
+set -euo pipefail
+
+export PATH="/software/cellgen/team361/ha11/envs/nichejepa/bin:$PATH"
+export HF_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/huggingface
+export TORCH_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/torch
+export XDG_CACHE_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/xdg
+export TOKENIZERS_PARALLELISM=false
+source ~/.secrets/hf_token
+
+JOB=${LSB_JOBID:-local}
+ROOT="phaseFP/student_bon_${JOB}"
+if [[ -e "$ROOT" ]]; then echo "Refusing to overwrite $ROOT" >&2; exit 2; fi
+mkdir -p "$ROOT"
+
+# label -> the eval root whose diversity/ tree holds its 4 seeds per prompt
+declare -A SRC=(
+  [M1Fixed]=phaseFP/eval_M1Fixed_101217
+  [CorrectFixed]=phaseFP/eval_CorrectFixed_101257
+  [KnobB30]=phaseFP/eval_KnobB30_101937
+)
+
+echo "[$(date --iso-8601=seconds)] student-side best-of-4 | job=$JOB"
+nvidia-smi --query-gpu=index,name,memory.total --format=csv
+
+for LABEL in "${!SRC[@]}"; do
+  D="${SRC[$LABEL]}"
+  test -s "$D/diversity/prompts.json"
+  # Split the 4 seeds into per-candidate trees, exactly as the exact-headroom job does.
+  python3 phaseFP/build_candidate_models.py \
+    --images_root "$D/diversity/images/${LABEL}" \
+    --prompts "$D/diversity/prompts.json" \
+    --out "$ROOT/${LABEL}_cands" --steps 4 --N 4
+
+  for J in 0 1 2 3; do
+    for CAT in color shape texture spatial 3d_spatial numeracy complex; do
+      S="$ROOT/scores/${LABEL}/Cand${J}_s4_${CAT}"
+      python3 phaseC/compbench_eval.py stage \
+        --images "$ROOT/${LABEL}_cands/images/Cand${J}" \
+        --prompts "$ROOT/${LABEL}_cands/prompts.json" \
+        --steps 4 --categories "$CAT" --out "$S"
+      python3 phaseC/compbench_eval.py run --dir "$S" --skip_done
+      python3 phaseC/compbench_eval.py collect --dir "$S" --routing_split val
+    done
+  done
+done
+
+# Fold per-candidate scores into {model: {prompt: {cand: score}}}
+python3 - "$ROOT" <<'PY'
+import json,sys,glob,os
+root=sys.argv[1]; out={}
+for mdir in sorted(glob.glob(f"{root}/scores/*")):
+    label=os.path.basename(mdir); per={}
+    for f in sorted(glob.glob(f"{mdir}/Cand*_s4_*/scores.json")):
+        cand=os.path.basename(os.path.dirname(f)).split("_")[0]
+        for r in json.load(open(f))["per_prompt"]:
+            if r.get("prompt"):
+                per.setdefault(r["prompt"],{})[cand]=float(r["score"])
+    out[label]=per
+    print(label,"prompts:",len(per))
+json.dump(out,open(f"{root}/cand_scores.json","w"))
+PY
+
+python3 phaseFP/score_student_bon.py \
+  --scores "$ROOT/cand_scores.json" \
+  --categories "phaseFP/eval_M1Fixed_101217/diversity/prompts.json" \
+  --out "$ROOT/student_bon.json"
+
+echo "[$(date --iso-8601=seconds)] student-side best-of-4 complete: $ROOT/student_bon.json"
+if command -v my-job-stats >/dev/null 2>&1; then my-job-stats -a -n -s; fi

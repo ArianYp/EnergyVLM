@@ -1,0 +1,108 @@
+#!/usr/bin/env bash
+#BSUB -J sd-phaseJ-ranker
+#BSUB -G s10396
+#BSUB -q training-parallel
+#BSUB -n 8
+#BSUB -W 24:00
+#BSUB -R "span[hosts=1]"
+#BSUB -R "select[mem>256000 && hname!='farm-gpu0504']"
+#BSUB -R "rusage[mem=256000]"
+#BSUB -M 256000
+#BSUB -gpu "num=1:mode=exclusive_process:gmodel=NVIDIAH200"
+#BSUB -cwd /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM
+#BSUB -o /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-phaseJ-%J.out
+#BSUB -e /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-phaseJ-%J.err
+
+set -euo pipefail
+export PATH="/software/cellgen/team361/ha11/envs/nichejepa/bin:$PATH"
+export HF_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/huggingface
+export TORCH_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/torch
+export XDG_CACHE_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/xdg
+export TOKENIZERS_PARALLELISM=false
+export NCCL_NVLS_ENABLE=0
+export WANDB_MODE=online
+source ~/.secrets/hf_token
+
+: "${PHASEJ_ARM:?submit with PHASEJ_ARM=base|m1|blank}"
+: "${PHASEJ_GROUP:?submit with a unique PHASEJ_GROUP}"
+PHASEJ_LIMIT_TRAIN=${PHASEJ_LIMIT_TRAIN:-0}
+PHASEJ_LIMIT_EXTERNAL=${PHASEJ_LIMIT_EXTERNAL:-0}
+PHASEJ_EPOCHS=${PHASEJ_EPOCHS:-50}
+PHASEJ_PATIENCE=${PHASEJ_PATIENCE:-10}
+PHASEJ_HEAD_SEEDS=${PHASEJ_HEAD_SEEDS:-11,29,47}
+PHASEJ_SKIP_OFFICIAL=${PHASEJ_SKIP_OFFICIAL:-0}
+
+M1=checkpoints/method/M1_pure_consistency_20260624_065127_55187/checkpoint_final.pt
+case "$PHASEJ_ARM" in
+  base)
+    BACKBONE=base
+    CONDITION=aligned
+    MODEL_LABEL=mmdit_base
+    ;;
+  m1)
+    BACKBONE=$M1
+    CONDITION=aligned
+    MODEL_LABEL=mmdit_m1
+    ;;
+  blank)
+    BACKBONE=base
+    CONDITION=blank
+    MODEL_LABEL=mmdit_blank
+    ;;
+  *)
+    echo "Invalid PHASEJ_ARM=$PHASEJ_ARM" >&2
+    exit 2
+    ;;
+esac
+
+JOB=${LSB_JOBID:-local}
+RUN="phaseJ_${PHASEJ_ARM}_${JOB}"
+OUT="phaseJ/runs/${RUN}"
+echo "[$(date --iso-8601=seconds)] Phase J arm=$PHASEJ_ARM job=$JOB output=$OUT"
+nvidia-smi --query-gpu=index,name,memory.total --format=csv
+
+python3 phaseJ/test_ranker.py
+python3 phaseJ/mmdit_ranker.py \
+  --output_dir "$OUT" --model_label "$MODEL_LABEL" \
+  --backbone_checkpoint "$BACKBONE" --condition "$CONDITION" \
+  --layers 8,16,23 --sigmas 0.15,0.35,0.60 \
+  --limit_train "$PHASEJ_LIMIT_TRAIN" --limit_external "$PHASEJ_LIMIT_EXTERNAL" \
+  --epochs "$PHASEJ_EPOCHS" --patience "$PHASEJ_PATIENCE" \
+  --head_seeds "$PHASEJ_HEAD_SEEDS" \
+  --wandb_project sd-mmdit-ranker-v1 --wandb_group "$PHASEJ_GROUP" \
+  --wandb_run_name "$RUN"
+
+test -s "$OUT/ranking_results.json"
+test -s "$OUT/rank_heads.pt"
+if [[ "$PHASEJ_SKIP_OFFICIAL" == 1 ]]; then
+  echo "Smoke complete; official evaluation intentionally skipped."
+  exit 0
+fi
+
+echo "=== Official held-out CompBench selection evaluation ==="
+for CAT in color shape texture spatial 3d_spatial numeracy non_spatial complex; do
+  D="$OUT/compbench_scores/${MODEL_LABEL}_s4_${CAT}"
+  python3 phaseC/compbench_eval.py stage \
+    --images "$OUT/selection/images/${MODEL_LABEL}" \
+    --prompts "$OUT/selection/prompts.json" --steps 4 --categories "$CAT" --out "$D"
+  python3 phaseC/compbench_eval.py run --dir "$D" --skip_done
+  python3 phaseC/compbench_eval.py collect --dir "$D" --routing_split val
+
+  mkdir -p "$OUT/compbench_scores"
+  ln -s "$(realpath "phaseH/scores/random_s4_${CAT}")" "$OUT/compbench_scores/random_s4_${CAT}"
+  ln -s "$(realpath "phaseH/scores/oracle_s4_${CAT}")" "$OUT/compbench_scores/oracle_s4_${CAT}"
+done
+
+python3 phaseC/eval_analyze.py --scores_dir "$OUT/compbench_scores" --step 4 \
+  --models "${MODEL_LABEL},random,oracle" --title "Phase J ${PHASEJ_ARM} scorer" \
+  --geneval2_dir "$OUT/not_run" --fidelity "$OUT/not_run.json" --diversity "$OUT/not_run.json" \
+  --out "$OUT/official_vs_random.md"
+
+python3 phaseJ/log_official_wandb.py --run_dir "$OUT" --model_label "$MODEL_LABEL" \
+  --project sd-mmdit-ranker-v1 --group "$PHASEJ_GROUP" \
+  --run_name "phaseJ_eval_${PHASEJ_ARM}_${JOB}"
+
+echo "[$(date --iso-8601=seconds)] Phase J complete: $OUT"
+if command -v my-job-stats >/dev/null 2>&1; then
+  my-job-stats -a -n -s
+fi

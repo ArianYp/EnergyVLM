@@ -1,0 +1,67 @@
+#!/usr/bin/env bash
+#BSUB -J sd-phaseG-gates
+#BSUB -G s10396
+#BSUB -U conf_july_2026
+#BSUB -q training-parallel
+#BSUB -n 16
+#BSUB -W 24:00
+#BSUB -R "span[hosts=1]"
+#BSUB -R "select[mem>256000 && hname!='farm-gpu0504']"
+#BSUB -R "rusage[mem=256000]"
+#BSUB -M 256000
+#BSUB -gpu "num=4:mode=exclusive_process:gmodel=NVIDIAH200"
+#BSUB -cwd /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM
+#BSUB -o /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-phaseG-gates-%J.out
+#BSUB -e /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-phaseG-gates-%J.err
+# THE PRE-REGISTERED GATES CHANNEL 3 HAS NEVER HAD.
+# Our own pre-registration requires fidelity AND diversity alongside the alignment primary; all
+# three Phase-G verdict files say "not yet run". The v3/v4 reviewers both flagged it, and DIVERSITY
+# matters most: every arm sits ~0.12 below M1, and mode collapse produces exactly that pattern --
+# a collapsed arm can look "worse on alignment" for reasons that have nothing to do with the target
+# rule. Until this runs, the channel-3 headline is held to a LOWER standard than the C1 claim it
+# replaced, which passed both gates.
+# Needs its own pools: diversity = 4 seeds/prompt over 400 prompts; fidelity = cand0 vs COCO-real.
+set -euo pipefail
+export PATH="/software/cellgen/team361/ha11/envs/nichejepa/bin:$PATH"
+export HF_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/huggingface
+export TORCH_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/torch
+export XDG_CACHE_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/xdg
+export TOKENIZERS_PARALLELISM=false
+export NCCL_NVLS_ENABLE=0
+source ~/.secrets/hf_token
+echo "[`date`] Phase G pre-registered gates | Host: $(hostname)"
+# PINNED, not globbed: `phaseG_oracle_*` also matches the k6 and multi-prefix runs and `ls -dt`
+# would silently pick phaseG_oracle_pfx_88070. These are the exact k=3 checkpoints the reported
+# Gorc/Grnd numbers came from (verified against ablations/phaseG_eval.lsf and the eval logs).
+declare -A CK
+CK[Gorc]=checkpoints/phaseG/phaseG_oracle_20260726_135832_87065/checkpoint_final.pt
+CK[Grnd]=checkpoints/phaseG/phaseG_random_20260726_141439_87066/checkpoint_final.pt
+CK[Gmed]=$(ls -dt checkpoints/phaseG/phaseG_median_2*/checkpoint_final.pt | head -1)
+CK[Gant]=$(ls -dt checkpoints/phaseG/phaseG_antioracle_2*/checkpoint_final.pt | head -1)
+CK[GrndS1]=$(ls -dt checkpoints/phaseG/phaseG_randomS1_2*/checkpoint_final.pt | head -1)
+for L in Gorc Grnd Gmed Gant GrndS1; do
+  [ -f "${CK[$L]}" ] || { echo "FATAL: checkpoint for $L not found: ${CK[$L]}"; exit 1; }
+  echo "  $L <- ${CK[$L]}"
+done
+
+# --- diversity: 4 seeds per prompt over the existing 400-prompt diversity pool
+for L in Gorc Grnd Gmed Gant GrndS1; do
+  [ -n "${CK[$L]:-}" ] || { echo "no checkpoint for $L -- skipping"; continue; }
+  torchrun --standalone --nproc-per-node=4 exp0/phaseA_generate.py \
+    --out_root phaseC/diversity --label "$L" --checkpoint "${CK[$L]}" --cfg 1 \
+    --steps_list 4 --n_seeds 4 --prompts_json phaseC/diversity/prompts.json
+done
+python3 phaseC/diversity_eval.py --gen_root phaseC/diversity/images \
+  --models Gorc,Grnd,Gmed,Gant,GrndS1 --steps 4 --n_seeds 4 \
+  --prompts phaseC/diversity/prompts.json
+
+# --- fidelity: cand0 vs COCO-real, same protocol as C1
+for L in Gorc Grnd Gmed Gant GrndS1; do
+  [ -n "${CK[$L]:-}" ] || continue
+  torchrun --standalone --nproc-per-node=4 exp0/phaseA_generate.py \
+    --out_root phaseC/fidelity --label "$L" --checkpoint "${CK[$L]}" --cfg 1 \
+    --steps_list 4 --prompts_json phaseC/fidelity/prompts.json
+done
+python3 phaseC/fidelity_eval.py --gen_root phaseC/fidelity/images \
+  --models Gorc,Grnd,Gmed,Gant,GrndS1 --steps 4
+echo "[`date`] DONE"

@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+#BSUB -J sd-phaseB-bakeoff
+#BSUB -G s10396
+#BSUB -q training-parallel
+#BSUB -n 16
+#BSUB -W 12:00
+#BSUB -R "span[hosts=1]"
+#BSUB -R "select[mem>64000 && hname!='farm-gpu0504']"
+#BSUB -R "rusage[mem=64000]"
+#BSUB -M 64000
+#BSUB -gpu "num=4:mode=exclusive_process:gmodel=NVIDIAH200"
+#BSUB -cwd /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM
+#BSUB -o /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-phaseB-bakeoff-%J.out
+#BSUB -e /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-phaseB-bakeoff-%J.err
+
+# Phase B scorer bake-off: how much oracle (VQA) best-of-4 headroom does each
+# scorer recover? Scores the Exp-0 candidate pool with the OLD projector
+# (VAE-encode -> M2 projector -> cos f_text), then compares projector vs CLIP
+# vs VQA(=oracle). Establishes the framework + bar; a new latent verifier is
+# the next step. No 22GB VQA load here (VQA/CLIP already scored in exp0) -> 64GB.
+set -euo pipefail
+export PATH="/software/cellgen/team361/ha11/envs/nichejepa/bin:$PATH"
+export HF_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/huggingface
+export TORCH_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/torch
+export XDG_CACHE_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/xdg
+export NCCL_NVLS_ENABLE=0
+export TOKENIZERS_PARALLELISM=false
+source ~/.secrets/hf_token
+echo "[`date`] Phase B | Host: $(hostname) | LSF: ${LSB_JOBID:-unknown}"
+M2=checkpoints/method/M2_full_method_20260624_065133_55188/checkpoint_final.pt
+echo "=== score exp0 candidates with old projector ==="
+torchrun --standalone --nproc-per-node=4 exp0/phaseB_score_projector.py --m2_ckpt "$M2"
+echo "=== analyze recovery ==="
+python3 exp0/phaseB_analyze.py
+echo "[`date`] DONE -> phaseB/bakeoff_report.md"

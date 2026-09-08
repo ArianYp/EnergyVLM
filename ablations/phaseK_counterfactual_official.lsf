@@ -1,0 +1,82 @@
+#!/usr/bin/env bash
+#BSUB -J sd-phaseK-cf-official
+#BSUB -G s10396
+#BSUB -q training-parallel
+#BSUB -n 4
+#BSUB -W 8:00
+#BSUB -R "span[hosts=1]"
+#BSUB -R "select[mem>32000 && hname!='farm-gpu0504']"
+#BSUB -R "rusage[mem=32000]"
+#BSUB -M 32000
+#BSUB -gpu "num=1:mode=exclusive_process"
+#BSUB -cwd /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM
+#BSUB -o /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-phaseK-cf-official-%J.out
+#BSUB -e /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-phaseK-cf-official-%J.err
+
+set -euo pipefail
+export PATH="/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/venv_mmdit/bin:/software/cellgen/team361/ha11/envs/nichejepa/bin:$PATH"
+export HF_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/huggingface
+export TORCH_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/torch
+export XDG_CACHE_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/xdg
+export TOKENIZERS_PARALLELISM=false
+export WANDB_MODE=online
+source ~/.secrets/hf_token
+
+: "${PHASEK_RANKER_JOB:?provide completed Phase-K ranker job}"
+: "${PHASEK_GROUP:?provide matching W&B group}"
+JOB=${LSB_JOBID:-local}
+RUN="phaseK/runs/phaseK_counterfactual_${PHASEK_RANKER_JOB}"
+GATE="phaseK/gates/phaseK_counterfactual_${PHASEK_RANKER_JOB}_${JOB}"
+ROOT="phaseK/official/phaseK_counterfactual_${PHASEK_RANKER_JOB}_${JOB}"
+
+python phaseK/counterfactual_gate.py \
+  --results "$RUN/ranking_results.json" --output_dir "$GATE" \
+  --wandb_group "$PHASEK_GROUP" \
+  --wandb_run_name "phaseK_cf_cached_gate_${JOB}"
+if ! jq -e '.pass == true' "$GATE/decision.json" >/dev/null; then
+  echo "Cached minimal-counterfactual gate failed; stopping official evaluation."
+  exit 0
+fi
+if [[ -e "$ROOT" ]]; then
+  echo "Refusing to overwrite $ROOT" >&2
+  exit 2
+fi
+mkdir -p "$ROOT/scores"
+
+for MODE in correct counterfactual; do
+  if [[ "$MODE" == correct ]]; then
+    SOURCE_LABEL=mmdit_counterfactual_correct
+    SCORE_LABEL=cf_ranker
+  else
+    SOURCE_LABEL=mmdit_counterfactual_wrong
+    SCORE_LABEL=cf_wrong
+  fi
+  for CAT in color shape texture spatial 3d_spatial numeracy non_spatial complex; do
+    D="$ROOT/scores/${SCORE_LABEL}_s4_${CAT}"
+    python phaseC/compbench_eval.py stage \
+      --images "$RUN/$MODE/selection/images/$SOURCE_LABEL" \
+      --prompts "$RUN/$MODE/selection/prompts.json" \
+      --steps 4 --categories "$CAT" --out "$D"
+    python phaseC/compbench_eval.py run --dir "$D" --skip_done
+    python phaseC/compbench_eval.py collect --dir "$D" --routing_split val
+  done
+done
+
+for CAT in color shape texture spatial 3d_spatial numeracy non_spatial complex; do
+  ln -s "$(realpath "phaseH/scores/random_s4_${CAT}")" "$ROOT/scores/random_s4_${CAT}"
+  ln -s "$(realpath "phaseH/scores/oracle_s4_${CAT}")" "$ROOT/scores/oracle_s4_${CAT}"
+done
+python phaseC/eval_analyze.py \
+  --scores_dir "$ROOT/scores" --step 4 --models cf_ranker,cf_wrong \
+  --title "Minimal counterfactual: same ranker and candidates, original versus edited prompt" \
+  --geneval2_dir "$ROOT/not_run" --fidelity "$ROOT/not_run.json" \
+  --diversity "$ROOT/not_run.json" --out "$ROOT/correct_vs_counterfactual.md"
+python phaseC/eval_analyze.py \
+  --scores_dir "$ROOT/scores" --step 4 --models cf_ranker,random,oracle \
+  --title "Minimal-counterfactual ranker versus random selection" \
+  --geneval2_dir "$ROOT/not_run" --fidelity "$ROOT/not_run.json" \
+  --diversity "$ROOT/not_run.json" --out "$ROOT/official_vs_random.md"
+python phaseK/log_official_wandb.py \
+  --root "$ROOT" --group "$PHASEK_GROUP" \
+  --run_name "phaseK_cf_official_${JOB}"
+echo "[$(date --iso-8601=seconds)] Phase-K official CompBench complete: $ROOT"

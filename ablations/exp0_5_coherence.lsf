@@ -1,0 +1,42 @@
+#!/usr/bin/env bash
+#BSUB -J sd-exp0-5-coherence
+#BSUB -G s10396
+#BSUB -q training-parallel
+#BSUB -n 16
+#BSUB -W 24:00
+#BSUB -R "span[hosts=1]"
+#BSUB -R "select[mem>256000 && hname!='farm-gpu0504']"
+#BSUB -R "rusage[mem=256000]"
+#BSUB -M 256000
+#BSUB -gpu "num=4:mode=exclusive_process:gmodel=NVIDIAH200"
+#BSUB -cwd /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM
+#BSUB -o /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-exp0-5-coherence-%J.out
+#BSUB -e /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-exp0-5-coherence-%J.err
+
+# Exp-0.5 (Phase C0) — trajectory-coherence diagnostic (NO TRAINING).
+# Predicts the B4-vs-B5-vs-B6 outcome before any student is trained:
+# is the endpoint-best candidate systematically better ALONG its trajectory?
+#   generate: N=8 CFG=7 K=8 candidate rollouts, decode Tweedie x̂0 at every step
+#             + endpoint, on 40/cat x 8 = 320 dev prompts (paired seeds = Exp-0)
+#   score:    VQAScore clip-flant5-xxl on all N*K + N endpoint images
+#   analyze:  rank-persistence tau_k, coherent-adv A_k, per-step oracle O_k,
+#             coherence C_k=A/O  ->  exp0_5/coherence_report.md
+set -euo pipefail
+export PATH="/software/cellgen/team361/ha11/envs/nichejepa/bin:$PATH"
+export HF_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/huggingface
+export TORCH_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/torch
+export XDG_CACHE_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/xdg
+export NCCL_NVLS_ENABLE=0
+export TOKENIZERS_PARALLELISM=false
+source ~/.secrets/hf_token
+echo "[`date`] Exp-0.5 coherence | Host: $(hostname) | LSF: ${LSB_JOBID:-unknown}"
+nvidia-smi --query-gpu=index,name,memory.total --format=csv
+
+echo "=== GENERATE (Tweedie x̂0 at every step) ==="
+torchrun --standalone --nproc-per-node=4 exp0/exp0_5_generate.py --per_category 40
+echo "=== SCORE ==="
+torchrun --standalone --nproc-per-node=4 exp0/exp0_5_score.py
+echo "=== ANALYZE ==="
+python3 exp0/exp0_5_analyze.py
+echo "[`date`] DONE -> exp0_5/coherence_report.md"
+if command -v my-job-stats >/dev/null 2>&1; then my-job-stats -a -n -s; fi

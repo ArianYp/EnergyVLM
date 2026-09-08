@@ -1,0 +1,68 @@
+#!/usr/bin/env bash
+#BSUB -J sd-M1-pure-consist
+#BSUB -G s10396
+#BSUB -q training-parallel
+#BSUB -n 16
+#BSUB -W 168:00
+#BSUB -R "span[hosts=1]"
+#BSUB -R "select[mem>64000 && hname!='farm-gpu0504']"
+#BSUB -R "rusage[mem=64000]"
+#BSUB -M 64000
+#BSUB -gpu "num=4:mode=exclusive_process:gmodel=NVIDIAH200"
+#BSUB -cwd /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM
+#BSUB -o /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-M1-pure-consist-%J.out
+#BSUB -e /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-M1-pure-consist-%J.err
+
+# ============================================================================
+# M1_pure_consistency
+#   CONTROL: pure consistency distillation — uniform W, NO projector/reward/align/CLIP. The 'do we need the encoder at all' baseline.
+#   distinguishing override:  --latent_matching_baseline
+#
+# Common base (so comparisons are clean): --freeze_teacher (PROVEN stabilizer,
+# so nothing diverges and we compare QUALITY), --reward_detach_projector
+# (proven, harmless under latent_matching_baseline), and
+# --sample_steps_list 1,2,4,8,28 → W&B logs samples/{teacher,student}_Nstep at
+# each count = the FEW-STEP generation payoff side by side.
+#
+# THE QUESTION (M1 vs M2): does the encoder-scoring apparatus (projector +
+# reward + L_align + W weighting + CLIP towers + f̄ precompute) actually BEAT
+# pure consistency distillation (M1 = --latent_matching_baseline, uniform W, no
+# encoder)? If M2 ≈ M1 on sample quality, the encoder machinery is redundant.
+# THE QUESTION (C runs): is CFG=7 in the teacher rollout (2x teacher forwards)
+# worth it vs CFG=3 / CFG=1?  Watch sample quality at matched steps.
+# ============================================================================
+
+set -euo pipefail
+export HF_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/huggingface
+export TORCH_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/torch
+export XDG_CACHE_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/xdg
+export NCCL_NVLS_ENABLE=0
+source ~/.secrets/hf_token
+mkdir -p "$HF_HOME" "$TORCH_HOME" "$XDG_CACHE_HOME" logs
+
+echo "[`date`] M1_pure_consistency | override: --latent_matching_baseline"
+echo "Host: $(hostname) | LSF: ${LSB_JOBID:-unknown}"
+nvidia-smi --query-gpu=index,name,memory.total --format=csv
+
+RUN_NAME="M1_pure_consistency_$(date +%Y%m%d_%H%M%S)_${LSB_JOBID:-local}"
+
+torchrun --standalone --nproc-per-node=4 \
+  train_self_distill.py \
+  --output_dir "checkpoints/method/${RUN_NAME}" \
+  --coco_split train2017 --feature_encoder clip --clip_id openai/clip-vit-large-patch14 \
+  --num_steps 20000 --num_warmup_steps 500 \
+  --lr 1e-5 --projector_lr 1e-4 --weight_decay 0.0 \
+  --grad_clip 1.0 --projector_grad_clip 5.0 \
+  --N_traj 4 --K_steps 8 --scoring_window 0.4,0.9 --delta_min 1 --delta_max 3 \
+  --tau_N 1.0 --tau_K 1.0 --score_norm zscore \
+  --ema_decay 0.999 --distance pseudo_huber --guidance_scale 7.0 \
+  --lambda_align 1.0 --lambda_reward 1.0 --lambda_fm 0.0 --lambda_kl 0.0 \
+  --freeze_teacher --reward_detach_projector \
+  --gradient_checkpointing \
+  --save_every 5000 --sample_every 2500 --probe_every 0 --log_every 10 \
+  --save_train_images_every 2500 --log_image_samples \
+  --sample_inference_steps 28 --sample_steps_list "1,2,4,8,28" \
+  --wandb_project sd-self-distill-method --wandb_run_name "${RUN_NAME}" \
+  --latent_matching_baseline
+
+if command -v my-job-stats >/dev/null 2>&1; then my-job-stats -a -n -s; fi

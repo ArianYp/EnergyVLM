@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+#BSUB -J sd-phaseE-smoke
+#BSUB -G s10396
+#BSUB -q training-parallel
+#BSUB -n 8
+#BSUB -W 4:00
+#BSUB -R "span[hosts=1]"
+#BSUB -R "select[mem>256000 && hname!='farm-gpu0504']"
+#BSUB -R "rusage[mem=256000]"
+#BSUB -M 256000
+#BSUB -gpu "num=1:mode=exclusive_process:gmodel=NVIDIAH200"
+#BSUB -cwd /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM
+#BSUB -o /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-phaseE-smoke-%J.out
+#BSUB -e /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-phaseE-smoke-%J.err
+
+# Phase E — FEASIBILITY GATE (reports/phaseE_reward_gradient_preregistration.md §2).
+# Proves (or refutes) that VQAScore gradients flow through VAE + 4-step student into LoRA,
+# that the reward optimizes, and that it fits H200 memory — BEFORE building the full trainer.
+# One GPU; VQA needs the 256GB host-RAM headroom the scoring jobs used.
+set -euo pipefail
+export PATH="/software/cellgen/team361/ha11/envs/nichejepa/bin:$PATH"
+export HF_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/huggingface
+export TORCH_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/torch
+export XDG_CACHE_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/xdg
+export SCRATCH_TMP=/tmp
+export TOKENIZERS_PARALLELISM=false
+source ~/.secrets/hf_token
+echo "[`date`] Phase E smoke | Host: $(hostname)"
+nvidia-smi --query-gpu=index,name,memory.total --format=csv
+python3 phaseE/smoke_reward_grad.py --iters 40 --batch 2 --K 4 --lr 1e-4 --lambda_kl 0.1
+echo "[`date`] smoke exit=$?"
+if command -v my-job-stats >/dev/null 2>&1; then my-job-stats -a -n -s; fi

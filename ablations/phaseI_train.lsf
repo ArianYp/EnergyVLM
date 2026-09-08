@@ -1,0 +1,118 @@
+#!/usr/bin/env bash
+#BSUB -J sd-phaseI
+#BSUB -G s10396
+#BSUB -q training-parallel
+#BSUB -n 16
+#BSUB -W 24:00
+#BSUB -R "span[hosts=1]"
+#BSUB -R "select[mem>256000 && hname!='farm-gpu0504']"
+#BSUB -R "rusage[mem=256000]"
+#BSUB -M 256000
+#BSUB -gpu "num=4:mode=exclusive_process:gmodel=NVIDIAH200"
+#BSUB -cwd /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM
+#BSUB -o /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-phaseI-%J.out
+#BSUB -e /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-phaseI-%J.err
+
+# Generic, immutable Phase-I arm launcher. Submit with one of:
+#   bsub -J phaseI-smoke -env "all,PHASEI_ARM=preference_repa,PHASEI_STEPS=20,..." < this_file
+#   bsub -J phaseI-placebo -env "all,PHASEI_ARM=placebo,..." < this_file
+#   bsub -J phaseI-preference -env "all,PHASEI_ARM=preference,..." < this_file
+#   bsub -J phaseI-pref-repa -env "all,PHASEI_ARM=preference_repa,..." < this_file
+#   bsub -J phaseI-correct-matched -env "all,PHASEI_ARM=preference_matched,PHASEI_SELECTION_DIR=.../correct,..." < this_file
+#   bsub -J phaseI-counterfactual -env "all,PHASEI_ARM=counterfactual,PHASEI_SELECTION_DIR=.../counterfactual,..." < this_file
+#
+# Output and W&B identities include LSB_JOBID. Re-submitting cannot overwrite an earlier run.
+set -euo pipefail
+
+export PATH="/software/cellgen/team361/ha11/envs/nichejepa/bin:$PATH"
+export HF_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/huggingface
+export TORCH_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/torch
+export XDG_CACHE_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/xdg
+export TOKENIZERS_PARALLELISM=false
+export NCCL_NVLS_ENABLE=0
+export WANDB_MODE=online
+source ~/.secrets/hf_token
+
+: "${PHASEI_ARM:?submit with PHASEI_ARM=placebo|preference|preference_repa|preference_matched|counterfactual}"
+: "${PHASEI_GROUP:?submit with a unique PHASEI_GROUP campaign id}"
+PHASEI_STEPS=${PHASEI_STEPS:-3000}
+PHASEI_SAMPLE_EVERY=${PHASEI_SAMPLE_EVERY:-250}
+PHASEI_SAVE_EVERY=${PHASEI_SAVE_EVERY:-750}
+PHASEI_LOG_EVERY=${PHASEI_LOG_EVERY:-10}
+PHASEI_BETA=${PHASEI_BETA:-100}
+PHASEI_ANCHOR=${PHASEI_ANCHOR:-1.0}
+PHASEI_LR=${PHASEI_LR:-1e-6}
+PHASEI_TAGS=${PHASEI_TAGS:-phaseI,preference,pilot}
+PHASEI_SELECTION_DIR=${PHASEI_SELECTION_DIR:-phaseC}
+PHASEI_EXPECTED_RECORDS=${PHASEI_EXPECTED_RECORDS:-5559}
+PHASEI_MIN_ORACLE_MARGIN=${PHASEI_MIN_ORACLE_MARGIN:-0.20}
+
+case "$PHASEI_ARM" in
+  placebo)
+    LABELS=randomized
+    LABEL_SOURCE=randomized
+    LAMBDA_REPA=0.0
+    ;;
+  preference)
+    LABELS=oracle
+    LABEL_SOURCE=correct_prompt
+    LAMBDA_REPA=0.0
+    ;;
+  preference_repa)
+    LABELS=oracle
+    LABEL_SOURCE=correct_prompt
+    LAMBDA_REPA=0.5
+    ;;
+  preference_matched)
+    LABELS=oracle
+    LABEL_SOURCE=correct_prompt
+    LAMBDA_REPA=0.0
+    ;;
+  counterfactual)
+    LABELS=oracle
+    LABEL_SOURCE=counterfactual_prompt
+    LAMBDA_REPA=0.0
+    ;;
+  *)
+    echo "Invalid PHASEI_ARM=$PHASEI_ARM" >&2
+    exit 2
+    ;;
+esac
+
+JOB=${LSB_JOBID:-local}
+RUN="phaseI_${PHASEI_ARM}_${JOB}"
+OUT="checkpoints/phaseI/${RUN}"
+
+echo "[$(date --iso-8601=seconds)] Phase I start"
+echo "  host=$(hostname) job=$JOB arm=$PHASEI_ARM labels=$LABELS label_source=$LABEL_SOURCE lambda_repa=$LAMBDA_REPA"
+echo "  group=$PHASEI_GROUP run=$RUN output=$OUT steps=$PHASEI_STEPS selection=$PHASEI_SELECTION_DIR"
+
+# CPU-only fail-fast checks: cache integrity, randomized-label balance, and DPO loss sign.
+python3 phaseI/test_preference.py \
+  --selection_dir "$PHASEI_SELECTION_DIR" \
+  --expected_records "$PHASEI_EXPECTED_RECORDS" \
+  --min_oracle_margin "$PHASEI_MIN_ORACLE_MARGIN"
+
+torchrun --standalone --nproc-per-node=4 phaseI/train_preference.py \
+  --labels "$LABELS" \
+  --label_source "$LABEL_SOURCE" \
+  --selection_dir "$PHASEI_SELECTION_DIR" \
+  --output_dir "$OUT" \
+  --m1_checkpoint checkpoints/method/M1_pure_consistency_20260624_065127_55187/checkpoint_final.pt \
+  --num_steps "$PHASEI_STEPS" --num_warmup_steps 100 \
+  --lr "$PHASEI_LR" --weight_decay 0 --grad_clip 1.0 \
+  --beta "$PHASEI_BETA" --lambda_anchor "$PHASEI_ANCHOR" --preference_timesteps 4 \
+  --K 8 --cfg 7.0 --sched_shift 3.0 --height 512 \
+  --gradient_checkpointing \
+  --lambda_repa "$LAMBDA_REPA" --repa_layer 8 --repa_projector_lr 1e-4 \
+  --save_every "$PHASEI_SAVE_EVERY" --sample_every "$PHASEI_SAMPLE_EVERY" \
+  --log_every "$PHASEI_LOG_EVERY" \
+  --wandb_project sd-pref-repa-v1 --wandb_run_name "$RUN" \
+  --wandb_group "$PHASEI_GROUP" --wandb_tags "$PHASEI_TAGS"
+
+test -s "$OUT/checkpoint_final.pt"
+test -s "$OUT/args.json"
+echo "[$(date --iso-8601=seconds)] Phase I complete: $OUT/checkpoint_final.pt"
+if command -v my-job-stats >/dev/null 2>&1; then
+  my-job-stats -a -n -s
+fi

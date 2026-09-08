@@ -1,0 +1,141 @@
+#!/usr/bin/env bash
+#BSUB -J sd-phaseN-refsim
+#BSUB -G s10396
+#BSUB -q training-parallel
+#BSUB -n 16
+#BSUB -W 24:00
+#BSUB -R "span[hosts=1]"
+# 256 GB, NOT the project's usual 128 GB. That 128 GB convention was measured on preference
+# training, which peaks at 81.6 GB host RAM. This job's stage 2 runs FOUR ranks that each load an
+# 11B clip-flant5-xxl checkpoint into host memory before moving it to the GPU. Job 106464 asked for
+# 128 GB and was killed with TERM_MEMLIMIT at 129,342 MB. phaseFP_teacher_ceiling.lsf runs the same
+# scorer at the same scale and asks for 256 GB.
+#BSUB -R "select[mem>256000 && hname!='farm-gpu0504']"
+#BSUB -R "rusage[mem=256000]"
+#BSUB -M 256000
+# clip-flant5-xxl is an 11B scorer, so this needs real GPU memory, unlike the CAFE probe.
+#BSUB -gpu "num=4:mode=exclusive_process:gmem=78G"
+#BSUB -cwd /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM
+#BSUB -o /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-phaseN-refsim-%J.out
+#BSUB -e /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-phaseN-refsim-%J.err
+
+# Does similarity to the REAL reference image predict VQAScore?
+#
+# For a COCO caption we hold the photograph the caption was written for. That is the only place in
+# this project where a reference-based verifier can be tested at all -- CompBench prompts are
+# templates with no ground truth image. The question matters because at TRAINING time a reference
+# usually does exist, so a reference-based label needs no VLM and, in the latent arm, no decoder.
+#
+#   dino / clip      cosine to the reference in a 768-d embedding space   (needs a decode)
+#   latent           cosine to the reference in SD3.5 VAE space           (DECODING-FREE)
+#   *_pca            the same inside a PCA basis truncated at 99.9% variance
+#   rsa              do the latent and DINO similarity structures agree?  (no map, nothing fitted)
+#
+# There is deliberately NO cross-space cosine. A 768-d embedding and a 65,536-d latent share no
+# basis, and PCA cannot supply one: the mismatch is on the input side of the projection. RSA is the
+# well-posed way to ask whether the two spaces agree.
+set -euo pipefail
+
+export PATH="/software/cellgen/team361/ha11/envs/nichejepa/bin:$PATH"
+export HF_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/huggingface
+export TORCH_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/torch
+export XDG_CACHE_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/xdg
+export TOKENIZERS_PARALLELISM=false
+export NCCL_NVLS_ENABLE=0
+export WANDB_MODE=disabled
+source ~/.secrets/hf_token
+
+N=${REFSIM_N:-500}
+K=${REFSIM_K:-4}
+STEPS=${REFSIM_STEPS:-8}
+CFG=${REFSIM_CFG:-7}
+
+JOB=${LSB_JOBID:-local}
+ROOT="phaseN/refsim_${JOB}"
+if [[ -e "$ROOT" ]]; then echo "Refusing to overwrite $ROOT" >&2; exit 2; fi
+mkdir -p "$ROOT"
+
+echo "[$(date --iso-8601=seconds)] Phase-N reference similarity | job=$JOB N=$N K=$K"
+nvidia-smi --query-gpu=index,name,memory.total --format=csv
+
+echo "=== 0. Pool: captions that carry a real COCO reference ==="
+# Every reference path is checked on disk, and captions whose TEXT repeats are dropped: COCO reuses
+# caption strings across different photographs, so a text join would otherwise attach a generation
+# to the wrong ground truth.
+#
+# REFSIM_REUSE_GEN points at a previous run's directory. The pool is COPIED from there rather than
+# rebuilt, because the reused images are named by that pool's idx: regenerating the pool and
+# trusting it to match would be exactly the per-job-idx trap that this project has been bitten by
+# before. The copied manifest is then re-verified against the images on disk.
+if [[ -n "${REFSIM_REUSE_GEN:-}" ]]; then
+  test -s "$REFSIM_REUSE_GEN/pool_prompts.json"
+  test -s "$REFSIM_REUSE_GEN/pool_manifest.json"
+  cp "$REFSIM_REUSE_GEN/pool_prompts.json" "$REFSIM_REUSE_GEN/pool_manifest.json" "$ROOT/"
+else
+  python3 phaseN/build_coco_pool.py --n "$N" \
+    --out_prompts "$ROOT/pool_prompts.json" --out_manifest "$ROOT/pool_manifest.json"
+fi
+python3 -c "
+import json
+p=json.load(open('$ROOT/pool_prompts.json')); m=json.load(open('$ROOT/pool_manifest.json'))
+assert len(p)==len(m)==$N, (len(p),len(m))
+assert len({r['prompt'] for r in m})==$N
+import os
+assert all(os.path.exists(r['reference']) for r in m)
+print(f'{len(m)} captions, all references present, all texts unique')
+"
+
+echo "=== 1. Generate $K frozen-teacher candidates per caption ==="
+# Same recipe as phaseFP/teacher_ceiling_101377 (base SD3.5-M, 8 steps, CFG 7, 512^2), so the
+# numbers here sit on the same footing as the CAFE probe's candidates. The images are a
+# deterministic function of the frozen base model, the pool and the seed, so a completed tree from
+# an earlier attempt is identical to one regenerated here.
+if [[ -n "${REFSIM_REUSE_GEN:-}" ]]; then
+  test -d "$REFSIM_REUSE_GEN/gen/images/Teacher"
+  n_existing=$(find "$REFSIM_REUSE_GEN/gen/images/Teacher" -name '*.png' | wc -l)
+  echo "  reusing $n_existing images from $REFSIM_REUSE_GEN"
+  test "$n_existing" -ge $(( N * K ))
+  ln -s "$(readlink -f "$REFSIM_REUSE_GEN/gen")" "$ROOT/gen"
+else
+  torchrun --standalone --nproc-per-node=4 exp0/phaseA_generate.py \
+    --out_root "$ROOT/gen" --label Teacher --checkpoint base \
+    --cfg "$CFG" --steps_list "$STEPS" \
+    --prompts_json "$ROOT/pool_prompts.json" --n_seeds "$K"
+fi
+n_png=$(find -L "$ROOT/gen/images/Teacher" -name '*.png' | wc -l)
+echo "  $n_png images available"
+test "$n_png" -ge $(( N * K ))
+# Re-verify the pool against the images, whether generated or reused.
+python3 -c "
+import json, os
+m=json.load(open('$ROOT/pool_manifest.json'))
+root='$ROOT/gen/images/Teacher'
+bad=[r['idx'] for r in m for j in range($K)
+     if not os.path.exists(f\"{root}/p{r['idx']:05d}/s$STEPS/cand{j}.png\")]
+assert not bad, bad[:5]
+print(f'{len(m)} captions x $K candidates all present')
+"
+
+echo "=== 2. VQAScore every candidate ==="
+torchrun --standalone --nproc-per-node=4 phaseFP/score_teacher_candidates.py \
+  --images_root "$ROOT/gen/images/Teacher" \
+  --prompts "$ROOT/pool_prompts.json" \
+  --out_dir "$ROOT/scores" --steps "$STEPS" --pool_size "$K"
+python3 -c "
+import glob, json
+n=sum(1 for f in glob.glob('$ROOT/scores/scores_rank*.jsonl') for l in open(f) if l.strip())
+assert n >= int($N*0.98), n
+print(f'{n} captions scored')
+"
+
+echo "=== 3. Similarity to the reference, and its correlation with VQAScore ==="
+python3 phaseN/ref_similarity.py \
+  --manifest "$ROOT/pool_manifest.json" \
+  --images_root "$ROOT/gen/images/Teacher" \
+  --scores_dir "$ROOT/scores" \
+  --steps "$STEPS" --K "$K" --variance 0.999 \
+  --out "$ROOT/ref_similarity.json" | tee "$ROOT/ref_similarity.log"
+test -s "$ROOT/ref_similarity.json"
+
+echo "[$(date --iso-8601=seconds)] Phase-N reference similarity complete: $ROOT"
+if command -v my-job-stats >/dev/null 2>&1; then my-job-stats -a -n -s; fi

@@ -1,0 +1,77 @@
+#!/usr/bin/env bash
+#BSUB -J sd-phaseF-rtdmd
+#BSUB -G s10396
+#BSUB -q training-parallel
+#BSUB -n 16
+#BSUB -W 24:00
+#BSUB -R "span[hosts=1]"
+#BSUB -R "select[mem>256000 && hname!='farm-gpu0504']"
+#BSUB -R "rusage[mem=256000]"
+#BSUB -M 256000
+#BSUB -gpu "num=4:mode=exclusive_process:gmodel=NVIDIAH200"
+#BSUB -cwd /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM
+#BSUB -o /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-phaseF-rtdmd-%J.out
+#BSUB -e /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-phaseF-rtdmd-%J.err
+
+# Phase F — does preference-reward tuning of a few-step generator trade away COMPOSITIONAL
+# alignment? Measured on the released RTDMD SD3.5-M checkpoints with our validated,
+# pre-registered T2I-CompBench harness (8 categories, official BLIP-VQA / UniDet / 3-in-1).
+#
+#   RTDMDcs = base + cold_start LoRA               (their AC-DMD distillation, NO reward)
+#   RTDMD   = base + cold_start + rtdmd LoRA       (+ their reward-RL stage)
+#
+# Perfectly matched internal pair (same arch/data/resolution/sampler/seeds); the ONLY
+# difference is the reward stage, so the delta is attributable to reward tuning.
+# RTDMD trains on clipscore+hpsv2+pickscore+geneval (preference/aesthetic) and never on
+# T2I-CompBench, so this is out-of-objective generalization for them — no strawman:
+# generation uses THEIR own LoRA merge, sigma schedule, CPS sampler and forward pass at
+# their native 1024px / 4 NFE / cps_eta 0.9 / CFG 1.
+#
+# NOTE both models here are 1024px; our M1/B2/B4 in the same scores dir are 512px, so
+# cross-comparison to those is CONTEXT ONLY, not a controlled head-to-head. The primary
+# claim rests on the internal RTDMD-vs-RTDMDcs pair.
+set -euo pipefail
+export PATH="/software/cellgen/team361/ha11/envs/nichejepa/bin:$PATH"
+export HF_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/huggingface
+export TORCH_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/torch
+export XDG_CACHE_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/xdg
+export TOKENIZERS_PARALLELISM=false
+export NCCL_NVLS_ENABLE=0
+source ~/.secrets/hf_token
+echo "[`date`] Phase F RTDMD compositional eval | Host: $(hostname)"
+nvidia-smi --query-gpu=index,name,memory.total --format=csv
+
+echo "=== STAGE 1: generate both variants on the HELD-OUT val pool (2398 prompts, 4 NFE, 1024px) ==="
+for V in cold_start rtdmd; do
+  echo "--- $V ---"
+  torchrun --standalone --nproc-per-node=4 phaseF/generate_rtdmd.py \
+    --variant "$V" --out_root phaseF/eval --per_category 1000 --split val
+done
+
+echo "=== STAGE 2: official independent scoring, all 8 categories ==="
+python3 phaseC/test_3in1_identity.py    # 3-in-1 composition identity guard
+for MODEL in RTDMDcs RTDMD; do
+  for CAT in color shape texture spatial 3d_spatial numeracy non_spatial complex; do
+    D=phaseC/eval_scores/${MODEL}_s4_${CAT}
+    [ -f "$D/scores.json" ] && { echo "skip $D (done)"; continue; }
+    python3 phaseC/compbench_eval.py stage --images phaseF/eval/images/${MODEL} \
+      --prompts phaseF/eval/prompts.json --steps 4 --categories ${CAT} --out "$D"
+    python3 phaseC/compbench_eval.py run     --dir "$D" --skip_done
+    python3 phaseC/compbench_eval.py collect --dir "$D" --routing_split val
+  done
+done
+
+echo "=== STAGE 3: in-objective VQAScore (context; VQA is OUR selector, not their reward) ==="
+torchrun --standalone --nproc-per-node=4 exp0/phaseA_score.py \
+  --out_root phaseF/eval --labels RTDMDcs,RTDMD --steps_list 4
+
+echo "=== STAGE 4: VERDICT — reward stage effect on compositional alignment ==="
+python3 phaseC/eval_analyze.py --scores_dir phaseC/eval_scores --step 4 \
+  --models RTDMD,RTDMDcs --vqa phaseF/eval/scores \
+  --fidelity /nonexistent --diversity /nonexistent \
+  --out phaseF/verdict_rtdmd_reward_effect.md
+
+echo "=== headline ==="
+cat phaseF/verdict_rtdmd_reward_effect.md
+echo "[`date`] DONE -> phaseF/verdict_rtdmd_reward_effect.md"
+if command -v my-job-stats >/dev/null 2>&1; then my-job-stats -a -n -s; fi

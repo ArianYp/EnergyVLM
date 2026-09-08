@@ -1,0 +1,71 @@
+#!/usr/bin/env bash
+#BSUB -J sd-phaseX-redetect
+#BSUB -G s10396
+#BSUB -q training-parallel
+#BSUB -n 4
+#BSUB -W 12:00
+#BSUB -R "span[hosts=1]"
+#BSUB -R "select[mem>128000 && hname!='farm-gpu0504']"
+#BSUB -R "rusage[mem=128000]"
+#BSUB -M 128000
+#BSUB -gpu "num=1:mode=exclusive_process:gmem=78G"
+#BSUB -cwd /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM
+#BSUB -o /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-phaseX-redetect-%J.out
+#BSUB -e /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-phaseX-redetect-%J.err
+#
+# Re-run UniDet over every 2D-spatial evaluation we still hold images for, and KEEP the detections.
+#
+# The released evaluator discards them, which is why the exact-string matching defect could not be
+# diagnosed from the cached artifacts and why re-scoring under a repaired rule needs the detector
+# again. After this job the detections are on disk and every future matching rule is a free CPU pass.
+#
+# Targets: 21 model variants from phaseC/eval_scores (298 prompts each, the same prompt list) plus
+# the 8 candidate shards from phaseX/candeval. ~8.6k images total.
+#
+# The `official` column of the offline scorer is validated against each directory's own cached
+# vqa_result.json. That reproduction is the licence to trust the other columns, so a mismatch is a
+# hard failure, not a warning.
+set -euo pipefail
+export PATH="/software/cellgen/team361/ha11/envs/nichejepa/bin:$PATH"
+export HF_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/huggingface
+export TORCH_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/torch
+export XDG_CACHE_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/xdg
+export TOKENIZERS_PARALLELISM=false
+export PYTHONPATH="/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM:${PYTHONPATH:-}"
+
+ROOT=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM
+DETS="$ROOT/phaseX/dets"
+SCORED="$ROOT/phaseX/rescored"
+mkdir -p "$DETS" "$SCORED" "$ROOT/logs"
+
+TARGETS=()
+for d in "$ROOT"/phaseC/eval_scores/*_s4_spatial; do
+  [ -d "$d/samples" ] && TARGETS+=("$d")
+done
+for c in 0 1 2 3 4 5 6 7; do
+  d="$ROOT/phaseX/candeval/cand$c/cb_spatial"
+  [ -d "$d/samples" ] && TARGETS+=("$d")
+done
+echo "[redetect] ${#TARGETS[@]} directories to process"
+
+for d in "${TARGETS[@]}"; do
+  # name the output after the two path components that make it unique
+  tag=$(echo "$d" | awk -F/ '{print $(NF-1)"_"$NF}' | tr -c 'A-Za-z0-9_.-' '_')
+  out="$DETS/$tag.json"
+  if [ -s "$out" ]; then
+    echo "[redetect] skip $tag (already dumped)"
+  else
+    echo "[redetect] === $tag"
+    ( cd "$ROOT/T2I-CompBench/UniDet_eval" && \
+      python3 "$ROOT/phaseX/unidet2d_dump.py" --indir "$d" --out "$out" )
+  fi
+  cached="$d/labels/annotation_obj_detection_2d/vqa_result.json"
+  if [ -s "$cached" ]; then
+    python3 "$ROOT/phaseX/score_from_dets.py" --dets "$out" --validate "$cached" \
+            --out "$SCORED/$tag.json"
+  else
+    echo "[redetect] no cached vqa_result.json for $tag -- scoring WITHOUT validation"
+    python3 "$ROOT/phaseX/score_from_dets.py" --dets "$out" --out "$SCORED/$tag.json"
+  fi
+done
+echo "[redetect] done: $(ls "$SCORED" | wc -l) directories scored"

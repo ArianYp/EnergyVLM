@@ -1,0 +1,91 @@
+#!/usr/bin/env bash
+#BSUB -J sd-phaseN-g8
+#BSUB -G s10396
+#BSUB -q training-parallel
+#BSUB -n 16
+#BSUB -W 48:00
+#BSUB -R "span[hosts=1]"
+#BSUB -R "select[mem>64000 && hname!='farm-gpu0504']"
+#BSUB -R "rusage[mem=64000]"
+#BSUB -M 64000
+#BSUB -gpu "num=4:mode=exclusive_process:gmem=78G"
+#BSUB -cwd /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM
+#BSUB -o /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-phaseN-g8-%J.out
+#BSUB -e /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-phaseN-g8-%J.err
+
+# Stage 1 of the two-stage separation: absorb CFG 7 into one conditional call, keep 8 steps.
+# Stage 2 then reduces 8 steps to 4 between two one-call models, so it changes only the step count.
+#
+#   bsub -env "all,POOL=phaseN/coco_selection_106573/pool_manifest.json" < this
+set -euo pipefail
+
+export PATH="/software/cellgen/team361/ha11/envs/nichejepa/bin:$PATH"
+export HF_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/huggingface
+export TORCH_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/torch
+export XDG_CACHE_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/xdg
+export TOKENIZERS_PARALLELISM=false
+export NCCL_NVLS_ENABLE=0
+export WANDB_MODE=online
+source ~/.secrets/hf_token
+
+: "${POOL:?set POOL to a pool_manifest.json}"
+STEPS=${G8_STEPS:-6000}
+K=${G8_K:-8}
+CFG=${G8_CFG:-7.0}
+LOSS=${G8_LOSS:-mse}
+SAVE=${G8_SAVE_EVERY:-2000}
+JOB=${LSB_JOBID:-local}
+RUN=phaseN_G8_K${K}_cfg${CFG}_${LOSS}_${JOB}
+
+echo "[$(date --iso-8601=seconds)] Phase-N guidance distillation | K=$K cfg=$CFG loss=$LOSS steps=$STEPS"
+nvidia-smi --query-gpu=index,name,memory.total --format=csv
+test -s "$POOL"
+
+# A one-caption smoke test on a single rank before spending four GPUs for hours. It checks the
+# thing most likely to be silently wrong: that the recorded guided velocity really reproduces the
+# trajectory it came from.
+python3 - <<'PY'
+import sys, torch, json
+from pathlib import Path
+sys.path.insert(0, "phaseN"); sys.path.insert(0, "exp0"); sys.path.insert(0, ".")
+from train_guidance_distill import teacher_rollout_with_velocity
+from diffusers import StableDiffusion3Pipeline
+dev = torch.device("cuda")
+pipe = StableDiffusion3Pipeline.from_pretrained(
+    "stabilityai/stable-diffusion-3.5-medium", torch_dtype=torch.bfloat16).to(dev)
+# .eval() alone is NOT enough. from_pretrained(torch_dtype=bfloat16) leaves some submodules in
+# fp16 -- CLIPTextModelWithProjection.text_projection is one -- and the first matmul then dies with
+# "c10::Half != c10::BFloat16". Every other script in this campaign casts explicitly; this smoke
+# test did not, and killed the job before training started.
+for m in (pipe.transformer, pipe.vae, pipe.text_encoder, pipe.text_encoder_2, pipe.text_encoder_3):
+    m.to(dtype=torch.bfloat16).eval()
+p = "a white piano and a black bench"
+with torch.no_grad():
+    e,_,pl,_ = pipe.encode_prompt(prompt=[p],prompt_2=[p],prompt_3=[p],device=dev,
+                                  num_images_per_prompt=1,do_classifier_free_guidance=False)
+    ne,_,npl,_ = pipe.encode_prompt(prompt=[""],prompt_2=[""],prompt_3=[""],device=dev,
+                                    num_images_per_prompt=1,do_classifier_free_guidance=False)
+    z0 = torch.randn(1,16,64,64,device=dev,dtype=torch.bfloat16,
+                     generator=torch.Generator(device=dev).manual_seed(0))
+    zs,gs,sig,ts = teacher_rollout_with_velocity(pipe.transformer,pipe.scheduler,z0,e,pl,ne,npl,8,7.0,dev)
+worst = max(float(((zs[k]+(sig[k+1]-sig[k])*gs[k]) - zs[k+1]).abs().max()) for k in range(8))
+print(f"smoke: recorded velocity reproduces the trajectory to {worst:.3e} (must be ~0)")
+assert worst < 1e-4, worst
+print(f"smoke: {len(gs)} velocities, dtype {gs[0].dtype}, |g| mean {float(gs[0].norm()):.2f}")
+PY
+
+torchrun --standalone --nproc-per-node=4 phaseN/train_guidance_distill.py \
+  --pool_manifest "$POOL" --output_dir "checkpoints/phaseN/${RUN}" \
+  --num_steps "$STEPS" --K "$K" --cfg "$CFG" --loss "$LOSS" \
+  --gradient_checkpointing --save_every "$SAVE" --log_every 10 \
+  --wandb_project sd-phaseN-guidance --wandb_run_name "${RUN}"
+
+test -s "checkpoints/phaseN/${RUN}/checkpoint_final.pt"
+echo "=== stage 1 gate: does G reproduce the CFG-7 teacher? ==="
+python3 phaseN/verify_g8.py --pool_manifest "$POOL" \
+  --ckpt "checkpoints/phaseN/${RUN}/checkpoint_final.pt" \
+  --n_prompts "${G8_VERIFY_N:-200}" --K "$K" --cfg "$CFG" \
+  --out "phaseN/g8_verify_${JOB}.json"
+
+echo "[$(date --iso-8601=seconds)] DONE -> checkpoints/phaseN/${RUN}"
+if command -v my-job-stats >/dev/null 2>&1; then my-job-stats -a -n -s; fi

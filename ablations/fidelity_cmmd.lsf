@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+#BSUB -J sd-fidelity-cmmd
+#BSUB -G s10396
+#BSUB -q training-parallel
+#BSUB -n 4
+#BSUB -W 6:00
+#BSUB -R "span[hosts=1]"
+#BSUB -R "select[mem>64000 && hname!='farm-gpu0504']"
+#BSUB -R "rusage[mem=64000]"
+#BSUB -M 64000
+#BSUB -gpu "num=1:mode=exclusive_process:gmodel=NVIDIAH200"
+#BSUB -cwd /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM
+#BSUB -o /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-fidelity-cmmd-%J.out
+#BSUB -e /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-fidelity-cmmd-%J.err
+
+# Fidelity gate (parallel to Phase B): does the 4-step student lose VISUAL
+# quality vs the 28-step teacher? CMMD (CLIP-MMD) of Phase-A generations vs
+# 2000 COCO-real, + vs base@28. Reuses phaseA/images (no regeneration).
+set -euo pipefail
+export PATH="/software/cellgen/team361/ha11/envs/nichejepa/bin:$PATH"
+export HF_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/huggingface
+export TORCH_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/torch
+export XDG_CACHE_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/xdg
+export TOKENIZERS_PARALLELISM=false
+source ~/.secrets/hf_token
+echo "[`date`] fidelity CMMD | Host: $(hostname) | LSF: ${LSB_JOBID:-unknown}"
+python3 exp0/fidelity_cmmd.py
+echo "[`date`] DONE -> phaseA/fidelity_report.md"

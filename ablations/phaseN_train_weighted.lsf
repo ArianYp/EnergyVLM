@@ -1,0 +1,172 @@
+#!/usr/bin/env bash
+#BSUB -J sd-phaseN-wtrain
+#BSUB -G s10396
+#BSUB -q training-parallel
+#BSUB -n 16
+#BSUB -W 48:00
+#BSUB -R "span[hosts=1]"
+# No VQAScore in the training loop -- the labels are precomputed in the selection cache -- so this
+# needs far less host RAM than the cache builder did.
+#BSUB -R "select[mem>64000 && hname!='farm-gpu0504']"
+#BSUB -R "rusage[mem=64000]"
+#BSUB -M 64000
+#BSUB -gpu "num=4:mode=exclusive_process:gmem=78G"
+#BSUB -cwd /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM
+#BSUB -o /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-phaseN-wtrain-%J.out
+#BSUB -e /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-phaseN-wtrain-%J.err
+
+# One arm of the reference-energy weighted-distillation test.
+#
+# Every arm is matched on prompts, prompt order, optimizer, schedule, initialization, number of
+# supervised target pairs per update, and compute. The ONLY difference is which cached candidate
+# each update trains on:
+#
+#   W_uniform_soft  uniform, resampled each visit          control
+#   W_energy_soft   sampled from softmax(z(energy)/temp)   the test
+#   W_oracle_soft   sampled from softmax(z(VQAScore)/temp) matched soft ceiling
+#   B4              hard argmax VQAScore                   hard ceiling
+#   W_energy_hard   hard argmax energy                     ablation
+#
+# The soft arms SAMPLE the index rather than weighting the loss over all N. The trainer rolls out
+# exactly one trajectory per update, so sampling from w is an unbiased estimator of sum_i w_i d_i
+# at identical cost -- weighting the loss directly would have multiplied the scored forwards by N
+# and broken the compute match with B4.
+#
+#   bsub -env "all,ARM=W_energy_soft,SEL=phaseN/coco_selection_106573" < this
+set -euo pipefail
+
+export PATH="/software/cellgen/team361/ha11/envs/nichejepa/bin:$PATH"
+export HF_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/huggingface
+export TORCH_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/torch
+export XDG_CACHE_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/xdg
+export TOKENIZERS_PARALLELISM=false
+# train_pilot.py finds train_self_distill.py via Path(__file__).parent.parent, which is the repo
+# root only while the trainer sits in phaseC/. A TRAIN_SCRIPT snapshot under phaseC/_snapshots/ is
+# one level deeper, so that import resolved to phaseC/ and 11 jobs died on ModuleNotFoundError
+# after the GPUs were already allocated. Put the repo root on the path so the snapshot's location
+# no longer matters.
+export PYTHONPATH="/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM:${PYTHONPATH:-}"
+export NCCL_NVLS_ENABLE=0
+export WANDB_MODE=online
+source ~/.secrets/hf_token
+
+: "${ARM:?set ARM to one of W_uniform_soft W_energy_soft W_oracle_soft W_energy_hard B4}"
+: "${SEL:?set SEL to a phaseN/coco_selection_<job> directory}"
+SEED=${TRAIN_SEED:-0}
+ALPHA=${TRAIN_ALPHA:-1.0}
+TEMP=${TRAIN_TEMP:-1.0}
+STEPS=${TRAIN_STEPS:-6000}
+# Teacher rollout steps. MUST equal the --K the selection cache was built with, or the trainer
+# re-rolls a DIFFERENT image from the one whose energy and VQAScore it reads. Asserted below.
+TK=${TRAIN_K:-28}
+# Student guidance, matched to the teacher so the student only has to learn the STEP reduction
+# rather than also internalising CFG. Costs two student forwards per supervised state, and puts
+# the student at 8 NFE for 4 steps rather than 4.
+SCFG=${TRAIN_STUDENT_CFG:-7.0}
+# composed = supervise only the CFG mixture, which does not pin down either branch.
+# branch   = common-shift target for each branch; preserves the teacher CFG direction exactly.
+CFGMODE=${TRAIN_CFG_MODE:-composed}
+OPWARM=${TRAIN_ONPOLICY_WARMUP:-1000}
+# Experiment 1: fix the multiset of targets per caption and vary only its ORDER.
+TSCHED=${TRAIN_TARGET_SCHEDULE:-}
+TM=${TRAIN_SUPPORT_M:-1}
+# Experiment 2: which noise the flow-matching loss pairs with the chosen endpoint.
+COUP=${TRAIN_COUPLING:-fresh}
+# Kw, the number of supervised states per update. 0.4,0.9 -> [3,4,5,6,7] (Kw=5, the historical
+# setting); 0.5,0.75 -> [4,5,6] (Kw=3); 0.625,0.625 -> [5] (Kw=1). At Kw=1 there is no chord to
+# share, so a fresh and a coupled arm differ ONLY in whether the noise is the endpoint's own
+# source -- which is the direct teacher-origin test.
+# `bsub -env` splits on commas, so a value like 0.625,0.625 written inside the -env string arrives
+# truncated to "0.625" and the trainer then dies unpacking one float into two. Accept a colon form
+# (0.625:0.625) and normalise it here, so the comma never has to survive the submission path.
+SWIN=${TRAIN_SCORING_WINDOW:-0.4,0.9}
+SWIN=${SWIN//:/,}
+[[ "$SWIN" == *,* ]] || { echo "TRAIN_SCORING_WINDOW='$SWIN' has no lo,hi pair -- did a comma get eaten by -env? Use lo:hi." >&2; exit 2; }
+# Pair the sigma draws across arms. Off by default so completed runs stay bit-reproducible; set
+# it for any comparison where the expected effect is small (see --paired_sigma in the trainer).
+PSIG=${TRAIN_PAIRED_SIGMA:-0}
+# Caption->candidate map. The default constant means every run seed shares one map, so the seed
+# spread measures optimiser noise only. Vary this to expose the map's own variance.
+ASGN=${TRAIN_ASSIGN_SEED:-982451653}
+# Intermediate checkpoints are 9.88 GB each and nothing reads them back: the trainer has no resume
+# path and every eval loads checkpoint_final.pt. At the 6k budget, saving every 2000 steps costs
+# 3 files; at 40k it costs 20, which is ~198 GB per run. Scale the interval with the budget.
+SAVE=${TRAIN_SAVE_EVERY:-2000}
+
+JOB=${LSB_JOBID:-local}
+# The trainer this batch runs. A batch submitted before an edit otherwise samples whatever state
+# the file happens to be in when each job starts -- an older version, or a half-written one: a
+# batch here died on "SyntaxError: '[' was never closed". TRAIN_SCRIPT pins a snapshot taken at
+# SUBMIT time, so a batch always runs one fixed version of the code.
+SCRIPT=${TRAIN_SCRIPT:-phaseC/train_pilot.py}
+test -s "$SCRIPT"
+python3 -c "import ast,sys; ast.parse(open(sys.argv[1]).read())" "$SCRIPT"
+echo "[trainer] $SCRIPT ($(md5sum "$SCRIPT" | cut -c1-8))"
+echo "[$(date --iso-8601=seconds)] Phase-N weighted train | arm=$ARM seed=$SEED alpha=$ALPHA temp=$TEMP"
+nvidia-smi --query-gpu=index,name,memory.total --format=csv
+
+# The cache must carry usable scores, or an arm that reads a label trains on noise. A cache
+# from phaseN/build_caption_records.py declares scores:false on purpose -- it exists for
+# label-free arms -- so the score checks are skipped for it, and any label arm then raises on
+# the missing key rather than being quietly accepted here.
+python3 - <<GUARDQ
+import json, glob, math
+meta = json.load(open("$SEL/cache_meta.json"))
+rows=[json.loads(l) for f in glob.glob("$SEL/selection_rank*.jsonl") for l in open(f) if l.strip()]
+assert len(rows) > 0.98*meta.get("n_prompts", 3000), (len(rows), meta.get("n_prompts"))
+if meta.get("scores", True):
+    assert all("energy" in r and len(r["energy"])==r["N"] for r in rows)
+    assert all(math.isfinite(x) for r in rows for x in r["energy"]+r["endpoint_vqa"])
+    spread=sum(max(r["energy"])-min(r["energy"]) for r in rows)/len(rows)
+    assert spread > 1e-3, f"energies are degenerate: spread {spread}"
+    print(f"{len(rows)} cached prompts | energy spread {spread:.4f}")
+else:
+    assert not any("energy" in r for r in rows), "scores:false but energies present"
+    print(f"{len(rows)} cached prompts | SCORE-FREE cache, label arms will raise")
+GUARDQ
+
+
+python3 - <<GUARD
+import json
+meta = json.load(open("$SEL/cache_meta.json"))
+assert meta["K"] == $TK, "cache built at K=%s but training at K=$TK: the trainer would re-roll a different image from the one that was scored" % meta["K"]
+assert abs(meta["cfg"] - 7.0) < 1e-6, meta["cfg"]
+print("cache K=%s cfg=%s N=%s matches the training config" % (meta["K"], meta["cfg"], meta["N"]))
+GUARD
+# Kw and the sigma-pairing mode change what the run MEANS, so they belong in the run name; two
+# runs that differ only in Kw are not the same arm.
+PSIG_FLAG=""
+KWTAG=""
+if [ "$PSIG" = "1" ]; then PSIG_FLAG="--paired_sigma"; KWTAG="-psig"; fi
+if [ "$SWIN" != "0.4,0.9" ]; then
+  KW_N=$(python3 -c "
+import sys
+lo,hi=(float(x) for x in '$SWIN'.split(','))
+K=$TK
+print(len(range(max(1,round(lo*K)), min(K-1,round(hi*K))+1)))")
+  KWTAG="-kw${KW_N}${KWTAG}"
+  echo "[window] $SWIN at K=$TK -> Kw=$KW_N"
+fi
+TAG="$KWTAG"
+[ -n "$TSCHED" ] && TAG="${TAG}-${TSCHED}m${TM}"
+[ "$COUP" != "fresh" ] && TAG="${TAG}-${COUP}"
+[ "$ASGN" != "982451653" ] && TAG="${TAG}-a${ASGN}"
+# the caption-count experiment runs the same arm on three pools; the size must be in the name
+case "$SEL" in *records_*) TAG="${TAG}-$(basename $SEL | sed 's/records_//')";; esac
+RUN=phaseN_${ARM}${TAG}_a${ALPHA}_t${TEMP}_s${SEED}_${JOB}
+torchrun --standalone --nproc-per-node=4 "$SCRIPT" \
+  --variant "$ARM" --seed "$SEED" --sel_seed "$SEED" \
+  --alpha "$ALPHA" --temp "$TEMP" \
+  --selection_dir "$SEL" \
+  --output_dir "checkpoints/phaseN/${RUN}" \
+  --num_steps "$STEPS" --num_warmup_steps 300 --lr 1e-5 \
+  --N 4 --K "$TK" --cfg 7.0 --student_cfg "$SCFG" --cfg_mode "$CFGMODE" --onpolicy_warmup "$OPWARM" --coupling "$COUP" --assign_seed "$ASGN" \
+  ${TSCHED:+--target_schedule "$TSCHED" --support_m "$TM"} \
+  --scoring_window "$SWIN" --delta_min 1 --delta_max 3 ${PSIG_FLAG} \
+  --gradient_checkpointing --save_every "$SAVE" --sample_every 0 --log_every 10 \
+  --wandb_project sd-phaseN-weighted --wandb_run_name "${RUN}"
+
+test -s "checkpoints/phaseN/${RUN}/checkpoint_final.pt" || \
+  ls -la "checkpoints/phaseN/${RUN}" || true
+echo "[$(date --iso-8601=seconds)] DONE $ARM -> checkpoints/phaseN/${RUN}"
+if command -v my-job-stats >/dev/null 2>&1; then my-job-stats -a -n -s; fi

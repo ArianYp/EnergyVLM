@@ -1,0 +1,391 @@
+\documentclass[11pt,a4paper]{article}
+\usepackage[margin=2.4cm]{geometry}
+\usepackage{graphicx,booktabs,amsmath,xcolor,caption,listings,microtype}
+\usepackage[section]{placeins}
+\usepackage[colorlinks=true,linkcolor=blue!55!black,urlcolor=blue!55!black]{hyperref}
+\captionsetup{font=small,labelfont=bf}
+\definecolor{codebg}{HTML}{F6F6F4}
+\definecolor{bad}{HTML}{C0392B}
+\definecolor{good}{HTML}{27AE60}
+\lstset{basicstyle=\ttfamily\footnotesize,backgroundcolor=\color{codebg},frame=single,
+        framesep=5pt,rulecolor=\color{black!18},breaklines=true,captionpos=b,
+        keywordstyle=\color{blue!55!black},commentstyle=\color{black!55}\itshape,
+        showstringspaces=false,language=Python,xleftmargin=0pt}
+\newcommand{\code}[1]{\texttt{\small #1}}
+
+\title{\vspace{-1.6cm}A deterministic ontology-matching defect in the T2I-CompBench\\
+2D-spatial evaluator\vspace{-0.2cm}}
+\author{Hesam Asadollahzadeh}
+\date{20 August 2026}
+
+\begin{document}
+\maketitle
+\vspace{-0.9cm}
+
+\section*{Summary}
+
+The released T2I-CompBench 2D-spatial evaluator resolves a prompt's two object nouns to detector
+outputs by \emph{exact string equality} against a fixed 722-entry label vocabulary. Many of the
+vocabulary's entries are composite strings inherited from the unified UniDet label space
+(\code{'cattle, cow'}, \code{'mouse2, mouse'}, \code{'table, desk'}), and some ordinary nouns have no
+entry at all. When either noun fails to match, the score is forced to zero before the image is
+consulted.
+
+\textbf{318 of the 1{,}000 prompts in the official \code{spatial.txt} cannot receive a nonzero score
+for any image, from any model.} Nine nouns account for all of them. On a labelled pool of 298
+prompts $\times$ 8 candidates the condition separates perfectly: all 98 affected prompts score zero
+on all 8 candidates, with no exceptions.
+
+The sibling \code{3D\_spatial\_eval.py}, in the same directory, resolves nouns by \emph{substring}
+containment instead. That single difference is why the 3D category does not show the defect --- and it
+introduces the opposite one, since \code{cat} is a substring of \code{'cattle, cow'}.
+
+We rebuild the evaluator with an ontology-aware matcher, verify that our re-implementation reproduces
+the released scores exactly on 8{,}642 images, and then ask what changes. Model rankings do
+\textbf{not} change in any statistically defensible way. What does change is everything to do with
+using the metric as a \emph{target}: repairing the matcher raises the measured best-of-$N$ gain by
+29\% (from $+0.2143$ to $+0.2760$), 50 prompts per 298 become selectable that were not before, and
+selecting against the released metric forfeits 25\% of the gain that is actually available.
+
+\section{The mechanism}
+
+\subsection{Parsing}
+The evaluator takes the prompt from the image filename and extracts two nouns with spaCy. The only
+lexical normalisation anywhere in the file is a four-word person list.
+
+\begin{lstlisting}[caption={\code{UniDet\_eval/2D\_spatial\_eval.py}, simple-structure branch.}]
+nlp = spacy.load("en_core_web_sm")
+doc = nlp(prompt)
+obj1 = [token.text for token in doc if token.pos_=='NOUN'][0]
+obj2 = [token.text for token in doc if token.pos_=='NOUN'][-1]
+
+person = ['girl','boy','man','woman']
+if obj1 in person: obj1 = "person"
+if obj2 in person: obj2 = "person"
+\end{lstlisting}
+
+\subsection{The vocabulary}
+Detected class indices are mapped to strings through a fixed list loaded at import:
+
+\begin{lstlisting}
+obj_label_map = torch.load('dataset/detection_features.pt')['labels']   # 722 entries
+\end{lstlisting}
+
+Of those 722 entries, 64 are comma-joined composites. The atomic names they contain are not
+separately addressable, because matching is done against the full string.
+
+\subsection{The gate}
+\begin{lstlisting}[caption={The defect. \code{obj} is a \emph{list} of label strings, so \code{in} is
+list membership, i.e.\ exact string equality --- not substring containment.}]
+obj = []
+for i in range(len(obj_bounding_box)):
+    obj_name = obj_label_map[obj_labels_dict[i]]
+    obj.append(obj_name)
+...
+if obj1 in obj and obj2 in obj:
+    obj1_pos = obj.index(obj1)
+    obj2_pos = obj.index(obj2)
+    score  = 0.25*instance_score[obj1_pos].item() + 0.25*instance_score[obj2_pos].item()
+    score += determine_position(locality, box1, box2) / 2
+elif obj1 in obj: score = 0.25*instance_score[obj1_pos].item()
+elif obj2 in obj: score = 0.25*instance_score[obj2_pos].item()
+else:             score = 0
+if (score < 0.5): score = 0
+\end{lstlisting}
+
+Two consequences follow directly from this block. First, a failed match on \emph{either} noun caps
+the score at $0.25$, which the final threshold then sets to zero: finding one object is worth exactly
+as much as finding nothing. Second, the score is a joint gate over detection and relation,
+\[
+s_{\text{raw}}=0.25\,(c_A+c_B)+0.5\,r(A,B),\qquad
+s=\begin{cases} s_{\text{raw}} & s_{\text{raw}}\ge 0.5\\ 0 & \text{otherwise,}\end{cases}
+\]
+so with typical confidences $c\!\approx\!0.9$ a correct pair of detections and a wrong relation gives
+$0.45<0.5$ and is also zeroed. Detection failure, relation failure and \emph{matching} failure are
+all reported as the same number.
+
+\subsection{Where the names disagree}
+
+\begin{table}[htbp]\centering\small
+\caption{Prompt nouns against the released vocabulary. The right-hand column is what the exact-match
+gate does.}
+\begin{tabular}{llc}
+\toprule
+prompt noun & entry in \code{detection\_features.pt} & matches? \\
+\midrule
+\code{cow}     & \code{'cattle, cow'}              & \textcolor{bad}{no} \\
+\code{sofa}    & \code{'sofa bed'}, \code{'couch'} & \textcolor{bad}{no} \\
+\code{bag}     & \code{'handbag'}                  & \textcolor{bad}{no} \\
+\code{mouse}   & \code{'mouse2, mouse'}, \code{'mouse1'} & \textcolor{bad}{no} \\
+\code{table}   & \code{'table, desk'}              & \textcolor{bad}{no} \\
+\code{wallet}  & \emph{absent}                     & \textcolor{bad}{no} \\
+\midrule
+\code{giraffe}, \code{train}, \code{dog} & identical string & \textcolor{good}{yes} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\section{How much of the benchmark this removes}
+
+\begin{figure}[htbp]\centering
+\includegraphics[width=\linewidth]{figs_compbench/repair_decomposition.pdf}
+\caption{The official 1{,}000-prompt \code{spatial.txt}, partitioned by why each prompt does or does
+not score. Only the leftmost segment is reachable by the released evaluator.}
+\end{figure}
+
+\begin{table}[htbp]\centering\small
+\caption{Prompts unscoreable by construction, official prompt sets. ``Unscoreable'' means the score
+is $0$ for every possible image. The 3D row is shown under both rules; the evaluator that ships for
+that category uses the substring rule, so its operative figure is 7.4\%.}
+\begin{tabular}{lrrr}
+\toprule
+official set & $n$ & exact rule (\code{obj1 in obj}) & substring rule (\code{obj1 in obj[i]}) \\
+\midrule
+\code{spatial.txt}    & 1000 & \textcolor{bad}{\textbf{318 (31.8\%)}} & 83 (8.3\%) \\
+\code{3d\_spatial.txt} & 1000 & 331 (33.1\%) & \textcolor{good}{74 (7.4\%)} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{figure}[htbp]\centering
+\begin{minipage}{0.46\linewidth}\centering
+\includegraphics[width=\linewidth]{figs_compbench/unscoreable_nouns.pdf}\end{minipage}\hfill
+\begin{minipage}{0.5\linewidth}\centering
+\includegraphics[width=\linewidth]{figs_compbench/rules_2d_vs_3d.pdf}\end{minipage}
+\caption{Left: the nine nouns responsible, over the official 1{,}000 spatial prompts. Right: the same
+two prompt sets under both matching rules. The two evaluators differ by one character in the
+matching loop, and that character is the whole difference between the categories.}
+\end{figure}
+
+\subsection{Repairability}
+Not every affected prompt can be recovered. Splitting composite labels on commas recovers 115;
+a five-entry rename map (\code{sofa}$\to$\code{couch}, \code{bag}$\to$\code{handbag},
+\code{phone}$\to$\code{cell phone}, \code{computer}$\to$\code{laptop},
+\code{painting}$\to$\code{picture}) recovers a further 147. The remaining 56 all involve
+\code{wallet}, which has no class in the vocabulary under any name; those prompts are not
+repairable and should be reported as \emph{unsupported} rather than scored zero.
+
+\begin{table}[htbp]\centering\small
+\caption{Decomposition of \code{spatial.txt} by what the prompt needs in order to be scoreable.}
+\begin{tabular}{lrr}
+\toprule
+status & prompts & share \\
+\midrule
+scored by the released evaluator              & 682 & 68.2\% \\
+recoverable by splitting composite labels     & 115 & 11.5\% \\
+recoverable by a rename map                   & 147 & 14.7\% \\
+no detector class exists (\code{wallet})      &  56 &  5.6\% \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\section{Verification on a labelled pool}
+
+We hold official labels for 298 spatial prompts $\times$ 8 independently seeded candidates from
+SD3.5-Medium (2{,}384 images). Predicting ``unscoreable'' from the prompt text alone, before looking
+at any image:
+
+\begin{table}[htbp]\centering\small
+\caption{Predicted matchability against measured scores. The separation is exact.}
+\begin{tabular}{lrrrr}
+\toprule
+group & prompts & all 8 candidates zero & rate & mean score \\
+\midrule
+both nouns match the vocabulary   & 200 & 38 & 19.0\% & 0.4281 \\
+at least one noun does not        &  98 & \textbf{98} & \textbf{100.0\%} & \textbf{0.0000} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{figure}[htbp]\centering
+\includegraphics[width=0.86\linewidth]{figs_compbench/montage.png}
+\caption{Four candidates for each of four prompts. In rows 1--3 the requested relation is satisfied
+in every image and every score is exactly zero, because \code{cow}, \code{wallet} and \code{sofa}
+do not match the vocabulary. Row 4 is a control whose nouns do match: there the evaluator is correct
+on all four, scoring the two images with the giraffe left of the train and zeroing the two without.}
+\end{figure}
+
+\begin{table}[htbp]\centering\small
+\caption{All-zero rate by relation type. It is roughly flat, which rules out the relation parser as
+the cause; symmetric relations in fact score highest.}
+\begin{tabular}{lrrrr}
+\toprule
+relation type & prompts & all-zero & rate & mean score \\
+\midrule
+top / bottom                & 107 & 57 & 53.3\% & 0.2139 \\
+left / right                & 106 & 43 & 40.6\% & 0.2765 \\
+symmetric (near, next to)   &  85 & 36 & 42.4\% & 0.3932 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{A second layer: the metric is near-binary even where it works}
+\begin{figure}[htbp]\centering
+\includegraphics[width=0.62\linewidth]{figs_compbench/score_distribution.pdf}
+\end{figure}
+\vspace{-0.3cm}
+68.2\% of the 2{,}384 candidate images score exactly zero, and 136 of 298 prompts (45.6\%) are
+eight-way ties carrying no candidate-level information at all. Decomposing within-prompt variance
+into the zero/nonzero split versus graded variation among nonzero scores gives
+$\eta^2=0.9704$ --- and the figure is \emph{identical} when restricted to the 200 matchable prompts,
+because the unscoreable prompts contribute no variance either way. So repairing the matcher does not
+address this second layer: even where the evaluator works, essentially all of its within-prompt
+signal is whether the joint gate was crossed, not how well the relation was realised.
+
+\section{The sibling evaluator fails the opposite way}
+
+\code{3D\_spatial\_eval.py} uses \code{if obj1 in obj[i]}, a substring test. That accepts
+\code{cow} for \code{'cattle, cow'}, which is the intended behaviour, but it also accepts:
+
+\begin{table}[htbp]\centering\small
+\caption{Substring false-positive exposure on the official \code{3d\_spatial.txt}. 873 of 1{,}000
+prompts (87.3\%) contain a noun that substring-matches an unrelated label. Note this is
+\emph{exposure}, not an error rate: a spurious match only affects a score if the detector actually
+fires on that class.}
+\begin{tabular}{llr}
+\toprule
+prompt noun & unrelated label it silently matches & prompts exposed \\
+\midrule
+\code{person}    & \code{'personal care'}            & 211 \\
+\code{chair}     & \code{'wheelchair'}               &  54 \\
+\code{book}      & \code{'bookcase'}                 &  48 \\
+\code{balloon}   & \code{'hotair balloon'}           &  44 \\
+\code{bee}       & \code{'frisbee'}                  &  44 \\
+\code{bag}       & \code{'cabbage'}                  &  41 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Neither rule is correct. Splitting composites into atoms and comparing whole atoms accepts
+\code{cow} for \code{'cattle, cow'} while rejecting \code{cat}.
+
+\section{A repaired evaluator, and what changes}
+
+\subsection{Design and validation}
+The released script discards the detector's output and keeps one scalar per image, which is why the
+defect cannot be diagnosed from cached artifacts. We re-ran UniDet over every evaluation for which
+images survive, kept the raw detections, and scored them offline under three matching rules holding
+everything else --- weighting, \code{determine\_position}, threshold, and the first-match
+\code{.index()} semantics --- identical.
+
+\begin{quote}\small
+\textbf{Validation.} Our \code{official} column reproduces each directory's own cached
+\code{vqa\_result.json} on \textbf{29/29 directories, 298/298 images each, 8{,}642 images, zero
+mismatches.} Any difference in the other columns is therefore attributable to the matching rule alone.
+\end{quote}
+
+\subsection{Model rankings do not meaningfully change}
+
+\begin{figure}[htbp]\centering
+\begin{minipage}{0.44\linewidth}\centering
+\includegraphics[width=\linewidth]{figs_compbench/model_ranking.pdf}\end{minipage}\hfill
+\begin{minipage}{0.53\linewidth}\centering\small
+\begin{tabular}{lr}
+\toprule
+Kendall $\tau_b$, official vs repaired & $+0.914$ \\
+\quad prompt-bootstrap 95\% CI & $[+0.838,+0.962]$ \\
+models whose rank moves & 10 / 21 \\
+top-ranked model & unchanged \\
+pairwise comparisons reversing sign & 9 / 210 \\
+\quad \textbf{significant in both directions} & \textbf{0 / 210} \\
+per-model repair multiplier & $1.233$--$1.416$ \\
+\bottomrule
+\end{tabular}
+\end{minipage}
+\caption{Every ranking reversal is between models that were statistically tied to begin with. The
+repair is not a uniform rescale --- the multiplier varies by 0.18 across models, and a pure rescale
+could not reorder anything --- but the variation is not large enough to overturn a defensible
+comparison.}
+\end{figure}
+
+This is the honest negative result of the audit: \textbf{published spatial leaderboards survive.}
+What does not survive is any use of the metric as an optimisation target.
+
+\subsection{Selection changes substantially}
+
+\begin{figure}[htbp]\centering
+\includegraphics[width=\linewidth]{figs_compbench/selection.pdf}
+\end{figure}
+\vspace{-0.4cm}
+
+\begin{table}[htbp]\centering\small
+\caption{Best-of-8 selection over 298 spatial prompts, one model, eight seeds.}
+\begin{tabular}{lrr}
+\toprule
+ & official rule & repaired rule \\
+\midrule
+single candidate                              & 0.2921 & 0.3896 \\
+VQAScore best-of-8                            & 0.3901 & 0.5221 \\
+oracle best-of-8                              & 0.5064 & 0.6656 \\
+\midrule
+oracle gain                                   & $+0.2143$ & $\mathbf{+0.2760}$ \\
+prompts where selection can change the score  & 54.4\% & \textbf{71.1\%} \\
+prompts revived from dead                     & \multicolumn{2}{c}{50} \\
+prompts where the oracle's pick changes       & \multicolumn{2}{c}{48 / 298 (16.1\%)} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{The strongest consequence: the metric mis-optimises}
+
+Selecting the candidate that maximises the \emph{released} metric, then measuring that candidate
+under the repaired one, yields $+0.2061$ against the $+0.2760$ actually available:
+
+\begin{center}\small
+\begin{tabular}{lr}
+\toprule
+selection policy & realised gain, measured under the repaired rule \\
+\midrule
+argmax of the released metric & $+0.2061$ \\
+argmax of the repaired metric & $+0.2760$ \\
+\midrule
+\textbf{forfeited} & \textbf{25.3\%} \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+Any procedure that uses this metric as a signal --- best-of-$N$ selection, rejection sampling,
+GORS-style fine-tuning on high-scoring generations, or a reward model fit to it --- had exactly zero
+gradient on a third of its prompts, and we can now put a number on what that costs.
+
+\subsection{What is unaffected}
+Prompt-blind selectors built from DINOv2 features do not benefit. The best of them,
+\code{quadrant\_pc\_std}, realises $+0.0262$ $[-0.0185,+0.0695]$ under the official rule and
+$+0.0380$ $[-0.0126,+0.0844]$ under the repaired one: not significant under either. The repair
+neither rescues nor refutes them.
+
+\section{Limitations}
+
+\begin{enumerate}\setlength{\itemsep}{2pt}
+\item \textbf{Rankings survive.} We cannot claim published model comparisons were wrong. The claim is
+about absolute scores, effect sizes, and the metric's use as a target.
+\item \textbf{One generator.} The labelled pool is SD3.5-Medium. The 318/1{,}000 figure is a property
+of the prompts and the evaluator and holds regardless, but the pool statistics are single-model.
+\item \textbf{The rename map is a judgement.} Five entries, each a rename rather than a claim that two
+categories are close enough. Results under the comma-split-only rule are also reported.
+\item \textbf{3D exposure is not an error rate.} Converting 87.3\% exposure into a measured
+false-positive rate requires re-running detection on the 3D pool, which we have not done.
+\item \textbf{No human validation.} We show the released metric disagrees with the image; we have not
+run a human study establishing what the corrected metric should say.
+\end{enumerate}
+
+\section{Reproduction}
+
+\begin{table}[htbp]\centering\small
+\begin{tabular}{ll}
+\toprule
+file & role \\
+\midrule
+\code{phaseX/unidet2d\_dump.py}       & re-runs UniDet, keeps the detections the evaluator discards \\
+\code{phaseX/score\_from\_dets.py}    & offline scorer, three matching rules, validates vs cached scores \\
+\code{phaseX/vocab\_gate\_spatial.json} & per-prompt matchability, precomputed \\
+\code{phaseX/make\_report\_assets.py} & recomputes every number and figure in this document \\
+\code{ablations/phaseX\_redetect\_2d.lsf} & the campaign (job 115448) \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Every number in this document is read from \code{reports/figs\_compbench/stats.json}, which is
+regenerated from the artifacts on disk rather than transcribed.
+
+\end{document}

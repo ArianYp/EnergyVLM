@@ -1,0 +1,55 @@
+#!/usr/bin/env bash
+#BSUB -J sd-phaseJ-objective-compare
+#BSUB -G s10396
+#BSUB -q training-parallel
+#BSUB -n 1
+#BSUB -W 1:00
+#BSUB -R "span[hosts=1]"
+#BSUB -R "select[mem>4000]"
+#BSUB -R "rusage[mem=4000]"
+#BSUB -M 4000
+# The comparison is CPU-only, but this project's training queue rejects requests
+# without an explicit GPU allocation. It runs for only a few seconds.
+#BSUB -gpu "num=1:mode=exclusive_process"
+#BSUB -cwd /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM
+#BSUB -o /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-phaseJ-objective-compare-%J.out
+#BSUB -e /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-phaseJ-objective-compare-%J.err
+
+set -euo pipefail
+export PATH="/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/venv_mmdit/bin:$PATH"
+export WANDB_MODE=online
+
+: "${PHASEJ_LISTNET_JOB:?provide listnet job id}"
+: "${PHASEJ_BT_JOB:?provide BT job id}"
+: "${PHASEJ_BT_TEXT_JOB:?provide BT plus text job id}"
+: "${PHASEJ_BT_TEXT_INTERACTION_JOB:?provide interaction-ranked BT plus text job id}"
+: "${PHASEJ_GROUP:?provide the matching W&B group}"
+
+JOB=${LSB_JOBID:-local}
+OUT="phaseJ/comparisons/phaseJ_objectives_${JOB}"
+
+python phaseJ/compare_objectives.py \
+  --arm historical_hybrid \
+    phaseJ/runs/phaseJ_fusion_aligned_99743 \
+    phaseJ/audits/fusion_conditioning_99752 \
+  --arm listnet \
+    "phaseJ/runs/phaseJ_objective_listnet_${PHASEJ_LISTNET_JOB}" \
+    "phaseJ/audits/phaseJ_objective_listnet_${PHASEJ_LISTNET_JOB}" \
+  --arm bt \
+    "phaseJ/runs/phaseJ_objective_bt_${PHASEJ_BT_JOB}" \
+    "phaseJ/audits/phaseJ_objective_bt_${PHASEJ_BT_JOB}" \
+  --arm bt_text \
+    "phaseJ/runs/phaseJ_objective_bt_text_${PHASEJ_BT_TEXT_JOB}" \
+    "phaseJ/audits/phaseJ_objective_bt_text_${PHASEJ_BT_TEXT_JOB}" \
+  --arm bt_text_interaction \
+    "phaseJ/runs/phaseJ_objective_bt_text_interaction_${PHASEJ_BT_TEXT_INTERACTION_JOB}" \
+    "phaseJ/audits/phaseJ_objective_bt_text_interaction_${PHASEJ_BT_TEXT_INTERACTION_JOB}" \
+  --primary bt_text_interaction \
+  --output_dir "$OUT" \
+  --wandb_project sd-mmdit-ranker-v1 \
+  --wandb_group "$PHASEJ_GROUP" \
+  --wandb_run_name "phaseJ_objective_comparison_${JOB}"
+
+test -s "$OUT/objective_comparison.json"
+test -s "$OUT/objective_comparison.md"
+echo "[$(date --iso-8601=seconds)] objective comparison complete: $OUT"

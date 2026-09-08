@@ -1,0 +1,80 @@
+#!/usr/bin/env bash
+#BSUB -J sd-phaseN-repa-proj
+#BSUB -G s10396
+#BSUB -q training-parallel
+#BSUB -n 8
+#BSUB -W 12:00
+#BSUB -R "span[hosts=1]"
+#BSUB -R "select[mem>128000 && hname!='farm-gpu0504']"
+#BSUB -R "rusage[mem=128000]"
+#BSUB -M 128000
+# One process, one model copy: SD3.5-M bf16 + DINOv2-base + the projector. No 11B scorer, so 128 GB
+# host RAM is right here (the 256 GB in phaseN_ref_similarity.lsf is for its 4-rank VQAScore stage).
+# gmem 78G because activations for a batch of 8 at 512px flow through a 24-block transformer.
+#BSUB -gpu "num=1:mode=exclusive_process:gmem=78G"
+#BSUB -cwd /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM
+#BSUB -o /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-phaseN-repa-proj-%J.out
+#BSUB -e /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-phaseN-repa-proj-%J.err
+
+# Trains the REPA projector the project has never actually had: hidden state of a FROZEN SD3.5-M at
+# layer 8 -> DINOv2-base patch tokens, REPA's own cosine objective, on COCO train2017.
+#
+# Only the projector trains. The denoiser and DINOv2 are frozen, so this cannot change the
+# generator; the result is a read-out head that says whether the denoiser's hidden state CONTAINS
+# DINOv2's information. Validation is a disjoint slice of train2017, so val2017 -- which supplies
+# the reference photographs the downstream similarity job scores against -- stays untouched.
+set -euo pipefail
+
+export PATH="/software/cellgen/team361/ha11/envs/nichejepa/bin:$PATH"
+export HF_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/huggingface
+export TORCH_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/torch
+export XDG_CACHE_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/xdg
+export TOKENIZERS_PARALLELISM=false
+export WANDB_MODE=disabled
+source ~/.secrets/hf_token
+
+STEPS=${REPA_STEPS:-6000}
+BATCH=${REPA_BATCH:-8}
+LAYER=${REPA_LAYER:-8}
+LR=${REPA_LR:-1e-4}
+
+JOB=${LSB_JOBID:-local}
+ROOT="phaseN/repa_projector_${JOB}"
+if [[ -e "$ROOT" ]]; then echo "Refusing to overwrite $ROOT" >&2; exit 2; fi
+mkdir -p "$ROOT"
+
+echo "[$(date --iso-8601=seconds)] Phase-N REPA projector | job=$JOB layer=$LAYER steps=$STEPS"
+nvidia-smi --query-gpu=index,name,memory.total --format=csv
+test -s /lustre/scratch126/cellgen/lotfollahi/ha11/COCO/annotations/captions_train2017.json
+
+# Token-grid arithmetic before any GPU time: at 512px SD3.5-M emits (512/8/2)^2 = 1024 image tokens
+# and DINOv2 at 224*(512//256) = 448px emits (448/14)^2 = 1024 patches. REPA aligns patch-to-patch,
+# so a mismatch here would mean the whole objective is comparing unrelated grids.
+python3 -c "
+res=512; t=224*max(1,res//256)
+assert (res//8//2)**2 == (t//14)**2, ((res//8//2)**2, (t//14)**2)
+print(f'token grids agree: model {(res//8//2)**2} = dinov2@{t}px {(t//14)**2}')
+"
+
+python3 phaseN/train_repa_projector.py \
+  --layer "$LAYER" --steps "$STEPS" --batch "$BATCH" --lr "$LR" \
+  --encoder dino --dino_id facebook/dinov2-base \
+  --split train2017 --resolution 512 \
+  --out "$ROOT/projector.pt" | tee "$ROOT/train.log"
+
+test -s "$ROOT/projector.pt"
+python3 -c "
+import json, torch
+ck=torch.load('$ROOT/projector.pt', map_location='cpu', weights_only=False)
+h=json.load(open('$ROOT/projector.pt.history.json'))
+print(json.dumps({k:ck[k] for k in ('in_dim','out_dim','width','layer','encoder','step','val_loss')}, indent=2))
+first=h['history'][0]['val_loss']; best=h['best_val']
+print(f'val 1-cos: first {first:.4f} -> best {best:.4f}')
+# A random projector sits near 1.0 (orthogonal vectors). If training did not move it, say so
+# loudly rather than shipping a head that learned nothing.
+assert best < first, f'validation never improved: {first} -> {best}'
+print('projector improved over its first validation')
+"
+
+echo "[$(date --iso-8601=seconds)] complete: $ROOT"
+if command -v my-job-stats >/dev/null 2>&1; then my-job-stats -a -n -s; fi

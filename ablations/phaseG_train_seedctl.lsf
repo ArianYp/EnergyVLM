@@ -1,0 +1,45 @@
+#!/usr/bin/env bash
+#BSUB -J sd-phaseG-seedctl
+#BSUB -G s10396
+#BSUB -U conf_july_2026
+#BSUB -q training-parallel
+#BSUB -n 16
+#BSUB -W 72:00
+#BSUB -R "span[hosts=1]"
+#BSUB -R "select[mem>64000 && hname!='farm-gpu0504']"
+#BSUB -R "rusage[mem=64000]"
+#BSUB -M 64000
+#BSUB -gpu "num=4:mode=exclusive_process:gmodel=NVIDIAH200"
+#BSUB -cwd /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM
+#BSUB -o /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-phaseG-seedctl-%J.out
+#BSUB -e /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-phaseG-seedctl-%J.err
+# Phase G — branch-and-select, arm=oracle. Shared z_T and shared deterministic prefix mean both
+# arms see the IDENTICAL student input z_k; only the supervision target differs.
+# THE MISSING SEED CONTROL FOR PHASE G — the v4 reviewer's #1 attack, and he is right.
+#
+# Every channel-3 claim is an arm-vs-arm contrast among FOUR models trained with ONE SEED EACH:
+#   Gant - Gorc = +0.0043 "null" | Gmed - Gorc = +0.0328 | Gmed - Grnd = +0.0106
+# All read against a +-0.009 resolution IMPORTED FROM C1 -- a pair of HEALTHY models (0.4948/0.4969).
+# The Phase-G arms sit at 0.3551-0.4039, ~0.12 below baseline. Broken models have no reason to share
+# a healthy pair's seed variance, and if the true arm-to-arm noise is +-0.02 then the first and third
+# contrasts are uninformative and the paper's channel-3 section does not stand.
+#
+# This trains a SECOND `random` arm at seed=1, identical in every other respect. Grnd(s1) - Grnd(s0)
+# is then the exact analogue of C1's B2' - B2 = +0.0007, measured IN the degraded regime where the
+# claims actually live. It is the cheapest run in the programme and it is load-bearing for four numbers.
+set -euo pipefail
+export PATH="/software/cellgen/team361/ha11/envs/nichejepa/bin:$PATH"
+export HF_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/huggingface
+export TORCH_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/torch
+export XDG_CACHE_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/xdg
+export NCCL_NVLS_ENABLE=0
+source ~/.secrets/hf_token
+echo "[`date`] Phase G oracle | Host: $(hostname)"
+RUN=phaseG_randomS1_$(date +%Y%m%d_%H%M%S)_${LSB_JOBID:-local}
+torchrun --standalone --nproc-per-node=4 phaseG/train_branch.py \
+  --arm random --seed 1 --cache_dir phaseG --output_dir checkpoints/phaseG/${RUN} \
+  --num_steps 6000 --num_warmup_steps 300 --lr 1e-5 \
+  --K 8 --cfg 7.0 --eta 0.9 --M 4 --branch_points 3 --gradient_checkpointing \
+  --save_every 2000 --log_every 10 \
+  --wandb_project sd-phaseG-branch --wandb_run_name "${RUN}"
+echo "[`date`] DONE random seed=1"

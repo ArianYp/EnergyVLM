@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+#BSUB -J sd-phaseP2-guidance
+#BSUB -G s10396
+#BSUB -q training-parallel
+#BSUB -n 8
+#BSUB -W 12:00
+#BSUB -R "span[hosts=1]"
+#BSUB -R "select[mem>256000 && hname!='farm-gpu0504']"
+#BSUB -R "rusage[mem=256000]"
+#BSUB -M 256000
+#BSUB -gpu "num=1:mode=exclusive_process:gmodel=NVIDIAH200"
+#BSUB -cwd /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM
+#BSUB -o /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-phaseP2-guidance-%J.out
+#BSUB -e /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-phaseP2-guidance-%J.err
+# Reproduce "my method added the coffee cup" = GUIDANCE DISTILLATION.
+# A base@cfg1 (the step-0 panel) · B base@cfg7 (guided teacher) · C M1@cfg1 · D M2@cfg1
+# All CFG-free for the students, matching how the training panels were rendered.
+set -euo pipefail
+export PATH="/software/cellgen/team361/ha11/envs/nichejepa/bin:$PATH"
+export HF_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/huggingface
+export TORCH_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/torch
+export XDG_CACHE_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/xdg
+export TOKENIZERS_PARALLELISM=false
+source ~/.secrets/hf_token
+echo "[`date`] Phase P2 guidance distillation | Host: $(hostname)"
+python3 phaseP/reproduce_guidance_distillation.py \
+  --m1_ckpt checkpoints/method/M1_pure_consistency_20260624_065127_55187/checkpoint_final.pt \
+  --m2_ckpt checkpoints/method/M2_full_method_20260624_065133_55188/checkpoint_final.pt \
+  --n_prompts 200 --steps 4,28 --teacher_cfg 7.0 --out phaseP/guidance
+echo "[`date`] DONE -> phaseP/guidance/report.md + phaseP/guidance/panel/"

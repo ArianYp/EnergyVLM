@@ -1,0 +1,98 @@
+#!/usr/bin/env bash
+#BSUB -J sd-phaseC-geneval2-smoke
+#BSUB -G s10396
+#BSUB -q training-parallel
+#BSUB -n 8
+#BSUB -W 2:00
+#BSUB -R "span[hosts=1]"
+#BSUB -R "select[mem>128000 && hname!='farm-gpu0504']"
+#BSUB -R "rusage[mem=128000]"
+#BSUB -M 128000
+#BSUB -gpu "num=1:mode=exclusive_process:gmodel=NVIDIAH200"
+#BSUB -cwd /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM
+#BSUB -o /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-phaseC-geneval2-smoke-%J.out
+#BSUB -e /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-phaseC-geneval2-smoke-%J.err
+
+# End-to-end smoke of the ONE thing in the eval suite that has never actually executed:
+# GenEval2/evaluation.py driving Qwen3-VL-8B under the newer transformers in
+# cache/venv_geneval2. The driver's staging/join logic is already proven on synthetic
+# evaluator output; what is unproven is the model call itself (a major transformers
+# version above what GenEval2 was written against).
+#
+# Runs on a 12-prompt slice of the real benchmark, using whichever M1 images already
+# exist, and asserts the three things that would silently break: scores are produced,
+# they are in [0,1], and they are not all identical (which is what a broken
+# logits/answer-token path would look like).
+#
+# The [0,1] check carries a 1e-6 tolerance on the upper end: Soft-TIFA's atom score is a
+# SUM of softmax probabilities over the accepted answer spellings ('Yes','yes',' yes',
+# ' Yes'), so it approaches 1 from below but can exceed it by ~1e-8 in floating point.
+# Measured on this slice: max = 1.0000000178. That is upstream's definition, not a bug.
+set -euo pipefail
+export PATH="/software/cellgen/team361/ha11/envs/nichejepa/bin:$PATH"
+export HF_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/huggingface
+export TORCH_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/torch
+export XDG_CACHE_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/xdg
+export TOKENIZERS_PARALLELISM=false
+source ~/.secrets/hf_token
+echo "[`date`] GenEval2 smoke | Host: $(hostname)"
+
+N=12
+D=phaseC/geneval2_smoke
+rm -rf "$D"; mkdir -p "$D"
+
+python3 - "$N" "$D" <<'PY'
+import json, sys, pathlib
+n, d = int(sys.argv[1]), pathlib.Path(sys.argv[2])
+pool = json.loads(pathlib.Path("phaseC/geneval2/prompts.json").read_text())
+bench = [json.loads(l) for l in
+         pathlib.Path("GenEval2/geneval2_data.jsonl").read_text().splitlines() if l.strip()]
+imgs = pathlib.Path("phaseC/geneval2/images/M1")
+keep = [it for it in pool
+        if (imgs / f"p{it['idx']:05d}" / "s4" / "cand0.png").exists()][:n]
+if len(keep) < n:
+    raise SystemExit(f"only {len(keep)} M1 images generated so far; need {n}")
+# mini benchmark + mini pool, both in the same order, as the driver requires
+(d / "mini_bench.jsonl").write_text(
+    "\n".join(json.dumps(bench[it["idx"]]) for it in keep))
+(d / "mini_pool.json").write_text(json.dumps(
+    [{**it, "idx": i} for i, it in enumerate(keep)], indent=1))
+# stage wants images at p{idx}/s4, and the mini pool renumbers idx -> symlink a tree
+tree = d / "images"
+for i, it in enumerate(keep):
+    dst = tree / f"p{i:05d}" / "s4"; dst.mkdir(parents=True)
+    (dst / "cand0.png").symlink_to(
+        (imgs / f"p{it['idx']:05d}" / "s4" / "cand0.png").resolve())
+print(f"prepared {len(keep)} prompts")
+for it in keep[:3]:
+    print("  ", it["prompt"])
+PY
+
+python3 phaseC/geneval2_eval.py stage --images "$D/images" --pool "$D/mini_pool.json" \
+  --benchmark "$D/mini_bench.jsonl" --steps 4 --out "$D/scores"
+python3 phaseC/geneval2_eval.py run     --dir "$D/scores" --method soft_tifa_gm
+python3 phaseC/geneval2_eval.py collect --dir "$D/scores" --method soft_tifa_gm
+
+python3 - "$D" <<'PY'
+import json, pathlib, sys
+d = pathlib.Path(sys.argv[1])
+s = json.loads((d / "scores" / "scores.json").read_text())
+v = [r["score"] for r in s["per_prompt"]]
+atoms = [a for r in s["per_prompt"] for a in r["atom_scores"]]
+print(f"\nn={len(v)} mean={s['mean']:.4f} official={s['official_score_x100']:.2f}")
+print(f"per-prompt range [{min(v):.4f}, {max(v):.4f}] | "
+      f"atom range [{min(atoms):.4f}, {max(atoms):.4f}]")
+print(f"per-skill: " + "  ".join(f"{k}={x['mean']:.3f}" for k, x in s["per_skill"].items()))
+EPS = 1e-6          # Soft-TIFA sums probabilities over answer spellings -> ~1e-8 overshoot
+bad = []
+if not v: bad.append("no scores produced")
+if not all(-EPS <= x <= 1.0 + EPS for x in atoms):
+    bad.append(f"atom scores outside [0,1]+-{EPS:g} (min {min(atoms):.3e}, max {max(atoms):.12f})")
+if max(v) - min(v) < 1e-6: bad.append("all per-prompt scores identical (dead judge?)")
+if bad:
+    print("FAIL: " + "; ".join(bad)); sys.exit(1)
+print("PASS — GenEval2 Soft-TIFA runs end-to-end and discriminates between prompts")
+PY
+
+echo "[`date`] DONE"
+if command -v my-job-stats >/dev/null 2>&1; then my-job-stats -a -n -s; fi

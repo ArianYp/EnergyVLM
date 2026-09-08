@@ -1,0 +1,189 @@
+#!/usr/bin/env bash
+#BSUB -J sd-m1-mse
+#BSUB -G s10396
+#BSUB -U conf_july_2026
+#BSUB -q training-parallel
+#BSUB -n 16
+#BSUB -W 24:00
+#BSUB -R "span[hosts=1]"
+#BSUB -R "select[mem>256000 && hname!='farm-gpu0504']"
+#BSUB -R "rusage[mem=256000]"
+#BSUB -M 256000
+#BSUB -gpu "num=4:mode=exclusive_process:gmodel=NVIDIAH200"
+#BSUB -cwd /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM
+#BSUB -o /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-m1-mse-%J.out
+#BSUB -e /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-m1-mse-%J.err
+#
+# LOSS NORMALIZATION FIX — M1's recipe with the consistency loss MEAN-reduced instead of
+# summed over the 65536 latent dimensions. Single treatment: --distance mse. M1 is the control.
+#
+# WHY — this is the largest mis-specification found in the codebase
+# -----------------------------------------------------------------
+# Our loss is the iCT PAPER form, applied in latent space:
+#     sq = diff.pow(2).sum(dim=(2,3,4))        # SUM over all 65536 dims
+#     d  = sqrt(sq + c^2) - c                  # an L2 NORM, reads ~66
+# That is faithful to iCT Eq. (8) (verified against locuslab/ect, the only faithful
+# implementation) -- but iCT calibrated it in PIXEL space, and NO reference implementation uses
+# the norm form in latent space. Every one of these mean-reduces over C,H,W:
+#     REPA        loss.py:9,78          mean_flat((out - target)^2)
+#     SiT         transport.py:140      mean_flat
+#     RTDMD       dmd_trainer.py:229    F.mse_loss(reduction="mean")   [SD3.5-M, our exact model]
+#     SenseFlow   trainer_sd35_...:699  torch.mean(elementwise pseudo-Huber)  [SD3.5-M]
+#     diffusers LCM x5                  F.mse_loss(reduction="mean") / torch.mean(...)
+#
+# The consequence is quantitative, not stylistic:
+#     ||dL/dxhat||   norm form: 1.000     mean form: 0.0020   -> ~500x
+#     ratio D/(2||delta||) = 65536/132 = 496, which is exactly the clip saturation we observe.
+# grad_clip=1.0 is universal across every repo above WITH NO SCALING BY MODEL SIZE, but it is
+# calibrated for a mean-reduced loss. Ours runs at pre-clip norm 200-800 against a threshold of
+# 1.0 -- clip_ratio ~0.0025, SATURATED ON EVERY STEP for the whole 20k run. Adam's scale
+# invariance holds for a CONSTANT rescale, not a step-dependent one, so the clip is silently
+# imposing normalized descent nobody chose. Koloskova et al. (ICML 2023, 2305.01588) Thm 3.3:
+# clipped SGD converges only to a neighbourhood of size min{sigma, sigma^2/c}, worst when c << sigma.
+#
+# WHAT THIS RUN IS NOT
+# --------------------
+# NOT a fix for a bug -- the current loss is a faithful iCT implementation and M1 trained fine
+# with it (CMMD 69.7). This tests whether the LATENT-SPACE convention everyone else uses is
+# better. It may not be. A null here is a real answer and closes the question.
+#
+# lr is deliberately UNCHANGED at 1e-5 to keep this single-variable, even though the research
+# says 1e-6 (SenseFlow, LCM README) to 3e-6 (RTDMD, on SD3.5-M) is standard. If this run
+# under- or over-moves (compare final Delta_theta_xi against M1's 42.9), lr is the next knob --
+# but changing both at once would make the result uninterpretable, which is the mistake job
+# 91058 made.
+#
+# REPA is OFF. The Phase R result (CMMD 69.7 -> 67.4, reports/phaseR_repa_result.md) was measured
+# on the norm-form loss. If mean-reduction wins, it becomes the new baseline and REPA must be
+# re-tested on top of it -- fix the foundation first, then re-test the method.
+#
+# PRE-REGISTERED READ
+#   CMMD < 69.7 at 4 steps   -> the latent-space convention is better; new baseline.
+#   CMMD ~ 69.7              -> loss normalization does not matter here. Negative, and it closes
+#                               a question that has been unexamined across all 15+ campaign runs
+#                               (no run has EVER varied --distance).
+#   CMMD > 69.7              -> the iCT norm form is actually right for our setting. Also useful.
+# Secondary, and the mechanistic payoff either way: clip_ratio should go from ~0.0025 to ~1.0.
+# That panel was dead (hardcoded 0.0) for the whole campaign and was fixed on 2026-07-30, so this
+# is the first run that can actually report it.
+#
+# Wall clock: M1 measured 1.99 s/step at CFG 7 => ~11 h for 20k, +40 min sampling, +10 min gates,
+# +35 min eval. -W 24:00 leaves headroom.
+set -euo pipefail
+export PATH="/software/cellgen/team361/ha11/envs/nichejepa/bin:$PATH"
+export HF_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/huggingface
+export TORCH_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/torch
+export XDG_CACHE_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/xdg
+export TOKENIZERS_PARALLELISM=false
+export NCCL_NVLS_ENABLE=0
+source ~/.secrets/hf_token
+
+M1=checkpoints/method/M1_pure_consistency_20260624_065127_55187
+JOB=${LSB_JOBID:-local}
+RUN=m1_mse_$(date +%Y%m%d_%H%M%S)_${JOB}
+echo "[`date`] M1 + mean-reduced loss | Host: $(hostname) | RUN=${RUN}"
+
+# ── Flag set defined ONCE, shared by the smoke gate and the real run. Every value read off
+#    ${M1}/args.json. The ONLY intended difference from M1 is --distance mse.
+COMMON=(
+  --coco_split train2017 --latent_matching_baseline
+  --freeze_teacher --guidance_scale 7.0
+  --scoring_window 0.4,0.9 --delta_min 1 --delta_max 3
+  --distance mse --huber_c 0.0
+  --N_traj 4 --K_steps 8
+  --lr 1e-5 --projector_lr 1e-4 --weight_decay 0.0
+  --ema_decay 0.999 --grad_clip 1.0 --projector_grad_clip 5.0
+  --feature_encoder clip --reward_detach_projector
+  --gradient_checkpointing --height 512 --seed 0
+  --probe_every 0
+)
+
+# ─────────────────────────────────────────────────────────────────────────────
+# GATE 0 — 300-step smoke. The key assertion is that d is in the MEAN-FORM range: if the
+# --distance flag silently failed to take effect we would see d ~ 60-90 (the norm form) instead
+# of ~0.01-0.5, and the whole run would be a duplicate of M1 that nobody noticed for 12 hours.
+# ─────────────────────────────────────────────────────────────────────────────
+SMOKE_DIR=checkpoints/phaseR/${RUN}_smoke
+SMOKE_LOG=logs/m1_mse_smoke_${JOB}.log
+echo "[`date`] GATE 0: 300-step smoke -> ${SMOKE_LOG}"
+torchrun --standalone --nproc-per-node=4 train_self_distill.py \
+  "${COMMON[@]}" \
+  --num_steps 300 --num_warmup_steps 50 \
+  --output_dir "${SMOKE_DIR}" \
+  --save_every 100000 --log_every 10 \
+  --no_wandb 2>&1 | tee "${SMOKE_LOG}"
+
+python3 - "${SMOKE_LOG}" <<'PY'
+import re, sys, math
+raw = open(sys.argv[1], errors="replace").read().replace("\r", "\n")
+def series(k):
+    return [float(x) for x in re.findall(rf"{k}=([0-9eE.+-]+)", raw)
+            if re.fullmatch(r"[0-9eE.+-]+", x)]
+d, g = series(r"\bd"), series(r"\bg")
+assert d, "GATE 0 FAIL: no consistency-loss readings -- the loop did not run"
+assert all(math.isfinite(v) for v in d), f"GATE 0 FAIL: non-finite d: {d[:5]}"
+lo, hi = min(d), max(d)
+print(f"GATE 0: d in [{lo:.5g}, {hi:.5g}] over {len(d)} logs")
+assert hi < 5.0, (
+    f"GATE 0 FAIL: max d = {hi:.4g}, which is the SUM-over-dims (norm-form) magnitude. "
+    "--distance mse did not take effect; this run would silently duplicate M1.")
+assert lo > 1e-6, f"GATE 0 FAIL: d collapsed to ~0 ({lo:.3g}) -- suspect a broken target."
+if g:
+    print(f"GATE 0: pre-clip grad norm in [{min(g):.4g}, {max(g):.4g}] "
+          f"(norm-form ran at 200-800; expect a large drop -> clip should stop binding)")
+print("GATE 0 PASS: mean-reduced loss active, magnitudes sane")
+PY
+
+# GATE 1 — the args.json the trainer actually wrote must differ from M1's ONLY in `distance`.
+python3 - "${M1}/args.json" "${SMOKE_DIR}/args.json" <<'PY'
+import json, sys
+m1, new = (json.load(open(p)) for p in sys.argv[1:3])
+treatment = {"distance"}
+ignore = {"output_dir", "wandb_project", "wandb_run_name", "no_wandb",
+          "num_steps", "num_warmup_steps", "log_every", "save_every",
+          "sample_every", "sample_inference_steps", "sample_steps_list",
+          "log_image_samples", "save_train_images_every", "probe_every",
+          "compbench_prompts_dir", "dino_cache_path", "gpu",
+          "lambda_repa", "repa_layer"} | treatment
+diff = {k: {"M1": m1.get(k), "new": new.get(k)}
+        for k in set(m1) | set(new) if k not in ignore and m1.get(k) != new.get(k)}
+print("args.json diff vs M1 outside the treatment:", json.dumps(diff, indent=2) if diff else "NONE")
+assert not diff, f"GATE 1 FAIL: not an M1 control -- {len(diff)} unexpected difference(s): {diff}"
+assert new.get("distance") == "mse", f"GATE 1 FAIL: distance={new.get('distance')!r}, expected 'mse'"
+assert new.get("freeze_teacher") is True and new.get("guidance_scale") == 7.0, "the 91058 bug is back"
+assert not new.get("lambda_repa"), "GATE 1 FAIL: REPA should be OFF for this baseline"
+print("GATE 1 PASS: single treatment = --distance mse")
+PY
+rm -rf "${SMOKE_DIR}"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# THE RUN
+# ─────────────────────────────────────────────────────────────────────────────
+echo "[`date`] TRAINING 20k steps -> checkpoints/phaseR/${RUN}"
+torchrun --standalone --nproc-per-node=4 train_self_distill.py \
+  "${COMMON[@]}" \
+  --num_steps 20000 --num_warmup_steps 500 \
+  --output_dir checkpoints/phaseR/${RUN} \
+  --save_every 5000 --log_every 20 \
+  --log_image_samples --sample_every 500 --sample_steps_list 4,28 \
+  --wandb_project sd-phaseR-repa --wandb_run_name "${RUN}"
+echo "[`date`] TRAINING DONE -> checkpoints/phaseR/${RUN}"
+
+# ── evaluate on the SAME Phase-A pool M1's 69.7 / 0.7848 came from ────────────
+CK=checkpoints/phaseR/${RUN}/checkpoint_final.pt
+python3 -c "
+import torch
+ck = torch.load('$CK', map_location='cpu', weights_only=False)
+print('  ckpt keys:', sorted(ck.keys()), 'step:', ck.get('step'))
+assert 'model' in ck, 'no model key'"
+torchrun --standalone --nproc-per-node=4 exp0/phaseA_generate.py \
+  --label M1mse --checkpoint "$CK" --cfg 1 --steps_list 4,8,28 --per_category 80
+torchrun --standalone --nproc-per-node=4 exp0/phaseA_score.py --labels M1mse --steps_list 4,8,28
+python3 exp0/fidelity_cmmd.py --steps 4,8,28 --out phaseA/fidelity_report_m1mse.md
+echo "=== M1mse vs M1 — did mean-reduction help? ==="
+# --out is REQUIRED: repa_compare.py defaults to phaseA/repa_compare.json, so two runs that
+# both omit it silently overwrite each other's comparison. That happened once (this run
+# clobbered REPAv2's file, which had to be regenerated).
+python3 exp0/repa_compare.py --fidelity_md phaseA/fidelity_report_m1mse.md \
+  --labels M1mse,M1 --steps 4,8,28 --out phaseA/repa_compare_m1mse.json
+echo "[`date`] DONE"

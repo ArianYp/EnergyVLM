@@ -1,0 +1,7 @@
+CD_dinop_hard-rewX 0 136380
+CD_dinop_hard-rewX-avglast3 0 136381
+CD_dinop_hard-rewX 1 136382
+CD_dinop_hard-rewX-avglast3 1 136383
+CD_dinop_hard-rewX 2 136384
+CD_dinop_hard-rewX-avglast3 2 136385
+fidscore 136387

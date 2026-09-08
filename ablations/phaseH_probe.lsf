@@ -1,0 +1,29 @@
+#!/usr/bin/env bash
+#BSUB -J sd-phaseH-probe
+#BSUB -G s10396
+#BSUB -U conf_july_2026
+#BSUB -q training-parallel
+#BSUB -n 4
+#BSUB -W 4:00
+#BSUB -R "span[hosts=1]"
+#BSUB -R "select[mem>64000 && hname!='farm-gpu0504']"
+#BSUB -R "rusage[mem=64000]"
+#BSUB -M 64000
+#BSUB -gpu "num=1:mode=exclusive_process:gmodel=NVIDIAH200"
+#BSUB -cwd /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM
+#BSUB -o /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-phaseH-probe-%J.out
+#BSUB -e /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-phaseH-probe-%J.err
+# PHASE H GATE 2 — headroom is not learnability.
+# Gate 1 gave +0.0485 of noise-channel headroom, but selection is an ORACLE op (it sees the
+# reward). C1 had +0.0717 available and delivered +0.0004. Before training a refiner, ask
+# whether downstream reward is predictable from z at all. Needs a GPU only to regenerate the
+# exact noise vectors (cuda generator); the fitting is sklearn on CPU.
+set -euo pipefail
+export PATH="/software/cellgen/team361/ha11/envs/nichejepa/bin:$PATH"
+export HF_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/huggingface
+export XDG_CACHE_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/xdg
+export TOKENIZERS_PARALLELISM=false
+echo "[`date`] Phase H predictability probe | Host: $(hostname)"
+python3 phaseH/probe_noise_predictability.py \
+  --selection phaseH/noise_headroom/selection.json --N 4
+echo "[`date`] DONE"

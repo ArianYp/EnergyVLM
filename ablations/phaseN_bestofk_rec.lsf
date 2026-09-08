@@ -1,0 +1,98 @@
+#!/usr/bin/env bash
+#BSUB -J sd-phaseN-bok
+#BSUB -G s10396
+#BSUB -q training-parallel
+#BSUB -n 16
+#BSUB -W 48:00
+#BSUB -R "span[hosts=1]"
+# 256 GB: four ranks each hold an 11B clip-flant5-xxl in host memory before moving it to the GPU.
+#BSUB -R "select[mem>256000 && hname!='farm-gpu0504']"
+#BSUB -R "rusage[mem=256000]"
+#BSUB -M 256000
+#BSUB -gpu "num=4:mode=exclusive_process:gmem=78G"
+#BSUB -cwd /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM
+#BSUB -o /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-phaseN-bok-%J.out
+#BSUB -e /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-phaseN-bok-%J.err
+
+# Reference rows for a FULL-QUALITY generator, and for what inference-time selection buys on top.
+#
+#   1 sample      SD3.5-M at 28 steps, guidance 7, one random image per prompt
+#   best of 4     the same generator, 4 images, keep the VQAScore argmax
+#   best of 8     the same generator, 8 images, keep the VQAScore argmax
+#
+# All three come from ONE generation pass of 8 images per prompt: row 1 uses image 0, row 2 the best
+# of images 0-3, row 3 the best of all 8. So the three rows are nested and share their samples, and
+# any difference between them is selection alone rather than a different draw.
+#
+# The scorers read cand0.png, so each row gets its own tree of symlinks whose cand0 IS the chosen
+# image. Symlinks, not copies: 25k images would otherwise be written three times.
+set -euo pipefail
+
+export PATH="/software/cellgen/team361/ha11/envs/nichejepa/bin:$PATH"
+export HF_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/huggingface
+export TORCH_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/torch
+export XDG_CACHE_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/xdg
+export TOKENIZERS_PARALLELISM=false
+export NCCL_NVLS_ENABLE=0
+export WANDB_MODE=disabled
+source ~/.secrets/hf_token
+
+POOL=${BOK_POOL:-phaseFP/eval_pool_101203}
+STEPS=${BOK_STEPS:-40}
+CFG=${BOK_CFG:-4.5}
+KMAX=${BOK_K:-8}
+JOB=${LSB_JOBID:-local}
+ROOT="phaseN/bestofk_rec_${JOB}"
+[[ -e "$ROOT" ]] && { echo "Refusing to overwrite $ROOT" >&2; exit 2; }
+mkdir -p "$ROOT"
+
+echo "[$(date --iso-8601=seconds)] best-of-K reference | steps=$STEPS cfg=$CFG K=$KMAX"
+nvidia-smi --query-gpu=index,name,memory.total --format=csv
+
+for SET in compbench geneval2; do
+  echo "=== generating $KMAX images per prompt for $SET ==="
+  torchrun --standalone --nproc-per-node=4 phaseN/bestofk_recommended.py \
+    --out_root "$ROOT" --sets "$SET" --K "$KMAX" \
+    --height 1024 --steps "$STEPS" --cfg "$CFG" --pool "$POOL"
+done
+
+echo "=== VQAScore every candidate, then build the three trees ==="
+torchrun --standalone --nproc-per-node=4 phaseN/score_and_select.py \
+  --root "$ROOT" --pool "$POOL" --steps "$STEPS" --K "$KMAX"
+
+for ROW in bo1 bo4 bo8; do
+  echo "=== T2I-CompBench++ (one-sample variant) for $ROW ==="
+  for CAT in color shape texture spatial 3d_spatial numeracy non_spatial complex; do
+    D="$ROOT/compbench_scores/${ROW}_s${STEPS}_${CAT}"
+    python3 phaseC/compbench_eval.py stage \
+      --images "$ROOT/compbench/images/${ROW}" --prompts "$POOL/compbench_prompts.json" \
+      --steps "$STEPS" --categories "$CAT" --out "$D"
+    python3 phaseC/compbench_eval.py run --dir "$D" --skip_done
+    python3 phaseC/compbench_eval.py collect --dir "$D" --routing_split val
+  done
+  echo "=== GenEval2 Soft-TIFA for $ROW ==="
+  D="$ROOT/geneval2_scores/${ROW}_s${STEPS}"
+  python3 phaseC/geneval2_eval.py stage --images "$ROOT/geneval2/images/${ROW}" \
+    --pool "$POOL/geneval2_prompts.json" --steps "$STEPS" --out "$D"
+  python3 phaseC/geneval2_eval.py run --dir "$D" --method soft_tifa_gm --skip_done
+  python3 phaseC/geneval2_eval.py collect --dir "$D" --method soft_tifa_gm
+done
+
+python3 - <<'PY'
+import json, glob, os
+root = os.environ.get("ROOT_OVERRIDE") or sorted(glob.glob("phaseN/bestofk_*"))[-1]
+out = {}
+for row in ("bo1", "bo4", "bo8"):
+    cb = {}
+    for p in sorted(glob.glob(f"{root}/compbench_scores/{row}_s*/scores.json")):
+        d = json.load(open(p)); cb[d["evaluator"] + ":" + os.path.basename(os.path.dirname(p)).split("_")[-1]] = d["mean"]
+    g = glob.glob(f"{root}/geneval2_scores/{row}_s*/scores.json")
+    out[row] = {"compbench_mean": sum(cb.values()) / max(len(cb), 1),
+                "per_category": cb,
+                "geneval2": json.load(open(g[0]))["mean"] if g else None}
+    print(f"{row}: CompBench++ {out[row]['compbench_mean']:.4f}  GenEval2 {out[row]['geneval2']}")
+json.dump(out, open(f"{root}/summary.json", "w"), indent=2)
+print(f"wrote {root}/summary.json")
+PY
+
+echo "[$(date --iso-8601=seconds)] done -> $ROOT"

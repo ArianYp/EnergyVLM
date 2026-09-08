@@ -1,0 +1,71 @@
+#!/usr/bin/env bash
+#BSUB -J sd-phaseN-refsim-repa
+#BSUB -G s10396
+#BSUB -q training-parallel
+#BSUB -n 4
+#BSUB -W 6:00
+#BSUB -R "span[hosts=1]"
+#BSUB -R "select[mem>128000 && hname!='farm-gpu0504']"
+#BSUB -R "rusage[mem=128000]"
+#BSUB -M 128000
+# Analysis only: SD3.5-M pipeline + DINOv2-base + CLIP-L/14 + VAE is about 20 GB, and no 11B scorer
+# is loaded here, so 128 GB host RAM and gmem=40G are correct. The 256 GB in
+# phaseN_ref_similarity.lsf is needed only by its 4-rank clip-flant5-xxl stage.
+#BSUB -gpu "num=1:mode=exclusive_process:gmem=40G"
+#BSUB -cwd /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM
+#BSUB -o /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-phaseN-refsim-repa-%J.out
+#BSUB -e /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-phaseN-refsim-repa-%J.err
+
+# Adds the REPA arm to a completed reference-similarity run, reusing its images and its VQAScores.
+# The REPA representation is the denoiser's own hidden state at layer 8 -- the layer phaseR trained
+# with -- taken while the model processes the NOISED image, mean-pooled over image tokens. No
+# projector is involved: the phaseR checkpoint saved only model/ema_model/step, and the single
+# saved projector in the project is SD3.5-Large shaped (2432-d input) and cannot consume SD3.5-M
+# hidden states. Cross-space agreement is measured with CKA, which fits nothing.
+#
+#   bsub -w "done(<gen job>)" -env "all,REFSIM_SRC=phaseN/refsim_106512" < this
+set -euo pipefail
+
+export PATH="/software/cellgen/team361/ha11/envs/nichejepa/bin:$PATH"
+export HF_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/huggingface
+export TORCH_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/torch
+export XDG_CACHE_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/xdg
+export TOKENIZERS_PARALLELISM=false
+export WANDB_MODE=disabled
+source ~/.secrets/hf_token
+
+: "${REFSIM_SRC:?set REFSIM_SRC to a completed phaseN/refsim_<job> directory}"
+STEPS=${REFSIM_STEPS:-8}
+K=${REFSIM_K:-4}
+LAYER=${REFSIM_REPA_LAYER:-8}
+SIGMA=${REFSIM_REPA_SIGMA:-0.5}
+
+JOB=${LSB_JOBID:-local}
+ROOT="phaseN/refsim_repa_${JOB}"
+if [[ -e "$ROOT" ]]; then echo "Refusing to overwrite $ROOT" >&2; exit 2; fi
+mkdir -p "$ROOT"
+
+echo "[$(date --iso-8601=seconds)] Phase-N refsim + REPA | job=$JOB src=$REFSIM_SRC layer=$LAYER sigma=$SIGMA"
+nvidia-smi --query-gpu=index,name,memory.total --format=csv
+
+test -s "$REFSIM_SRC/pool_manifest.json"
+test -d "$REFSIM_SRC/scores"
+python3 -c "
+import glob, json
+n=sum(1 for f in glob.glob('$REFSIM_SRC/scores/scores_rank*.jsonl') for l in open(f) if l.strip())
+assert n > 400, f'only {n} scored captions in $REFSIM_SRC'
+print(f'reusing {n} scored captions')
+"
+cp "$REFSIM_SRC/pool_manifest.json" "$ROOT/"
+
+python3 phaseN/ref_similarity.py \
+  --manifest "$REFSIM_SRC/pool_manifest.json" \
+  --images_root "$REFSIM_SRC/gen/images/Teacher" \
+  --scores_dir "$REFSIM_SRC/scores" \
+  --steps "$STEPS" --K "$K" --variance 0.999 \
+  --repa --repa_layer "$LAYER" --repa_sigma "$SIGMA" \
+  --out "$ROOT/ref_similarity_repa.json" | tee "$ROOT/ref_similarity_repa.log"
+test -s "$ROOT/ref_similarity_repa.json"
+
+echo "[$(date --iso-8601=seconds)] complete: $ROOT"
+if command -v my-job-stats >/dev/null 2>&1; then my-job-stats -a -n -s; fi

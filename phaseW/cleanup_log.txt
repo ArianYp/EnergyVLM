@@ -1,0 +1,98 @@
+# cleanup 2026-09-03 16:14:54 -- retired checkpoint trees
+removed checkpoints/phaseT40k  3313 GB  378 files
+removed checkpoints/phaseN  1666 GB  373 files
+removed checkpoints/phaseS  231 GB  49 files
+removed checkpoints/phaseFP  223 GB  4224 files
+removed checkpoints/phaseW_smoke  157 GB  22 files
+removed checkpoints/phaseW_online  405 GB  74 files
+removed checkpoints/ablation  148 GB  1416 files
+removed checkpoints/phaseG  83 GB  19 files
+removed checkpoints/phaseC  74 GB  16 files
+removed checkpoints/method  74 GB  329 files
+removed checkpoints/phaseI  47 GB  906 files
+removed checkpoints/phaseR  37 GB  4 files
+removed checkpoints/production  19 GB  252 files
+removed checkpoints/distill_e2e_sd3_KL_1  10 GB  3 files
+# 2026-09-03 16:15:33 selective checkpoint cleanup (phaseW / phaseV / phaseT)
+# 2026-09-03 16:15:52 image-tree cleanup (eval images of retired arms, retired fidelity pools, _equiv)
+# 2026-09-03 16:16:27 selective cleanup done: phaseV -> 111 GB (finals of dinop/dino/pick/imgrwd x3 kept), phaseT -> 56 GB (T_B2/T_B4 finals kept), phaseW -> 387 GB (118k finals + 40k-55k + avg, S1 runs)
+# 2026-09-03 16:54:08 retired-campaign generated images (png/jpg only; json/md/py kept)
+removed 421 wandb local run dirs older than 2 days (all synced)
+# 2026-09-03 16:55:26 retired-campaign images, second pass (GNU find; png/jpg only; phaseFP/eval_pool_101203 kept)
+removed 67144 images under phaseC/eval
+removed 17600 images under phaseC/diversity
+removed 9000 images under phaseC/eval_scores
+removed 11200 images under phaseC/geneval2
+removed 80 images under phaseC/eval_smoke_unidet
+removed 163 images under phaseC/eyeball
+removed 16 images under phaseC/_tmp_endpoints
+removed 27408 images under phaseC/fidelity/images
+removed 38400 images under exp0/images
+removed 23040 images under exp0_5/images
+removed 26880 images under phaseA/images
+removed 29016 images under phaseI
+removed 600 images under phaseK
+removed 910 images under phaseG
+removed 2402 images under phaseX
+removed 128 images under phaseL
+removed 1260 images under phaseFP/edit_audit/
+removed 7496 images under phaseFP/eval_CorrectFixed_101257/
+removed 7496 images under phaseFP/eval_CorrectIndepNoise_101261/
+removed 7496 images under phaseFP/eval_CorrectRepa_101915/
+removed 7496 images under phaseFP/eval_CorrectRepaS2_101916/
+removed 7496 images under phaseFP/eval_CorrectRepaS3_101917/
+removed 7496 images under phaseFP/eval_CorrectS2_101378/
+removed 7496 images under phaseFP/eval_CorrectS3_101382/
+removed 7496 images under phaseFP/eval_CounterfactualFixed_101258/
+removed 7496 images under phaseFP/eval_CounterfactualS2_101379/
+removed 7496 images under phaseFP/eval_CounterfactualS3_101383/
+removed 7496 images under phaseFP/eval_InvertedFixed_101260/
+removed 7496 images under phaseFP/eval_InvertedS2_101381/
+removed 7496 images under phaseFP/eval_InvertedS3_101385/
+removed 7496 images under phaseFP/eval_KnobA025_101939/
+removed 7496 images under phaseFP/eval_KnobA4_101940/
+removed 7496 images under phaseFP/eval_KnobB10_101936/
+removed 7496 images under phaseFP/eval_KnobB300_101938/
+removed 7496 images under phaseFP/eval_KnobB30_101937/
+removed 7496 images under phaseFP/eval_KnobB30S2_102730/
+removed 7496 images under phaseFP/eval_KnobB30S3_102731/
+removed 7496 images under phaseFP/eval_M1Fixed_101217/
+removed 7496 images under phaseFP/eval_PSOBaseline_101386/
+removed 7496 images under phaseFP/eval_RandomFixed_101259/
+removed 7496 images under phaseFP/eval_RandomS2_101380/
+removed 7496 images under phaseFP/eval_RandomS3_101384/
+removed 1200 images under phaseFP/exact_headroom_101942/
+removed 80 images under phaseFP/smoke_101190/
+removed 600 images under phaseFP/student_bon_104035/
+removed 9592 images under phaseFP/teacher_ceiling_101377/
+removed 900 images under phaseFP/teacher_ceiling_101493/
+second pass removed 455019 images in total
+removed images from 687 eval image trees, 1095673 files (scores/alignment kept)
+removed fidelity pool T_CD_clip_hard_s0 (5000 files)
+removed fidelity pool T_CD_clip_hard_s1 (5000 files)
+removed fidelity pool T_CD_clip_hard_s2 (5000 files)
+removed fidelity pool V_CD_dinocls_hard_s0 (5000 files)
+removed fidelity pool V_CD_dinocls_hard_s1 (5000 files)
+removed fidelity pool V_CD_dinocls_hard_s2 (5000 files)
+removed fidelity pool V_CD_imgrwd_hard_s0 (5000 files)
+removed fidelity pool V_CD_imgrwd_hard_s1 (5000 files)
+removed fidelity pool V_CD_imgrwd_hard_s2 (5000 files)
+removed fidelity pool V_CD_pick_hard_s0 (5000 files)
+removed fidelity pool V_CD_pick_hard_s1 (5000 files)
+removed fidelity pool V_CD_pick_hard_s2 (5000 files)
+removed fidelity pool W_B2_118k_s0 (5000 files)
+removed fidelity pool W_B4_118k_s0 (5000 files)
+removed fidelity pool W_CD_dinop_hard_118k_s0 (5000 files)
+fidelity pools left: REF_base_s28 REF_base_s4 T_B2_s0 T_B2_s1 T_B2_s2 T_B4_s0 T_B4_s1 T_B4_s2 V_CD_dinop_hard_s0 V_CD_dinop_hard_s1 V_CD_dinop_hard_s2 W_B2_118k-avglast5_s0 W_B4_118k-avglast5_s0 W_CD_dinop_hard_118k-avglast5_s0 
+removed phaseW/_equiv 175 GB 533 files
+# cleanup pass 2026-09-08T04:25:15+01:00: quota 229.9/230.9 TB, 38.3M/40.0M files
+removed phaseW/_equiv/out_s4b (39 files; equivalence/smoke outputs, results recorded in docs/equivalence_check.txt and logs)
+removed phaseW/_equiv/out_s4e (21 files; equivalence/smoke outputs, results recorded in docs/equivalence_check.txt and logs)
+removed phaseW/_equiv/out_s4f (68 files; equivalence/smoke outputs, results recorded in docs/equivalence_check.txt and logs)
+removed checkpoints/phaseW_smoke (6 files; equivalence/smoke outputs, results recorded in docs/equivalence_check.txt and logs)
+removed 66 step checkpoints (2k/4k) of non-reference 3k arms; kept argmax + random steps and every final/avg
+removed 249444 generated PNGs from 78 completed 3k-branch eval dirs (phaseN/eval_S4_*; alignment.json, per-prompt scores and manifests kept)
+removed phaseN/eval_S4_CD_latent_hard-avglast3_s1_135653 (incomplete eval from the CUDA-busy failure, resubmitted as 135665)
+removed 23400 scorer working-copy images (compbench_scores/*/samples, labels; geneval2_scores) from 78 completed 3k-branch eval dirs; scores.json kept
+removed 187044 dangling symlinks (scorer sample links to the deleted images) from 3k-branch eval dirs
+removed 63 early 118k step checkpoints (kept per run: the last-five averaging members, final, avg_last5; same layout as the seed-0 runs)

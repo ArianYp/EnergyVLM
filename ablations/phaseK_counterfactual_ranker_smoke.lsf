@@ -1,0 +1,43 @@
+#!/usr/bin/env bash
+#BSUB -J sd-phaseK-cf-ranker-smoke
+#BSUB -G s10396
+#BSUB -q training-parallel
+#BSUB -n 4
+#BSUB -W 1:00
+#BSUB -R "span[hosts=1]"
+#BSUB -R "select[mem>32000 && hname!='farm-gpu0504']"
+#BSUB -R "rusage[mem=32000]"
+#BSUB -M 32000
+#BSUB -gpu "num=1:mode=exclusive_process"
+#BSUB -cwd /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM
+#BSUB -o /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-phaseK-cf-ranker-smoke-%J.out
+#BSUB -e /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-phaseK-cf-ranker-smoke-%J.err
+
+set -euo pipefail
+export PATH="/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/venv_mmdit/bin:/software/cellgen/team361/ha11/envs/nichejepa/bin:$PATH"
+export HF_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/huggingface
+export TORCH_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/torch
+export XDG_CACHE_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/xdg
+export TOKENIZERS_PARALLELISM=false
+export WANDB_MODE=online
+source ~/.secrets/hf_token
+
+: "${PHASEK_ORACLE_JOB:?provide completed Phase-K oracle smoke job}"
+: "${PHASEK_GROUP:?provide matching W&B group}"
+JOB=${LSB_JOBID:-local}
+ORACLE="phaseK/oracle/phaseK_counterfactual_smoke_${PHASEK_ORACLE_JOB}"
+OUT="phaseK/runs/phaseK_counterfactual_smoke_${JOB}"
+
+python phaseK/test_counterfactual.py
+python phaseK/train_counterfactual_ranker.py \
+  --base_token_dir phaseJ/fusion_cache/full_99742 \
+  --counterfactual_cache "$ORACLE/cache" --output_dir "$OUT" \
+  --depth 1 --heads 4 --dim_head 32 --width 64 \
+  --epochs 3 --patience 2 --batch_size 4 --seeds 13 \
+  --wandb_group "$PHASEK_GROUP" \
+  --wandb_run_name "phaseK_cf_ranker_smoke_${JOB}"
+
+test -s "$OUT/counterfactual_rankers.pt"
+test -s "$OUT/ranking_results.json"
+test -s "$OUT/counterfactual_scores.npz"
+echo "[$(date --iso-8601=seconds)] Phase-K ranker smoke complete: $OUT"

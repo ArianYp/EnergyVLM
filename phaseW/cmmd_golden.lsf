@@ -1,0 +1,51 @@
+#!/usr/bin/env bash
+#BSUB -J sd-W-cmmd-golden
+#BSUB -G s10396
+#BSUB -q training-parallel
+#BSUB -n 4
+#BSUB -W 1:00
+#BSUB -R "span[hosts=1]"
+#BSUB -R "select[mem>64000 && hname!='farm-gpu0504']"
+#BSUB -R "rusage[mem=64000]"
+#BSUB -M 64000
+#BSUB -gpu "num=1:mode=exclusive_process:gmem=40G"
+#BSUB -cwd /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM
+#BSUB -o /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-W-cmmd-golden-%J.out
+#BSUB -e /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-W-cmmd-golden-%J.err
+# Golden test: phaseW/cmmd_ref.py against the published PyTorch port of CMMD (sayakpaul/cmmd-pytorch,
+# itself validated against the JAX reference) on a frozen set: the first 200 sorted COCO val2017
+# photos vs the first 200 sorted images of one generated pool. The legacy implementation is run on
+# the same files so the size of the discrepancy it introduced is on record.
+set -uo pipefail
+export PATH="/software/cellgen/team361/ha11/envs/nichejepa/bin:$PATH"
+export HF_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/huggingface
+export TOKENIZERS_PARALLELISM=false
+source ~/.secrets/hf_token
+REPO=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM
+G=$REPO/phaseW/_cmmd_golden
+rm -rf "$G"; mkdir -p "$G/ref" "$G/gen"
+ls /lustre/scratch126/cellgen/lotfollahi/ha11/COCO/val2017/*.jpg | sort | head -200 | while read f; do ln -s "$f" "$G/ref/$(basename $f)"; done
+ls -d phaseT/fidelity/images/T_B4_s0/p*/s4/cand0.png | sort | head -200 | while read f; do p=$(basename $(dirname $(dirname $f))); ln -s "$REPO/$f" "$G/gen/$p.png"; done
+echo "ref: $(ls $G/ref | wc -l) files, gen: $(ls $G/gen | wc -l) files"
+
+[ -d third_party/cmmd-pytorch ] || git clone -q https://github.com/sayakpaul/cmmd-pytorch third_party/cmmd-pytorch
+echo "port commit: $(git -C third_party/cmmd-pytorch rev-parse HEAD)"
+echo "=== reference port ==="
+( cd third_party/cmmd-pytorch && python3 main.py "$G/ref" "$G/gen" --batch_size=32 --max_count=200 ) 2>&1 | grep -vE "it/s|s/it" | tail -5
+
+echo "=== ours (phaseW/cmmd_ref.py) and legacy (exp0/fidelity_cmmd.py) on the same files ==="
+G="$G" python3 - <<'PY'
+import os, sys, glob, torch
+sys.path.insert(0, "phaseW"); sys.path.insert(0, "exp0")
+import cmmd_ref, fidelity_cmmd
+G = os.environ["G"]; dev = "cuda"
+ref = sorted(glob.glob(f"{G}/ref/*")); gen = sorted(glob.glob(f"{G}/gen/*"))
+m = cmmd_ref.load_clip(dev)
+ours = cmmd_ref.cmmd(cmmd_ref.clip_embed(ref, m, dev).to(dev), cmmd_ref.clip_embed(gen, m, dev).to(dev))
+print(f"OURS_CMMD {ours:.6f}")
+from transformers import CLIPImageProcessor, CLIPVisionModelWithProjection
+lm = CLIPVisionModelWithProjection.from_pretrained("openai/clip-vit-large-patch14", torch_dtype=torch.float16).to(dev).eval()
+lp = CLIPImageProcessor.from_pretrained("openai/clip-vit-large-patch14")
+leg = fidelity_cmmd.cmmd(fidelity_cmmd.clip_embed(ref, lm, lp, dev).to(dev), fidelity_cmmd.clip_embed(gen, lm, lp, dev).to(dev))
+print(f"LEGACY_RBFMMD {leg:.6f}   (unnormalised CLIP-L/14@224; not CMMD)")
+PY
