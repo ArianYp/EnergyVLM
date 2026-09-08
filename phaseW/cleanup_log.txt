@@ -96,3 +96,6 @@ removed phaseN/eval_S4_CD_latent_hard-avglast3_s1_135653 (incomplete eval from t
 removed 23400 scorer working-copy images (compbench_scores/*/samples, labels; geneval2_scores) from 78 completed 3k-branch eval dirs; scores.json kept
 removed 187044 dangling symlinks (scorer sample links to the deleted images) from 3k-branch eval dirs
 removed 63 early 118k step checkpoints (kept per run: the last-five averaging members, final, avg_last5; same layout as the seed-0 runs)
+[2026-09-08T09:25:17+01:00] removed 60 fidelity image pools phaseT/fidelity/images/S4_* (151G, ~300000 PNG): every pool is scored in phaseW/fidelity_s4_report.md (copy fidelity_s4_report_20260908.md; release docs/selection_rule_fidelity.md); pools are regenerable from the checkpoints (deterministic seeds, ~10 GPU-min each)
+[2026-09-08T10:04:31+01:00] removed phaseW/_equiv/out_s4h (84G): round-4 equivalence outputs; record in release docs/equivalence_check.txt and logs/lsf-sd-W-equiv-s4h-136444.out
+[2026-09-08T17:34:06+01:00] removed phaseW/_equiv/out_s4i (74G): round-5 equivalence outputs; record in release docs/equivalence_check.txt and logs/lsf-sd-W-equiv-s4i-137045.out
