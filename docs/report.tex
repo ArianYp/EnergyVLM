@@ -14,6 +14,7 @@
 \usepackage[hidelinks]{hyperref}
 
 \DeclareMathOperator*{\argmax}{arg\,max}
+\newcommand{\fitbox}[1]{\resizebox{\ifdim\width>\textwidth\textwidth\else\width\fi}{!}{#1}}
 \DeclareMathOperator{\Dec}{Dec}
 \DeclareMathOperator{\sg}{sg}
 
@@ -44,7 +45,7 @@ Table~\ref{tab:summary} gives the headline results. All deltas are paired agains
 \centering
 \caption{Headline results. Alignment deltas are against the random-selection student. The 3k rows use three training seeds; intervals are 95\% hierarchical bootstrap over seeds and prompts. The 118k rows use three training seeds and weight-averaged checkpoints, with per-prompt paired tests pooled over seeds; the VQAScore arm at 118k is one seed. CMMD is the seed mean.}
 \label{tab:summary}
-\resizebox{\textwidth}{!}{%
+\fitbox{%
 \begin{tabular}{l l c c c}
 \toprule
 Setting & Scorer & CompBench $\Delta$ & GenEval2 $\Delta$ ($\times100$) & CMMD $\downarrow$ \\
@@ -82,6 +83,7 @@ The network is conditioned on the timestep $t=1000\,\sigma$. The grid is built b
 \centering
 \caption{$\sigma$ grids. The 4-step grid is not a subset of the 8-step grid; only the endpoints coincide. It is a subset of the 28-step grid (every ninth state).}
 \label{tab:grids}
+\fitbox{%
 \begin{tabular}{l l}
 \toprule
 Grid & $\sigma$ values \\
@@ -90,7 +92,7 @@ Grid & $\sigma$ values \\
 4 steps (student, inference) & $1,\;0.858,\;0.602,\;0.009,\;0$ \\
 28 steps (teacher reference) & $1$ down to $0$, same shift, 28 intervals \\
 \bottomrule
-\end{tabular}
+\end{tabular}}
 \end{table}
 
 \subsection{Conditioning}
@@ -117,7 +119,7 @@ All evaluation uses one sealed pool built once with a fixed seed (Table~\ref{tab
 \centering
 \caption{Evaluation pools. Every arm and every seed is evaluated on exactly these prompts.}
 \label{tab:evalpool}
-\resizebox{\textwidth}{!}{%
+\fitbox{%
 \begin{tabular}{l r l}
 \toprule
 Pool & Prompts & Source \\
@@ -177,7 +179,7 @@ Table~\ref{tab:headroom} measures selection quality offline on the 3k pool. The 
 \centering
 \caption{Offline selection quality on the 3k pool, 12,000 candidates. Headroom is measured against the VQAScore best-of-four oracle, so the caption-reading scorers have an advantage here that is partly shared with the ground truth.}
 \label{tab:headroom}
-\resizebox{\textwidth}{!}{%
+\fitbox{%
 \begin{tabular}{l l c c}
 \toprule
 Scorer & Needs & VQAScore headroom recovered & Top-1 agrees with oracle \\
@@ -233,7 +235,7 @@ Table~\ref{tab:hyper} lists both training configurations. Each optimiser step pr
 \centering
 \caption{Training configurations. Both use the same frozen trainer code.}
 \label{tab:hyper}
-\resizebox{\textwidth}{!}{%
+\fitbox{%
 \begin{tabular}{l l l}
 \toprule
  & 3k configuration & 118k configuration \\
@@ -286,6 +288,7 @@ where the arms differ in four things and nothing else. Figure~\ref{fig:pipeline}
 
 \begin{figure}[H]
 \centering
+\fitbox{%
 \begin{tikzpicture}[
   node distance=5mm and 7mm, >=Latex, font=\footnotesize,
   box/.style={draw, rounded corners=2pt, align=center, inner sep=4pt, minimum height=9mm},
@@ -305,7 +308,7 @@ where the arms differ in four things and nothing else. Figure~\ref{fig:pipeline}
 \draw[->] (score) -- (w); \draw[->] (w) -- (est); \draw[->] (est) -- (loss); \draw[->] (loss) -- (step);
 \draw[->, dashed] (rew) -- (loss);
 \draw[->] (cap.north) -- ++(0,5mm) -| node[pos=0.25, above, font=\scriptsize]{$x^{\mathrm{ref}}$ enters only as $u^{\mathrm{pat}}(x^{\mathrm{ref}})$} (score.north);
-\end{tikzpicture}
+\end{tikzpicture}}
 \caption{One training update. Every arm follows this flow; the four numbered blocks are the only places where arms differ (Table~\ref{tab:arms}). The reference photograph enters only through its DINOv2 embedding, in the score and, in the reward arms, in the reward.}
 \label{fig:pipeline}
 \end{figure}
@@ -341,6 +344,7 @@ where the arms differ in four things and nothing else. Figure~\ref{fig:pipeline}
 
 \begin{figure}[H]
 \centering
+\fitbox{%
 \begin{tikzpicture}[node distance=5mm and 8mm, >=Latex, font=\footnotesize,
   box/.style={draw, rounded corners=2pt, align=center, inner sep=4pt, minimum height=8mm},
   opt/.style={draw, dashed, rounded corners=2pt, align=center, inner sep=4pt, fill=black!2}]
@@ -354,7 +358,7 @@ where the arms differ in four things and nothing else. Figure~\ref{fig:pipeline}
 \draw[->] (r.north) -- ++(0,4mm) -| node[pos=0.25, above, font=\scriptsize]{gradient through $P$ into $\theta$} (xh.north);
 \draw[->] (xh) -- (dec); \draw[->] (dec) -- (mon); \draw[->] (mon) -- (ref);
 \draw[->, dashed] (ref.north) |- (P.east);
-\end{tikzpicture}
+\end{tikzpicture}}
 \caption{The reward arms of Section~\ref{sec:reward}. Solid: the reward path used on every update. Below: the hacking monitor that decodes recent predictions and scores them with the RGB scorer, and, in the refreshed arm, the projector update it feeds.}
 \label{fig:rewardloop}
 \end{figure}
@@ -397,7 +401,7 @@ Algorithms~\ref{alg:cache} to~\ref{alg:reward} give every variant in executable 
     \State $s\gets k-\Delta_k$;\quad $\hat{x}_0^{(k)}\gets z_s-\sigma_s\,v_\theta(z_s,\sigma_s,c)$ \Comment{student, one conditional pass}
     \State $\tilde{x}_0^{(k)}\gets z_k-\sigma_k\,(z_{k+1}-z_k)/(\sigma_{k+1}-\sigma_k)$ \Comment{teacher target, stop-gradient}
   \EndFor
-  \State $\ell^{(j)}\gets\frac{1}{|\mathcal{K}|}\sum_{k}\big[\sqrt{\lVert\hat{x}_0^{(k)}-\tilde{x}_0^{(k)}\rVert^2+c_h^2}-c_h\big]$
+  \State $\ell^{(j)}\gets\frac{1}{|\mathcal{K}|}\sum_{k}\big[\sqrt{\lVert\hat{x}_0^{(k)}-\tilde{x}_0^{(k)}\rVert^2+c_h^2}-c_h\big]$ \Comment{Equation~\ref{eq:cdloss}}
   \If{reward arm} $\ell^{(j)}\gets\ell^{(j)}-\lambda\,\textsc{Reward}(\hat{x}_0^{(k)}\text{ for the two least-noisy }s)$ \Comment{Algorithm~\ref{alg:reward}} \EndIf
   \State $g\gets g+\omega_j\,\nabla_\theta\ell^{(j)}$ \Comment{back-propagated per candidate; peak memory of one}
 \EndFor
@@ -480,6 +484,7 @@ Table~\ref{tab:arms} lists every arm as its choice of weights, estimator, score 
 \caption{The arms of this document. Cost is teacher rollouts and student passes per caption per update relative to the random arm (1 rollout, $K_w=5$ student passes). Where an arm appears is given by section.}
 \label{tab:arms}
 \footnotesize\setlength{\tabcolsep}{3pt}
+\fitbox{%
 \begin{tabular}{>{\raggedright\arraybackslash}p{2.9cm} >{\raggedright\arraybackslash}p{2.3cm} >{\raggedright\arraybackslash}p{1.8cm} >{\raggedright\arraybackslash}p{2.4cm} >{\raggedright\arraybackslash}p{2.3cm} >{\centering\arraybackslash}p{0.8cm} >{\raggedright\arraybackslash}p{2.0cm}}
 \toprule
 Arm (name in tables) & weights $w$ & estimator & score $S$ & reward & cost & where \\
@@ -506,7 +511,7 @@ argmax + projector reward, refreshed & one-hot on $\argmax S$ & -- & RGB DINO pa
 + real-photograph term & one-hot & -- & RGB DINO patch & pseudo-Huber to the photo latent & 1 & Section~\ref{sec:ablations} \\
 evolving (EMA) teacher & one-hot on online $S$ & -- & RGB DINO patch, online & -- & 4 (+decode) & Section~\ref{sec:ema} \\
 \bottomrule
-\end{tabular}
+\end{tabular}}
 \end{table}
 
 \subsection{The networks}
@@ -516,6 +521,7 @@ Table~\ref{tab:networks} lists the networks involved, their sizes and roles, and
 \caption{Every network in the pipeline, what it does, and whether it trains.}
 \label{tab:networks}
 \footnotesize\setlength{\tabcolsep}{4pt}
+\fitbox{%
 \begin{tabular}{>{\raggedright\arraybackslash}p{2.0cm} >{\raggedright\arraybackslash}p{4.9cm} >{\raggedright\arraybackslash}p{4.3cm} >{\raggedright\arraybackslash}p{3.8cm}}
 \toprule
 Network & Architecture and size & Role & Trained? \\
@@ -527,7 +533,7 @@ VAE & SD3.5 VAE & decode candidates for scoring; decode for evaluation & no \\
 RGB scorer & DINOv2-B, 86M; patch-mean, CLS dropped, L2-normalised & $S_j$ (offline) & no \\
 Latent projector $P$ & 5-stage conv encoder (64, 128, 256, 512, 512; GN, SiLU), global mean pool, MLP 512--1024--768, L2-normalised; 6.8M & $\hat S_j$ (offline) and the reward $r_c$ & once, offline, on 22k held-out captions (5 min); refreshed during training in one reward arm \\
 \bottomrule
-\end{tabular}
+\end{tabular}}
 \end{table}
 
 \subsection{The projector's three settings, in the order they were tried}
@@ -538,6 +544,7 @@ The latent projector $P$ appears in three settings that build on each other; Tab
 \caption{The three uses of the latent projector $P$. In every setting $P$ is first trained once, offline, on 22,000 held-out captions (five minutes); the settings differ in what it scores and whether it moves afterwards.}
 \label{tab:projector_uses}
 \footnotesize\setlength{\tabcolsep}{4pt}
+\fitbox{%
 \begin{tabular}{>{\raggedright\arraybackslash}p{0.6cm} >{\raggedright\arraybackslash}p{2.9cm} >{\raggedright\arraybackslash}p{3.3cm} >{\raggedright\arraybackslash}p{2.8cm} >{\raggedright\arraybackslash}p{4.2cm}}
 \toprule
  & setting & what $P$ scores, when & arms & outcome \\
@@ -550,11 +557,11 @@ The latent projector $P$ appears in three settings that build on each other; Tab
 \addlinespace
 3 & \textbf{in-loop reward, refreshed} (Section~\ref{sec:reward}) & as 2, and every 100 updates $P$ takes four steps toward the RGB scorer on 32 decoded recent predictions, with replay of teacher candidates & argmax + projector reward, refreshed & reward rises 0.04; RGB score flat; agreement with the RGB scorer 0.41 vs 0.36 frozen; CompBench $+0.000\pm0.008$ vs argmax \\
 \bottomrule
-\end{tabular}
+\end{tabular}}
 \end{table}
 
 \subsection{How to read the comparisons}
-Figure~\ref{fig:allarms} places every 3k-pool arm on one axis, Figure~\ref{fig:contrasts} shows each arm's seed-paired difference to argmax, Figure~\ref{fig:rawavg} shows what checkpoint averaging does to each arm, and Figure~\ref{fig:heatmap} shows where in CompBench the differences sit. Each results table in Sections~\ref{sec:main} to~\ref{sec:selrule} changes one row of Table~\ref{tab:arms} at a time.
+Figures~\ref{fig:allarms} and~\ref{fig:allarms2} place every 3k-pool arm on one axis, Figure~\ref{fig:contrasts} shows each arm's seed-paired difference to argmax, Figure~\ref{fig:rawavg} shows what checkpoint averaging does to each arm, and Figure~\ref{fig:heatmap} shows where in CompBench the differences sit. Each results table in Sections~\ref{sec:main} to~\ref{sec:selrule} changes one row of Table~\ref{tab:arms} at a time; Section~\ref{sec:pseudocode} gives the pseudocode, Section~\ref{sec:selstats} the statistics used for every contrast, and Section~\ref{sec:qual} qualitative examples.
 
 \begin{figure}[p]
 \centering
@@ -626,7 +633,7 @@ Table~\ref{tab:main3k} is the main result. Every arm is three seeds on the same 
 \centering
 \caption{3k pool, 6,000 updates, three seeds. Absolute scores are seed means. Deltas are against the random-selection student with 95\% hierarchical bootstrap intervals. Bold intervals exclude zero.}
 \label{tab:main3k}
-\resizebox{\textwidth}{!}{%
+\fitbox{%
 \begin{tabular}{l l c c c c c}
 \toprule
 Scorer & Needs & CompBench & CompBench $\Delta$ & GenEval2 & GenEval2 $\Delta$ ($\times100$) & COCO VQAScore \\
@@ -660,6 +667,7 @@ Table~\ref{tab:fid3k} shows that scored selection does not cost fidelity. Every 
 \centering
 \caption{Fidelity on 5,000 COCO \texttt{val2017} captions, 4 steps, $w=1$, seed means over three runs. CMMD bootstrap intervals are about $\pm0.01$.}
 \label{tab:fid3k}
+\fitbox{%
 \begin{tabular}{l c c c c}
 \toprule
 Arm & FID $\downarrow$ & CMMD $\downarrow$ & Precision $\uparrow$ & Recall $\uparrow$ \\
@@ -675,17 +683,17 @@ PickScore & 31.02 & 0.907 & 0.444 & 0.049 \\
 Teacher, 28 steps, $w=7$ & 29.21 & 0.640 & 0.549 & 0.156 \\
 Base model, 4 steps, $w=7$ & 94.48 & 2.150 & 0.178 & 0.006 \\
 \bottomrule
-\end{tabular}
+\end{tabular}}
 \end{table}
 
 \subsection{Absolute scores per category}
-Tables~\ref{tab:geneval2_skills} to~\ref{tab:compbench_categories} give per-category absolute scores for the teacher, the base model and the four main arms. The largest per-skill gain of the DINOv2 patch scorer on GenEval2 is on \emph{position} (51.4 against 45.9), consistent with mean-pooled patches carrying layout, and its advantage grows with prompt complexity.
+Tables~\ref{tab:geneval2_skills}, \ref{tab:geneval2_complexity} and~\ref{tab:compbench_categories} give per-category absolute scores for the teacher, the base model and the four main arms. The largest per-skill gain of the DINOv2 patch scorer on GenEval2 is on \emph{position} (51.4 against 45.9), consistent with mean-pooled patches carrying layout, and its advantage grows with prompt complexity.
 
 \begin{table}[ht]
 \centering
 \caption{GenEval2 (Soft-TIFA, Qwen3-VL judge), $\times 100$, on the sealed 800-prompt pool. \emph{Overall} is the official score, the mean over prompts of the geometric mean of a prompt's atom scores ($\pm$ standard deviation over training seeds). Skill columns are the mean score of the atoms tagged with that skill. \emph{Atom mean} is the arithmetic mean over all atoms. \emph{Collapsed} is the share of prompts whose geometric mean falls below 0.05. Teacher and base rows are single deterministic runs. Bold marks the best 4-step distilled arm in each column.}
 \label{tab:geneval2_skills}
-\resizebox{\textwidth}{!}{%
+\fitbox{%
 \begin{tabular}{l c c c ccccc c c}
 \toprule
 Model & Steps / CFG & Seeds & Overall & Object & Count & Attribute & Position & Verb & Atom mean & Collapsed (\%) \\
@@ -706,6 +714,7 @@ Scored CD, VQAScore & 4 / 1 & 3 & \textbf{23.06 $\pm$ 0.15} & \textbf{84.3} & \t
 \centering
 \caption{GenEval2 by prompt complexity: mean prompt score ($\times 100$) in each atom-count bucket, 100 prompts per bucket, averaged over training seeds where applicable. Bold marks the best 4-step distilled arm in each column.}
 \label{tab:geneval2_complexity}
+\fitbox{%
 \begin{tabular}{l cccccccc}
 \toprule
 Model & 3 & 4 & 5 & 6 & 7 & 8 & 9 & 10 \\
@@ -719,14 +728,14 @@ Scored CD, DINO CLS & 43.2 & 34.2 & 24.4 & 22.2 & 15.5 & 13.7 & 13.0 & 7.5 \\
 Scored CD, DINO patches & 41.6 & \textbf{35.6} & \textbf{25.4} & \textbf{24.7} & \textbf{17.7} & \textbf{15.3} & \textbf{14.3} & 8.6 \\
 Scored CD, VQAScore & \textbf{48.4} & 33.4 & 24.6 & 24.1 & 17.3 & 14.0 & 13.2 & \textbf{9.4} \\
 \bottomrule
-\end{tabular}
+\end{tabular}}
 \end{table}
 
 \begin{table}[ht]
 \centering
 \caption{T2I-CompBench on the sealed 2{,}398-prompt pool, official scorers, one image per prompt. \emph{Mean} is the unweighted mean of the eight categories ($\pm$ standard deviation over training seeds); category columns are averaged over seeds. Bold marks the best 4-step distilled arm in each column.}
 \label{tab:compbench_categories}
-\resizebox{\textwidth}{!}{%
+\fitbox{%
 \begin{tabular}{l c cccccccc}
 \toprule
 Model & Mean & Color & Shape & Texture & Spatial & 3D-spatial & Numeracy & Non-spatial & Complex \\
@@ -753,7 +762,7 @@ Table~\ref{tab:scale} gives the 118k result. Every arm is three training seeds o
 \centering
 \caption{118k captions, 56,974 updates on 4 GPUs, three training seeds, uniform average of the last five checkpoints. Per-seed scores and seed means; deltas are per-prompt paired tests against the random-selection student, pooled over seeds. The VQAScore arm has one seed and is paired against seed 0 of the baseline.}
 \label{tab:scale}
-\resizebox{\textwidth}{!}{%
+\fitbox{%
 \begin{tabular}{l c c c c c c}
 \toprule
 Scorer & CompBench (s0 / s1 / s2) & mean & $\Delta$ ($p$) & GenEval2 (s0 / s1 / s2) & mean & $\Delta$ ($p$) \\
@@ -774,6 +783,7 @@ T2I-CompBench's official protocol scores ten images per prompt. Table~\ref{tab:o
 \centering
 \caption{Official ten-images-per-prompt T2I-CompBench on the 118k weight-averaged models, per training seed. Paired deltas against the random-selection student.}
 \label{tab:official}
+\fitbox{%
 \begin{tabular}{l c c c c}
 \toprule
 Scorer & seed 0 & seed 1 & seed 2 & mean, $\Delta$ ($p$) \\
@@ -782,14 +792,14 @@ random (baseline) & 0.4704 & 0.4723 & 0.4729 & 0.4719 \\
 DINOv2 patches & 0.4878 & 0.4838 & 0.4832 & 0.4850, $+0.0131$ ($2\times10^{-41}$) \\
 VQAScore & 0.4835 & -- & -- & $+0.0131$ ($3\times10^{-18}$) \\
 \bottomrule
-\end{tabular}
+\end{tabular}}
 \end{table}
 
 \begin{table}[ht]
 \centering
 \caption{CompBench per category at 118k, three-seed means of the weight-averaged students, under the one-image and the official ten-image protocol.}
 \label{tab:scale_categories}
-\resizebox{\textwidth}{!}{%
+\fitbox{%
 \begin{tabular}{l ccc ccc}
 \toprule
  & \multicolumn{3}{c}{one image per prompt} & \multicolumn{3}{c}{ten images per prompt (official)} \\
@@ -832,7 +842,7 @@ Table~\ref{tab:fid118k} gives fidelity per seed. The 0.05 to 0.06 CMMD advantage
 \centering
 \caption{Fidelity at 118k, weight-averaged students, 5,000 COCO \texttt{val2017} captions, 4 steps, $w=1$, per training seed (s0 / s1 / s2).}
 \label{tab:fid118k}
-\resizebox{\textwidth}{!}{%
+\fitbox{%
 \begin{tabular}{l c c c c}
 \toprule
 Arm & FID $\downarrow$ & CMMD $\downarrow$ & Precision $\uparrow$ & Recall $\uparrow$ \\
@@ -854,7 +864,7 @@ Table~\ref{tab:curve} and Figure~\ref{fig:curve} evaluate every saved checkpoint
 \centering
 \caption{CompBench of every saved checkpoint of the seed-0 118k runs. The last row is the weight average of the last five checkpoints.}
 \label{tab:curve}
-\resizebox{\textwidth}{!}{%
+\fitbox{%
 \begin{tabular}{r r c c c c c}
 \toprule
 Step & Caption visits & random & DINOv2 patches & VQAScore & patch $\Delta$ & VQAScore $\Delta$ \\
@@ -884,7 +894,7 @@ Every update above processes four captions, one per GPU. To test whether the osc
 \centering
 \caption{Optimizer batch size at 118k, seed 0. Batch 16 uses gradient accumulation over four captions per GPU at the same data budget. CompBench / GenEval2$\times100$.}
 \label{tab:batch}
-\resizebox{\textwidth}{!}{%
+\fitbox{%
 \begin{tabular}{l c c c c}
 \toprule
 Batch (updates) & random, raw final & random, averaged & DINOv2 patches, raw final & DINOv2 patches, averaged \\
@@ -918,7 +928,7 @@ The temperature is calibrated on the scores themselves. Figure~\ref{fig:entropy}
 \centering
 \caption{DINOv2 patch score statistics per candidate cache ($N=4$): within-caption standard deviation, mean range, mean margin between the two best candidates, and the mean normalised entropy and median entropy count $N_H$ of the Boltzmann weights at the two temperatures used in training. On the 3k cache the median Kish count $N_K$ is 2.2 at $T=0.04$ and 3.0 at $T=0.08$.}
 \label{tab:scorestats}
-\resizebox{\textwidth}{!}{%
+\fitbox{%
 \begin{tabular}{l r c c c cc cc}
 \toprule
  & & & & & \multicolumn{2}{c}{$T=0.04$} & \multicolumn{2}{c}{$T=0.08$} \\
@@ -946,13 +956,13 @@ All arms were trained on the 3k pool with the 3k configuration, three seeds each
 Uncertainty is reported at the level of training runs. For a contrast between arms A and B the three seed-paired differences (seed $s$ of A minus seed $s$ of B; at equal seed the arms share the caption order and the $\Delta$ draws) give a mean, a standard deviation, a 95\% $t$-interval and a one-sample $t$-test with two degrees of freedom. Three seeds resolve a difference of about 0.01 CompBench and nothing on GenEval2, whose seed spread is 1 to 2 points. The prompt-level $p$-values of the paired tests used elsewhere in this document describe uncertainty over prompts for the seed-mean model, not over repeated training, and are not used to compare selection rules. A non-significant contrast is reported as ``no detected improvement''; none of the tests here is an equivalence test.
 
 \subsection{Result}
-Tables~\ref{tab:selrule} to~\ref{tab:selcontrasts_avg} and Figure~\ref{fig:selrule} give the result.
+Table~\ref{tab:selrule} (per-arm scores), Tables~\ref{tab:selcontrasts} and~\ref{tab:selcontrasts_avg} (seed-paired contrasts on raw and averaged checkpoints) and Figure~\ref{fig:selrule} give the result.
 
 \begin{table}[ht]
 \centering
 \caption{Selection rule, 3k pool, three seeds. CompBench per seed (s0 / s1 / s2) and mean $\pm$ standard deviation over seeds, for the raw final checkpoint and for the uniform average of the checkpoints at 2k, 4k and 6k updates; GenEval2$\times100$ seed means under both protocols; GPU-hours per training run on one H200. \emph{exact}: every candidate's loss weighted by $\pi_j$; \emph{sampled}: one draw from $\pi$ per visit; \emph{kept}: one draw from $\pi$ per caption, fixed for the run.}
 \label{tab:selrule}
-\resizebox{\textwidth}{!}{%
+\fitbox{%
 \begin{tabular}{l cc cc cc c}
 \toprule
  & \multicolumn{2}{c}{CompBench, raw final} & \multicolumn{2}{c}{CompBench, averaged} & \multicolumn{2}{c}{GenEval2} & \\
@@ -979,7 +989,7 @@ Boltzmann $T{=}0.04$, one draw per caption, kept & 0.4699 / 0.4405 / 0.4804 & 0.
 \centering
 \caption{Seed-paired CompBench contrasts between selection rules, raw final checkpoints (seed $s$ of the first arm minus seed $s$ of the second; the arms share caption order and $\Delta$ draws at equal seed): per-seed differences, mean $\pm$ standard deviation over seeds, 95\% $t$-interval and the seed-level $t$-test with $n=3$.}
 \label{tab:selcontrasts}
-\resizebox{\textwidth}{!}{%
+\fitbox{%
 \begin{tabular}{l c c}
 \toprule
 Contrast & per seed & mean $\pm$ sd [95\% CI] ($p$) \\
@@ -1013,7 +1023,7 @@ uniform ($T\to\infty$), exact vs uniform-visit (redraw per visit) & +0.0066 / +0
 \centering
 \caption{Seed-paired CompBench contrasts between selection rules, averaged checkpoints (2k, 4k and 6k updates) (seed $s$ of the first arm minus seed $s$ of the second; the arms share caption order and $\Delta$ draws at equal seed): per-seed differences, mean $\pm$ standard deviation over seeds, 95\% $t$-interval and the seed-level $t$-test with $n=3$.}
 \label{tab:selcontrasts_avg}
-\resizebox{\textwidth}{!}{%
+\fitbox{%
 \begin{tabular}{l c c}
 \toprule
 Contrast & per seed & mean $\pm$ sd [95\% CI] ($p$) \\
@@ -1047,7 +1057,7 @@ uniform ($T\to\infty$), exact vs uniform-visit (redraw per visit) & -0.0033 / +0
 \centering
 \caption{Fidelity of the $T{=}0.04$ selection-rule arms and the latent-scorer arms on 5,000 COCO \texttt{val2017} captions, 4 steps, $w=1$: per seed (s0 / s1 / s2) and seed mean in brackets, for the raw final checkpoints and for the averaged checkpoints. CMMD bootstrap intervals are $\pm0.01$ per model; FID differences below its split-half spread of about 0.5 should not be read.}
 \label{tab:selfid}
-\resizebox{\textwidth}{!}{%
+\fitbox{%
 \begin{tabular}{l l c c c c}
 \toprule
 Rule & checkpoint & FID $\downarrow$ & CMMD $\downarrow$ & Precision $\uparrow$ & Recall $\uparrow$ \\
@@ -1092,7 +1102,7 @@ latent scorer, Boltzmann $T{=}0.04$, exact & averaged & 30.23 / 30.68 / 30.47 (3
 
 \subsection{Gradient diagnostic}
 \label{sec:graddiag}
-Equal expected gradients do not give equal optimizer updates. The trainer clips the global gradient norm to $\gamma=1$ and then applies AdamW, and clipping does not commute with expectation: $\mathbb{E}[C(g_J)]\neq C(\mathbb{E}[g_J])$ for $C(g)=g\min(1,\gamma/\lVert g\rVert)$, while Adam's second moment sees $\mathbb{E}[g_J\odot g_J]=g_F\odot g_F+\mathrm{Var}(g_J)$. To measure how large these effects are for this loss, all four candidate gradients of a caption were computed at two frozen model states, the pretrained initialisation and the argmax student of seed 0, on 48 held-out captions of the 118k pool (none in the 3k pool), with one $\Delta$ draw shared by the four candidates. Everything below is a function of the $4\times4$ Gram matrix of the candidate gradients and $\pi$ at $T=0.04$:
+Equal expected gradients do not give equal optimizer updates. The trainer clips the global gradient norm to $\gamma=1$ and then applies AdamW, and clipping does not commute with expectation: $\mathbb{E}[C(g_J)]\neq C(\mathbb{E}[g_J])$ for $C(g)=g\min(1,\gamma/\lVert g\rVert)$, while Adam's second moment sees $\mathbb{E}[g_J\odot g_J]=g_F\odot g_F+\mathrm{Var}(g_J)$. To measure how large these effects are for this loss, all four candidate gradients of a caption were computed at two frozen model states, the pretrained initialisation and the argmax student of seed 0, on 48 held-out captions of the 118k pool (none in the 3k pool), with one $\Delta$ draw shared by the four candidates. Everything in Table~\ref{tab:graddiag} is a function of the $4\times4$ Gram matrix of the candidate gradients and $\pi$ at $T=0.04$:
 \begin{equation}
 V_c=\sum_j\pi_j\lVert g_j-g_F\rVert^2,\qquad
 B_c=\Big\lVert\sum_j\pi_jC(g_j)-C(g_F)\Big\rVert .
@@ -1103,7 +1113,7 @@ Two references are computed per caption: the argmax candidate's gradient under a
 \centering
 \caption{Gradient diagnostic at $T=0.04$, 48 held-out captions, means over captions (medians in brackets). Every gradient is clipped: norms are 300 to 650 against $\gamma=1$. $g_F$ is the exact weighted gradient, $g_J$ the one-sample gradient, $C$ the clip.}
 \label{tab:graddiag}
-\resizebox{\textwidth}{!}{%
+\fitbox{%
 \begin{tabular}{l c c}
 \toprule
  & argmax student (seed 0) & pretrained init \\
@@ -1137,7 +1147,7 @@ $P$ is a five-stage convolutional network with global pooling and a two-layer he
 \centering
 \caption{The latent scorer on the 3k pool, whose captions and photographs it never saw. Regret is the RGB DINO score of the RGB argmax minus that of the latent argmax; headroom is measured against the VQAScore best-of-four oracle as in Table~\ref{tab:headroom}.}
 \label{tab:latent_offline}
-\resizebox{\textwidth}{!}{%
+\fitbox{%
 \begin{tabular}{l c c}
 \toprule
  & latent scorer & RGB DINOv2 patches \\
@@ -1157,7 +1167,7 @@ decode + scorer cost per caption & 0 & 61 + 32 ms \\
 \centering
 \caption{Distillation with the latent scorer, 3k pool, three seeds, same configuration and trainer as Table~\ref{tab:selrule}. CompBench per seed and seed mean $\pm$ sd under both protocols; seed-paired contrasts after averaging.}
 \label{tab:latent_arms}
-\resizebox{\textwidth}{!}{%
+\fitbox{%
 \begin{tabular}{l cc cc c c}
 \toprule
  & \multicolumn{2}{c}{raw final} & \multicolumn{2}{c}{averaged} & \multicolumn{2}{c}{averaged, seed-paired} \\
@@ -1171,7 +1181,7 @@ RGB Boltzmann $T{=}0.04$, exact & 0.4714 / 0.4709 / 0.4684 & 0.4703 $\pm$ 0.0016
 \end{tabular}}
 \end{table}
 
-Table~\ref{tab:latent_arms} gives the distillation result. With the latent scorer, argmax selection is $+0.0103\pm0.0075$ CompBench over random after averaging and $0.0033\pm0.0047$ below RGB argmax; exact Boltzmann weighting is $+0.0070\pm0.0076$ over random and $0.0032\pm0.0045$ below its RGB counterpart, and as before it is not better than argmax. Neither latent arm is distinguishable from its RGB counterpart at three seeds, and the point estimates sit at about three quarters of the RGB gain, which is the fraction of the RGB scorer's offline headroom the projector recovers. Fidelity follows the same pattern (Table~\ref{tab:selfid}): after averaging, CMMD is 0.81 for latent argmax against 0.80 for RGB argmax and 0.79 for both exact arms, with seed-paired differences of $+0.013\pm0.032$ and $0.000\pm0.010$, and precision and recall within 0.006. One property of the projector matters for any use beyond offline selection: it was fitted to rank frozen-teacher candidates, and on the students' own 4-step samples its agreement with the RGB scorer drops (top-1 0.37, Spearman 0.22, against 0.51 and 0.46 on teacher candidates; the students' samples are also half as spread across seeds, 0.042 against 0.078), and fine-tuning it on 1,000 student latents does not restore it. It is a scorer of the teacher's candidate distribution. A scorer that reads the terminal latent therefore carries most of the selection signal at no decode cost, with a projector that trains in minutes; how much of the remaining quarter a larger projector, more training captions or a multi-scale readout would recover was not tested, and the same reference photograph is still required, since only the candidate side of the score moved into latent space.
+Table~\ref{tab:latent_offline} gives the offline ranking quality and Table~\ref{tab:latent_arms} the distillation result. With the latent scorer, argmax selection is $+0.0103\pm0.0075$ CompBench over random after averaging and $0.0033\pm0.0047$ below RGB argmax; exact Boltzmann weighting is $+0.0070\pm0.0076$ over random and $0.0032\pm0.0045$ below its RGB counterpart, and as before it is not better than argmax. Neither latent arm is distinguishable from its RGB counterpart at three seeds, and the point estimates sit at about three quarters of the RGB gain, which is the fraction of the RGB scorer's offline headroom the projector recovers. Fidelity follows the same pattern (Table~\ref{tab:selfid}): after averaging, CMMD is 0.81 for latent argmax against 0.80 for RGB argmax and 0.79 for both exact arms, with seed-paired differences of $+0.013\pm0.032$ and $0.000\pm0.010$, and precision and recall within 0.006. One property of the projector matters for any use beyond offline selection: it was fitted to rank frozen-teacher candidates, and on the students' own 4-step samples its agreement with the RGB scorer drops (top-1 0.37, Spearman 0.22, against 0.51 and 0.46 on teacher candidates; the students' samples are also half as spread across seeds, 0.042 against 0.078), and fine-tuning it on 1,000 student latents does not restore it. It is a scorer of the teacher's candidate distribution. A scorer that reads the terminal latent therefore carries most of the selection signal at no decode cost, with a projector that trains in minutes; how much of the remaining quarter a larger projector, more training captions or a multi-scale readout would recover was not tested, and the same reference photograph is still required, since only the candidate side of the score moved into latent space.
 
 \subsection{The projector as a reward inside training}
 \label{sec:reward}
@@ -1184,7 +1194,7 @@ At every update the reward $r=\langle P(\hat{x}_0),u^{\mathrm{pat}}(x^{\mathrm{r
 \centering
 \caption{Projector reward, 3k pool, three seeds. Left: the monitor at the start (updates 100 to 300) and the end (5,800 to 6,000) of training, means over seeds: DINO score of the decoded predictions under the projector (the reward) and under the RGB scorer, and their correlation over the 32 decoded latents. Right: CompBench and GenEval2 of the trained students, raw final and averaged checkpoints, with seed-paired contrasts against the argmax arm after averaging.}
 \label{tab:reward}
-\resizebox{\textwidth}{!}{%
+\fitbox{%
 \begin{tabular}{l cc cc cc c c c}
 \toprule
  & \multicolumn{2}{c}{projector score} & \multicolumn{2}{c}{true RGB score} & \multicolumn{2}{c}{correlation} & CompBench & CompBench & vs argmax \\
@@ -1204,7 +1214,7 @@ argmax + reward, refreshed projector & 0.398 & 0.435 & 0.589 & 0.578 & 0.33 & 0.
 \label{fig:reward}
 \end{figure}
 
-Three things happened, in every seed of both arms. The reward went up: the projector score of the decoded predictions rose by 0.02 to 0.04, and the mean reward seen by the optimizer from 0.385 to 0.435 (frozen) and 0.447 (refreshed). The true score did not follow: the RGB DINO score of the same predictions moved by $-0.024$, $-0.006$, $0.000$ (frozen) and $-0.005$, $-0.026$, $-0.001$ (refreshed) per seed, never up. And the benchmarks did not move: after averaging, the frozen-projector arm is $0.0026\pm0.0050$ below argmax and the refreshed arm $0.0003\pm0.0075$ above it on CompBench, with GenEval2 at 24.2 and 24.0 against 23.7, all within seed spread; the refreshed arm is $0.003\pm0.003$ above the frozen one, a consistent sign below resolution.  The refresh did what it could: the correlation between projector and RGB scores over the monitor batches rose from 0.33 to 0.41 (against 0.36 for the frozen projector) but its fitting loss on the student's predictions stayed near 1.0 throughout, so four steps on 32 latents every 100 updates never caught up with the moving prediction distribution. The pattern, a rising proxy with a flat or falling target and no benchmark change, is the signature of a student optimising the scorer rather than what the scorer measures. The projector is a scorer of the frozen teacher's candidates; as a reward on the student's own predictions, at a fifth of the gradient budget, it is inert on alignment and fidelity and is not adopted. Making it a usable reward would need a projector trained on student predictions at the supervised noise levels, with far more of them than a training loop yields cheaply, and a reward that is checked against the RGB score throughout; that is a separate study.
+Table~\ref{tab:reward} and Figure~\ref{fig:reward} give the result. Three things happened, in every seed of both arms. The reward went up: the projector score of the decoded predictions rose by 0.02 to 0.04, and the mean reward seen by the optimizer from 0.385 to 0.435 (frozen) and 0.447 (refreshed). The true score did not follow: the RGB DINO score of the same predictions moved by $-0.024$, $-0.006$, $0.000$ (frozen) and $-0.005$, $-0.026$, $-0.001$ (refreshed) per seed, never up. And the benchmarks did not move: after averaging, the frozen-projector arm is $0.0026\pm0.0050$ below argmax and the refreshed arm $0.0003\pm0.0075$ above it on CompBench, with GenEval2 at 24.2 and 24.0 against 23.7, all within seed spread; the refreshed arm is $0.003\pm0.003$ above the frozen one, a consistent sign below resolution.  The refresh did what it could: the correlation between projector and RGB scores over the monitor batches rose from 0.33 to 0.41 (against 0.36 for the frozen projector) but its fitting loss on the student's predictions stayed near 1.0 throughout, so four steps on 32 latents every 100 updates never caught up with the moving prediction distribution. The pattern, a rising proxy with a flat or falling target and no benchmark change, is the signature of a student optimising the scorer rather than what the scorer measures. The projector is a scorer of the frozen teacher's candidates; as a reward on the student's own predictions, at a fifth of the gradient budget, it is inert on alignment and fidelity and is not adopted. Making it a usable reward would need a projector trained on student predictions at the supervised noise levels, with far more of them than a training loop yields cheaply, and a reward that is checked against the RGB score throughout; that is a separate study.
 
 \subsection{What the evidence supports}
 The practical choice is settled: argmax selection, stored once, is the best rule tested and the cheapest. Exact soft weighting at $T\le0.08$ is not detectably better and costs 2.3 times the compute; softer rules and uniform weighting are worse or level with random. The explanation of why per-visit resampling underperforms is only partly settled. Its raw-checkpoint deficit is largely final-iterate noise, which checkpoint averaging removes; the remainder is of the size the clipping and second-moment effects measured above can produce, and the fixed-versus-resampled controls do not isolate a persistence effect from optimization variance and candidate coverage in this short-training regime. Separating them would take the same-caption Monte-Carlo estimator (which halves or quarters the sampling variance at single-caption compute) and more seeds; neither was run because the practical conclusion does not depend on it. A decode-free scorer that ranks candidates in latent space is a separate design decision from the selection rule, and Section~\ref{sec:latent} measures it: a small projector on the terminal latent recovers about three quarters of the RGB scorer's selection value offline and in trained students, at no decode cost; since decoding and scoring are under 10\% of the offline selection pipeline (Section~\ref{sec:cost}), its value would be as a scorer inside a training loop rather than as a saving, and Section~\ref{sec:reward} shows that, used as a reward on the student's own predictions, it is optimised without the true score or the benchmarks following.
@@ -1221,6 +1231,7 @@ The 1-step Tweedie target is compared with two targets that are closer to the tr
 \centering
 \caption{Target horizon. CompBench / GenEval2, seed means, and the selection gain of DINOv2 patches over random.}
 \label{tab:horizon}
+\fitbox{%
 \begin{tabular}{l c c c}
 \toprule
 Target & random & DINOv2 patches & Selection gain (CompBench) \\
@@ -1229,7 +1240,7 @@ Target & random & DINOv2 patches & Selection gain (CompBench) \\
 2-step chord & 0.4533 / 21.09 & 0.4646 / 21.99 & $+0.0113$ ($p=3\times10^{-6}$) \\
 endpoint $z_8$ & 0.4530 / 20.57 & 0.4565 / 20.97 & $+0.0035$ (n.s.) \\
 \bottomrule
-\end{tabular}
+\end{tabular}}
 \end{table}
 
 \subsection{Objective: \texorpdfstring{$x_0$}{x0} regression against segment-velocity imitation}
@@ -1243,7 +1254,7 @@ Two stronger teachers were tested with the same captions and seeds: 28 steps at 
 \centering
 \caption{Teacher quality. CompBench / GenEval2, seed means over three seeds, and the paired selection gain within the same teacher.}
 \label{tab:k28}
-\resizebox{\textwidth}{!}{%
+\fitbox{%
 \begin{tabular}{l c c c c}
 \toprule
 Teacher & DINO headroom recovered & random & DINOv2 patches & Selection gain \\
@@ -1268,7 +1279,7 @@ The frozen teacher never moves toward the high-score region; selection only filt
 \centering
 \caption{Evolving (EMA) teacher, seed 0, 6,000 updates from the 118k patch student. CompBench / GenEval2 of the raw student and of its EMA weights. $\bar S$ is the mean DINOv2 patch score of the teacher's fresh candidates at the end of training (0.60 at the start), $H$ their normalised selection entropy at $T=0.02$ (0.75 at the start).}
 \label{tab:ema}
-\resizebox{\textwidth}{!}{%
+\fitbox{%
 \begin{tabular}{l l c c c c}
 \toprule
 Teacher & Selection & raw student & EMA weights & $\bar S$ at end & $H$ at end \\
