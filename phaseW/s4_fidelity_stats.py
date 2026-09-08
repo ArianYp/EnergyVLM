@@ -21,12 +21,14 @@ ARMS = [("S4_B2", "random (fixed draw)"), ("S4_CD_dinop_hard", "argmax"),
         ("S4_CD_dinop_hard-rewF", "argmax + projector reward (frozen)"), ("S4_CD_dinop_hard-rewR", "argmax + projector reward (refreshed)"),
         ("S4_CD_dinop_hard-rewX", "argmax + exact DINO reward")]
 NAMES = dict(ARMS)
-path = sys.argv[1] if len(sys.argv) > 1 else "phaseW/fidelity_s4_report.md"
+import os
+paths = sys.argv[1:] if len(sys.argv) > 1 else [p for p in ("phaseW/fidelity_s4_report.md", "phaseW/fidelity_s4i_report.md", "phaseW/fidelity_s4j_report.md") if os.path.exists(p)]
 rows = defaultdict(dict)   # (arm, suffix) -> seed -> (fid, cmmd, prec, rec)
-for ln in open(path):
-    m = re.match(r"\|\s*(S4_\S+?)(-avglast3)?_s(\d)@4\s*\|\s*\d+\s*\|\s*([\d.]+)\s*\|[^|]*\|\s*([\d.]+)\s*\|[^|]*\|\s*([\d.]+)\s*\|\s*([\d.]+)\s*\|", ln)
-    if m:
-        rows[(m.group(1), m.group(2) or "")][int(m.group(3))] = tuple(float(m.group(k)) for k in (4, 5, 6, 7))
+for path in paths:          # later files add arms; a pool scored twice keeps the later score
+    for ln in open(path):
+        m = re.match(r"\|\s*(S4_\S+?)(-avglast3)?_s(\d)@4\s*\|\s*\d+\s*\|\s*([\d.]+)\s*\|[^|]*\|\s*([\d.]+)\s*\|[^|]*\|\s*([\d.]+)\s*\|\s*([\d.]+)\s*\|", ln)
+        if m:
+            rows[(m.group(1), m.group(2) or "")][int(m.group(3))] = tuple(float(m.group(k)) for k in (4, 5, 6, 7))
 
 
 def seedstat(v):

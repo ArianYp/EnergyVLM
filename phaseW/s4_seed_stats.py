@@ -39,6 +39,19 @@ ARMS = [  # label prefix, display name, jobs file
     ("S4_CD_dinop_hard-rewF", "argmax + projector reward (frozen)", "phaseW/s4g_jobs.txt"),
     ("S4_CD_dinop_hard-rewR", "argmax + projector reward (refreshed)", "phaseW/s4g_jobs.txt"),
     ("S4_CD_dinop_hard-rewX", "argmax + exact DINO reward", "phaseW/s4h_jobs.txt"),
+    # S4i factorial (RNG-restored trainer, five seeds) and S4j one-factor ablations of the exact-reward recipe
+    ("S4_B2-rewXi", "random pick + exact DINO reward", "phaseW/s4i_jobs.txt"),
+    ("S4_CD_dinop_hard-rewXi", "argmax + exact DINO reward (RNG-restored)", "phaseW/s4i_jobs.txt"),
+    ("S4_CD_dinop_hard-rewXi-l7.75", "exact reward, lambda 7.75", "phaseW/s4j_jobs.txt"),
+    ("S4_CD_dinop_hard-rewXi-l31", "exact reward, lambda 31", "phaseW/s4j_jobs.txt"),
+    ("S4_CD_dinop_hard-rewXi-l62", "exact reward, lambda 62", "phaseW/s4j_jobs.txt"),
+    ("S4_CD_dinop_hard-rewXi-R1", "exact reward, 1 state", "phaseW/s4j_jobs.txt"),
+    ("S4_CD_dinop_hard-rewXi-R5", "exact reward, 5 states", "phaseW/s4j_jobs.txt"),
+    ("S4_CD_dinop_hard-rewXi-noisiest", "exact reward, 2 noisiest states", "phaseW/s4j_jobs.txt"),
+    ("S4_CD_dinop_hard-rewXi-bilinear", "exact reward, bilinear resize", "phaseW/s4j_jobs.txt"),
+    ("S4_CD_dinop_hard-rewXi-bf16", "exact reward, bf16 DINO", "phaseW/s4j_jobs.txt"),
+    ("S4_CD_dinop_hard-rewRi-s16", "projector reward, refreshed, 16 steps", "phaseW/s4j_jobs.txt"),
+    ("S4_CD_dinop_hard-rewRi-e25", "projector reward, refreshed every 25", "phaseW/s4j_jobs.txt"),
 ]
 CONTRASTS = [
     ("S4_CD_dinop_hard", "S4_B2"), ("S4_CD_dinop_full-T0.04", "S4_B2"), ("S4_CD_dinop_full-T0.08", "S4_B2"),
@@ -56,6 +69,16 @@ CONTRASTS = [
     ("S4_CD_dinop_hard-rewF", "S4_B2"), ("S4_CD_dinop_hard-rewR", "S4_B2"), ("S4_CD_dinop_hard-rewR", "S4_CD_dinop_hard-rewF"),
     ("S4_CD_dinop_hard-rewX", "S4_CD_dinop_hard"), ("S4_CD_dinop_hard-rewX", "S4_B2"),
     ("S4_CD_dinop_hard-rewX", "S4_CD_dinop_hard-rewR"), ("S4_CD_dinop_hard-rewX", "S4_CD_dinop_hard-rewF"),
+    # factorial
+    ("S4_B2-rewXi", "S4_B2"), ("S4_CD_dinop_hard-rewXi", "S4_CD_dinop_hard"), ("S4_CD_dinop_hard-rewXi", "S4_B2-rewXi"),
+    ("S4_CD_dinop_hard-rewXi", "S4_CD_dinop_hard-rewX"), ("S4_B2-rewXi", "S4_CD_dinop_hard"),
+    # ablation ladder, each vs the full recipe
+    ("S4_CD_dinop_hard-rewXi-l7.75", "S4_CD_dinop_hard-rewXi"), ("S4_CD_dinop_hard-rewXi-l31", "S4_CD_dinop_hard-rewXi"),
+    ("S4_CD_dinop_hard-rewXi-l62", "S4_CD_dinop_hard-rewXi"), ("S4_CD_dinop_hard-rewXi-R1", "S4_CD_dinop_hard-rewXi"),
+    ("S4_CD_dinop_hard-rewXi-R5", "S4_CD_dinop_hard-rewXi"), ("S4_CD_dinop_hard-rewXi-noisiest", "S4_CD_dinop_hard-rewXi"),
+    ("S4_CD_dinop_hard-rewXi-bilinear", "S4_CD_dinop_hard-rewXi"), ("S4_CD_dinop_hard-rewXi-bf16", "S4_CD_dinop_hard-rewXi"),
+    ("S4_CD_dinop_hard-rewRi-s16", "S4_CD_dinop_hard"), ("S4_CD_dinop_hard-rewRi-e25", "S4_CD_dinop_hard"),
+    ("S4_CD_dinop_hard-rewRi-s16", "S4_CD_dinop_hard-rewR"), ("S4_CD_dinop_hard-rewRi-e25", "S4_CD_dinop_hard-rewR"),
 ]
 
 

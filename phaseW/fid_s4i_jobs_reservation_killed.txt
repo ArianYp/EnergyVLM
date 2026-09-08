@@ -1,0 +1,15 @@
+B2-rewXi-avglast3 0 137309
+CD_dinop_hard-rewXi-avglast3 0 137310
+B2-rewXi-avglast3 1 137311
+CD_dinop_hard-rewXi-avglast3 1 137312
+B2-rewXi-avglast3 2 137313
+CD_dinop_hard-rewXi-avglast3 2 137314
+B2-rewXi-avglast3 3 137315
+CD_dinop_hard-rewXi-avglast3 3 137316
+B2-rewXi-avglast3 4 137317
+CD_dinop_hard-rewXi-avglast3 4 137318
+B2-avglast3 3 137319
+CD_dinop_hard-avglast3 3 137320
+B2-avglast3 4 137321
+CD_dinop_hard-avglast3 4 137322
+fidscore 137323
