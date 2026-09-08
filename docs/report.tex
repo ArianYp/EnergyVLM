@@ -1409,6 +1409,23 @@ Figures~\ref{fig:qual_cb} and~\ref{fig:qual_ge} show prompts on which the scored
 \label{fig:qual_ge}
 \end{figure}
 
+\paragraph{The exact reward.}
+Figures~\ref{fig:qual_rx_cb} and~\ref{fig:qual_rx_ge} do the same for the exact-reward student of Section~\ref{sec:rewardx} against the argmax student, on the averaged seed-0 models of the 3k configuration, with the random-pick student as a third column. The rule is stated on each sheet: the eight largest per-prompt margins of the exact-reward student over argmax, at most two per CompBench category, followed by the four most negative margins, so the sheets show where the reward hurts as well as where it helps. Across all prompts of the two seed-0 models the exact-reward student wins 1,146 CompBench prompts and loses 892 (360 ties), and wins 421 GenEval2 prompts against 379, so the gain is broad rather than concentrated. Two things are visible down the columns. The exact-reward images are the most photographic of the three students: surfaces, materials and lighting are closer to the 28-step guided teacher and to a photograph, which is what the reward asks for and what the CMMD and precision numbers measure. And where the reward loses, the images are of comparable quality and the score flips are counts and placements at the evaluator's margin (four rabbits for three, a bird beside rather than on the balloon), not failures of the kind the base model shows at four steps.
+
+\begin{figure}[p]
+\centering
+\includegraphics[width=\textwidth]{figs/qual_rewx_compbench.jpg}
+\caption{T2I-CompBench prompts with the largest exact-reward-over-argmax margins (top eight rows) and the most negative margins (bottom four), averaged seed-0 models of the 3k configuration. Columns: base model at 4 steps without and with guidance, random-pick student, argmax student, exact-reward student (framed), base model at 28 steps without and with guidance. Per-prompt scores of the three students under each image; identical initial noise across a row.}
+\label{fig:qual_rx_cb}
+\end{figure}
+
+\begin{figure}[p]
+\centering
+\includegraphics[width=\textwidth]{figs/qual_rewx_geneval2.jpg}
+\caption{GenEval2 prompts, same rule and layout as Figure~\ref{fig:qual_rx_cb}.}
+\label{fig:qual_rx_ge}
+\end{figure}
+
 \clearpage
 \section{Cost}
 \label{sec:cost}
