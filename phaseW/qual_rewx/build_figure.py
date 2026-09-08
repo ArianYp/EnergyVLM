@@ -53,13 +53,18 @@ def main() -> None:
     root = Path(args.root)
     sel = json.loads((root / "selection.json").read_text())[args.bench]
     ncol, nrow = len(COLUMNS), len(sel)
-    n_gain = sum(r.get("panel", "gain") == "gain" for r in sel)
+    random_rows = all(r.get("panel") == "random" for r in sel)
+    n_gain = nrow if random_rows else sum(r.get("panel", "gain") == "gain" for r in sel)
     W = LABEL_W + ncol * (CELL + PAD) + PAD
     H = HEAD_H + nrow * (CELL + FOOT_H + PAD) + PAD + 34 + 26
     sheet = Image.new("RGB", (W, H), (250, 250, 250)); d = ImageDraw.Draw(sheet)
     f_hd, f_pr, f_sc, f_ti = font(15, True), font(14), font(14, True), font(15, True)
-    d.text((PAD, 8), f"CHERRY-PICKED: {n_gain} largest (exact reward - argmax) margins, then {nrow - n_gain} most negative  |  {args.bench}  |  "
-                     "averaged checkpoints, seed 0, identical initial noise across all columns", fill=(150, 40, 40), font=f_ti)
+    if random_rows:
+        d.text((PAD, 8), f"RANDOMLY SELECTED prompts (fixed draw, not chosen by any score)  |  {args.bench}  |  "
+                         "averaged checkpoints, seed 0, identical initial noise across all columns", fill=(40, 90, 40), font=f_ti)
+    else:
+        d.text((PAD, 8), f"CHERRY-PICKED: {n_gain} largest (exact reward - argmax) margins, then {nrow - n_gain} most negative  |  {args.bench}  |  "
+                         "averaged checkpoints, seed 0, identical initial noise across all columns", fill=(150, 40, 40), font=f_ti)
     for c, (name, *_rest) in enumerate(COLUMNS):
         x = LABEL_W + c * (CELL + PAD)
         col = (20, 110, 40) if "reward" in name else ((20, 90, 170) if "argmax" in name else (60, 60, 60))
@@ -88,8 +93,11 @@ def main() -> None:
                 d.rectangle([x - 2, y - 2, x + CELL + 1, y + CELL + 1], outline=(20, 110, 40), width=3)
             if key:
                 d.text((x + 4, y + CELL + 4), f"{key} {item[key]:.2f}", fill=SCORE_COL[key], font=f_sc)
-    d.text((PAD, H - 26), "Selection rule: per-prompt (exact reward - argmax) benchmark margin of the two shown models (one seed each), "
-                          "max 2 per CompBench category, top 8 then bottom 4. Not representative of typical behaviour.", fill=(110, 110, 110), font=font(13))
+    rule = ("Selection rule: uniform random draw of prompts (numpy seed 2026), no score involved. Representative of typical behaviour."
+            if random_rows else
+            "Selection rule: per-prompt (exact reward - argmax) benchmark margin of the two shown models (one seed each), "
+            "max 2 per CompBench category, top 8 then bottom 4. Not representative of typical behaviour.")
+    d.text((PAD, H - 26), rule, fill=(110, 110, 110), font=font(13))
     Path(args.out).parent.mkdir(parents=True, exist_ok=True); sheet.save(args.out)
     print(f"wrote {args.out}  ({W}x{H})")
 

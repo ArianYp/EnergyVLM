@@ -38,7 +38,7 @@ def fetch():
         seed = int(name.split("_s")[-1].split("_")[0])
         if seed in data[arm]:
             continue  # newest run per arm/seed
-        keys = ["_step", "reward/r_mean", "reward/rgb_score", "reward/rgb_proj_corr", "train/loss_cd", "train/loss"]
+        keys = ["_step", "reward/r_mean", "reward/rgb_score", "reward/proj_score", "reward/rgb_proj_corr", "train/loss_cd", "train/loss"]
         rows = [row for row in r.scan_history(keys=None, page_size=2000)]
         h = {k: [] for k in keys}
         for row in rows:
@@ -103,13 +103,18 @@ def main():
         L = min(len(c[1]) for c in curves)
         ax[0].plot(curves[0][0][:L], np.mean([c[1][:L] for c in curves], 0), color=COL[arm], lw=2.2, ls="-" if arm == "rewX" else "--", label=ARMS[arm] + " (seed mean)")
     ax[0].set_xlabel("update"); ax[0].set_ylabel("RGB DINO score of decoded $\\hat{x}_0$ (offline scorer)"); ax[0].set_title("(a) the true score of the predictions (700-update running mean)", fontsize=9); ax[0].legend(fontsize=7, loc="lower right")
-    # (b) reward seen by the optimizer vs the monitor for rewX (should coincide) and for the projector arms (should not)
+    # (b) MATCHED approximation gap: on the SAME 32 monitor latents, the score the reward path
+    #     assigns (reward/proj_score: projector, or the differentiable RGB path) minus the offline
+    #     RGB score (reward/rgb_score); monitor evaluations only (the trainer logs the last monitor
+    #     value at every logging step, so repeated values are dropped)
     for arm in ["rewF", "rewR", "rewX"]:
         for i, (seed, h) in enumerate(sorted(data.get(arm, {}).items())):
-            s, r, v = np.asarray(h["_step"]), np.asarray(h["reward/r_mean"]), np.asarray(h["reward/rgb_score"])
-            m = np.isfinite(v) & np.isfinite(r)
-            ax[1].plot(s[m], r[m] - v[m], color=COL[arm], lw=1.6 if arm == "rewX" else 1.0, ls="-" if arm == "rewX" else "--", alpha=0.9 if arm == "rewX" else 0.6, label=ARMS[arm] if i == 0 else None)
-    ax[1].axhline(0, color="k", lw=0.6); ax[1].set_xlabel("update"); ax[1].set_ylabel("reward $-$ true RGB score"); ax[1].set_title("(b) proxy gap: reward minus the monitor"); ax[1].legend(fontsize=7)
+            s, pr, v = np.asarray(h["_step"]), np.asarray(h.get("reward/proj_score", [np.nan] * len(h["_step"]))), np.asarray(h["reward/rgb_score"])
+            m = np.isfinite(v) & np.isfinite(pr)
+            s, pr, v = s[m], pr[m], v[m]
+            keep = np.r_[True, (np.diff(pr) != 0) | (np.diff(v) != 0)]   # one point per monitor evaluation
+            ax[1].plot(s[keep], pr[keep] - v[keep], color=COL[arm], lw=1.6 if arm == "rewX" else 1.0, ls="-" if arm == "rewX" else "--", alpha=0.9 if arm == "rewX" else 0.6, label=ARMS[arm] if i == 0 else None)
+    ax[1].axhline(0, color="k", lw=0.6); ax[1].set_xlabel("update"); ax[1].set_ylabel("reward-path score $-$ offline RGB score, same latents"); ax[1].set_title("(b) approximation gap on the monitor latents", fontsize=9); ax[1].legend(fontsize=7)
     # (c) consistency loss (smoothed) rewX vs argmax
     def smooth(s, v, w=200):
         s, v = np.asarray(s, float), np.asarray(v, float); m = np.isfinite(v); s, v = s[m], v[m]

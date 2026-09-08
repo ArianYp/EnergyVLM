@@ -1,0 +1,9 @@
+S4_B2-avglast3_s0 136958
+S4_B2-avglast3_s1 136959
+S4_B2-avglast3_s2 136960
+S4_CD_dinop_hard-avglast3_s0 136961
+S4_CD_dinop_hard-avglast3_s1 136962
+S4_CD_dinop_hard-avglast3_s2 136963
+S4_CD_dinop_hard-rewX-avglast3_s0 136964
+S4_CD_dinop_hard-rewX-avglast3_s1 136965
+S4_CD_dinop_hard-rewX-avglast3_s2 136966

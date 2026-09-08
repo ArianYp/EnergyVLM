@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+#BSUB -J sd-W-heldout300
+#BSUB -G s10396
+#BSUB -q training-parallel
+#BSUB -n 4
+#BSUB -W 8:00
+#BSUB -R "span[hosts=1]"
+#BSUB -R "select[mem>96000]"
+#BSUB -R "rusage[mem=96000]"
+#BSUB -M 96000
+#BSUB -gpu "num=1:mode=exclusive_process:gmem=40G"
+#BSUB -cwd /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM
+#BSUB -o /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-W-heldout300-%J.out
+#BSUB -e /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-W-heldout300-%J.err
+# Held-out DINO monitor on N_CAP validation captions (default 300, a separate draw from the 16-caption
+# set) for every checkpoint in CKPT_LIST; outputs under phaseW/latent_scorer/heldout300/.
+set -euo pipefail
+export PATH="/software/cellgen/team361/ha11/envs/nichejepa/bin:$PATH"
+export HF_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/huggingface
+export TORCH_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/torch
+export XDG_CACHE_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/xdg
+export TOKENIZERS_PARALLELISM=false
+export PYTHONPATH="/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM:${PYTHONPATH:-}"
+source ~/.secrets/hf_token
+: "${CKPT_LIST:?}"
+N_CAP=${N_CAP:-300}
+OUT_DIR=${OUT_DIR:-phaseW/latent_scorer/heldout300}
+mkdir -p "$OUT_DIR"
+while read ck; do
+  [ -z "$ck" ] && continue
+  lab=$(echo "$ck" | sed -E 's|checkpoints/phaseS4/phaseS4_||; s|/checkpoint_|@|; s|\.pt$||; s|_[0-9]{6}@|@|')
+  [ -s "$OUT_DIR/${lab}.json" ] && { echo "skip $lab (done)"; continue; }
+  python3 phaseW/latent_scorer/heldout_dino.py --ckpt "$ck" --n_captions "$N_CAP" --out "$OUT_DIR/${lab}.json"
+done < "$CKPT_LIST"
+echo HELDOUT300_DONE

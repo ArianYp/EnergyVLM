@@ -24,7 +24,7 @@ export TORCH_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/tor
 export XDG_CACHE_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/xdg
 export TOKENIZERS_PARALLELISM=false
 source ~/.secrets/hf_token
-ROOT=phaseW/qual_rewx
+ROOT=${ROOT:-phaseW/qual_rewx}
 declare -A CK=( [RANDOM]=checkpoints/phaseS4/phaseS4_B2_s0_130449/checkpoint_avg_last5.pt
                 [ARGMAX]=checkpoints/phaseS4/phaseS4_CD_dinop_hard_s0_130455/checkpoint_avg_last5.pt
                 [REWARD]=checkpoints/phaseS4/phaseS4_CD_dinop_hard-rewX_s0_136368/checkpoint_avg_last5.pt )
@@ -40,6 +40,6 @@ for B in compbench geneval2; do
   done
 done
 for B in compbench geneval2; do
-  python3 $ROOT/build_figure.py --bench $B --out "$ROOT/fig_${B}.png"
+  python3 phaseW/qual_rewx/build_figure.py --bench $B --root "$ROOT" --out "$ROOT/fig_${B}.png"
 done
 echo "[$(date --iso-8601=seconds)] QUAL_REWX_DONE"

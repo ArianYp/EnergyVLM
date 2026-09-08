@@ -1,0 +1,42 @@
+[
+ {
+  "idx": 63,
+  "category": "color",
+  "prompt": "a yellow frog and a green fly"
+ },
+ {
+  "idx": 191,
+  "category": "color",
+  "prompt": "a white snow and a blue sled"
+ },
+ {
+  "idx": 428,
+  "category": "shape",
+  "prompt": "a big hippopotamus and a small rabbit"
+ },
+ {
+  "idx": 875,
+  "category": "texture",
+  "prompt": "a metallic keychain and a wooden jewelry box"
+ },
+ {
+  "idx": 888,
+  "category": "texture",
+  "prompt": "wooden chopsticks and a glass cup"
+ },
+ {
+  "idx": 1119,
+  "category": "spatial",
+  "prompt": "a bicycle on the bottom of a chicken"
+ },
+ {
+  "idx": 1531,
+  "category": "non_spatial",
+  "prompt": "The writer is brainstorming ideas for a new book."
+ },
+ {
+  "idx": 2036,
+  "category": "complex",
+  "prompt": "The striped rug was next to the beige armchair."
+ }
+]

@@ -1,0 +1,166 @@
+{
+ "compbench": [
+  {
+   "idx": 63,
+   "prompt": "a yellow frog and a green fly",
+   "category": "color",
+   "margin": -0.02210000000000001,
+   "random": 0.9202,
+   "argmax": 0.9122,
+   "reward": 0.8901,
+   "panel": "random"
+  },
+  {
+   "idx": 191,
+   "prompt": "a white snow and a blue sled",
+   "category": "color",
+   "margin": 0.0029000000000000137,
+   "random": 0.9863,
+   "argmax": 0.9917,
+   "reward": 0.9946,
+   "panel": "random"
+  },
+  {
+   "idx": 428,
+   "prompt": "a big hippopotamus and a small rabbit",
+   "category": "shape",
+   "margin": -0.015799999999999925,
+   "random": 0.9126,
+   "argmax": 0.9621,
+   "reward": 0.9463,
+   "panel": "random"
+  },
+  {
+   "idx": 875,
+   "prompt": "a metallic keychain and a wooden jewelry box",
+   "category": "texture",
+   "margin": -0.029299999999999993,
+   "random": 0.8864,
+   "argmax": 0.9273,
+   "reward": 0.898,
+   "panel": "random"
+  },
+  {
+   "idx": 888,
+   "prompt": "wooden chopsticks and a glass cup",
+   "category": "texture",
+   "margin": 0.07040000000000002,
+   "random": 0.908,
+   "argmax": 0.8148,
+   "reward": 0.8852,
+   "panel": "random"
+  },
+  {
+   "idx": 1119,
+   "prompt": "a bicycle on the bottom of a chicken",
+   "category": "spatial",
+   "margin": 0.6802724780449878,
+   "random": 0.0,
+   "argmax": 0.0,
+   "reward": 0.6802724780449878,
+   "panel": "random"
+  },
+  {
+   "idx": 1531,
+   "prompt": "The writer is brainstorming ideas for a new book.",
+   "category": "non_spatial",
+   "margin": -0.001953125,
+   "random": 0.2301025390625,
+   "argmax": 0.2364501953125,
+   "reward": 0.2344970703125,
+   "panel": "random"
+  },
+  {
+   "idx": 2036,
+   "prompt": "The striped rug was next to the beige armchair.",
+   "category": "complex",
+   "margin": 0.01874999999999999,
+   "random": 0.37845,
+   "argmax": 0.2798,
+   "reward": 0.29855,
+   "panel": "random"
+  }
+ ],
+ "geneval2": [
+  {
+   "idx": 78,
+   "prompt": "three pink chairs",
+   "category": "geneval2",
+   "margin": 0.5173178642758613,
+   "random": 0.26196236575448545,
+   "argmax": 0.48052730493455736,
+   "reward": 0.9978451692104187,
+   "panel": "random"
+  },
+  {
+   "idx": 132,
+   "prompt": "six flowers in front of a umbrella",
+   "category": "geneval2",
+   "margin": -0.2502342697886608,
+   "random": 0.6855285632678033,
+   "argmax": 0.34004355242245116,
+   "reward": 0.08980928263379032,
+   "panel": "random"
+  },
+  {
+   "idx": 140,
+   "prompt": "a trumpet under six cookies",
+   "category": "geneval2",
+   "margin": -0.3935494889751443,
+   "random": 0.6631464115233705,
+   "argmax": 0.6434926365500979,
+   "reward": 0.2499431475749536,
+   "panel": "random"
+  },
+  {
+   "idx": 237,
+   "prompt": "a black chair and three wooden birds",
+   "category": "geneval2",
+   "margin": -0.3755227618771227,
+   "random": 0.3739906132358965,
+   "argmax": 0.7524350524808615,
+   "reward": 0.3769122906037388,
+   "panel": "random"
+  },
+  {
+   "idx": 518,
+   "prompt": "six flamingos behind a black bagel, and six sparkling elephants",
+   "category": "geneval2",
+   "margin": -0.029848628912094825,
+   "random": 0.28849807633615315,
+   "argmax": 0.07971721357318501,
+   "reward": 0.04986858466109018,
+   "panel": "random"
+  },
+  {
+   "idx": 582,
+   "prompt": "three metal lions playing with three flamingos, and three bears",
+   "category": "geneval2",
+   "margin": 0.032131799221475466,
+   "random": 0.011322204462079405,
+   "argmax": 0.02688713111144424,
+   "reward": 0.05901893033291971,
+   "panel": "random"
+  },
+  {
+   "idx": 681,
+   "prompt": "a croissant in front of five wooden flamingos under four blue cookies",
+   "category": "geneval2",
+   "margin": -0.3399246134195715,
+   "random": 0.31299494292096014,
+   "argmax": 0.405353851647371,
+   "reward": 0.06542923822779947,
+   "panel": "random"
+  },
+  {
+   "idx": 772,
+   "prompt": "a purple umbrella to the left of four striped guitars to the left of three sparkling violins",
+   "category": "geneval2",
+   "margin": -0.06376405519560362,
+   "random": 0.43373162152050404,
+   "argmax": 0.16746794874757356,
+   "reward": 0.10370389355196995,
+   "panel": "random"
+  }
+ ]
+}

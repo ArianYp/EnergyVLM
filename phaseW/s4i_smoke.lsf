@@ -1,0 +1,66 @@
+#!/usr/bin/env bash
+#BSUB -J sd-W-s4i-smoke
+#BSUB -G s10396
+#BSUB -q training-parallel
+#BSUB -n 4
+#BSUB -W 1:30
+#BSUB -R "span[hosts=1]"
+#BSUB -R "select[mem>160000]"
+#BSUB -R "rusage[mem=160000]"
+#BSUB -M 160000
+#BSUB -gpu "num=1:mode=exclusive_process:gmem=78G"
+#BSUB -cwd /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM
+#BSUB -o /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-W-s4i-smoke-%J.out
+#BSUB -e /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-W-s4i-smoke-%J.err
+# S4i gate (deterministic kernels, 6 updates each):
+#   A  s4h trainer, argmax, no reward                       reference
+#   B  s4i trainer, argmax, --reward_mode rgb --reward_lambda 0   ZERO-WEIGHT CONTROL: the scorer is
+#      loaded, no reward term; must be BIT-IDENTICAL to A (proves the RNG restore keeps the caption order)
+#   C  s4i trainer, argmax, rgb lambda 15.504, probe 6      its per-update consistency loss must equal A's
+#   D  s4i trainer, random pick (B2), rgb lambda 15.504     the missing factorial cell runs
+#   E  s4h trainer, argmax, rgb lambda 15.504, probe 6      the OLD behaviour: consistency losses differ from A
+set -uo pipefail
+export PATH="/software/cellgen/team361/ha11/envs/nichejepa/bin:$PATH"
+export HF_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/huggingface
+export TORCH_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/torch
+export XDG_CACHE_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/xdg
+export TOKENIZERS_PARALLELISM=false
+export WANDB_MODE=disabled
+export CUBLAS_WORKSPACE_CONFIG=:4096:8
+source ~/.secrets/hf_token
+REPO=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM
+DET=$REPO/phaseW/_equiv/det
+OUT=$REPO/checkpoints/phaseW_smoke/s4i_${LSB_JOBID:-manual}
+rm -rf "$OUT"; mkdir -p "$OUT"
+COMMON="--coupling fresh --distill_loss x0_huber --seed 0 --sel_seed 0 --selection_dir phaseN/coco_selection_dinopatch \
+  --alpha 1.0 --N 4 --K 8 --cfg 7.0 --student_cfg 0.0 --cfg_mode composed --num_warmup_steps 300 --lr 1e-5 \
+  --weight_decay 0.0 --grad_clip 1.0 --height 512 --sched_shift 3.0 --num_train_ts 1000.0 --delta_min 1 --delta_max 3 \
+  --scoring_window 0.4,0.9 --support_m 1 --assign_seed 982451653 --huber_c 0.0 --gradient_checkpointing --save_every 100000 \
+  --log_every 1 --sample_every 0 --no_wandb --num_steps 6 --temp 1.0"
+run () { local out="$OUT/$1"; shift; local t0=$(date +%s); ( "$@" --output_dir "$out" ) > "$out.log" 2>&1; echo "$(basename "$out") rc=$? $(( $(date +%s) - t0 ))s losses: $(tr '\r' '\n' < "$out.log" | grep -oE 'loss=[0-9.e+-]+' | sed 's/loss=//' | awk 'NR%2==1' | tr '\n' ' ')"; grep -hE "^\[reward\] global RNG|^\[reward-probe\]" "$out.log" | sed 's/^/    /' | head -8; }
+H="env PYTHONPATH=$DET:$REPO python3 phaseW/train_pilot_frozen_s4h.py"
+I="env PYTHONPATH=$DET:$REPO python3 phaseW/train_pilot_frozen_s4i.py"
+run A $H --variant CD_dinop_hard $COMMON
+run B $I --variant CD_dinop_hard $COMMON --reward_mode rgb --reward_lambda 0 --reward_monitor_every 0
+run C $I --variant CD_dinop_hard $COMMON --reward_mode rgb --reward_lambda 15.504 --reward_grad_probe 6 --reward_monitor_every 3
+run D $I --variant B2 $COMMON --reward_mode rgb --reward_lambda 15.504 --reward_grad_probe 2 --reward_monitor_every 3
+run E $H --variant CD_dinop_hard $COMMON --reward_mode rgb --reward_lambda 15.504 --reward_grad_probe 6 --reward_monitor_every 0
+OUT="$OUT" python3 - <<'PY'
+import os, re, torch
+OUT = os.environ["OUT"]
+def sd(p): return torch.load(f"{OUT}/{p}/checkpoint_final.pt", map_location="cpu", weights_only=False, mmap=True)["model"]
+A, B = sd("A"), sd("B")
+mx = max(float((A[k].float() - B[k].float()).abs().max()) for k in A); same = sum(int(torch.equal(A[k], B[k])) for k in A)
+print(f"zero-weight control (scorer loaded, lambda 0) vs reference: {same}/{len(A)} tensors identical, max|diff|={mx:.3e}")
+lossA = [float(x) for x in re.findall(r"loss=([0-9.e+-]+)", open(f"{OUT}/A.log").read().replace("\r", "\n"))][0::2]
+def cd(name): return [float(x) for x in re.findall(r"cd=([0-9.]+)", open(f"{OUT}/{name}.log").read())]
+cC, cE = cd("C"), cd("E")
+print("A losses     ", " ".join(f"{x:.3g}" for x in lossA[:6]))
+print("C loss_cd    ", " ".join(f"{x:.3g}" for x in cC[:6]), "  (s4i, reward on: must match A)")
+print("E loss_cd    ", " ".join(f"{x:.3g}" for x in cE[:6]), "  (s4h, old order: differs from A)")
+okC = all(abs(a - c) / max(a, 1e-6) < 5e-3 for a, c in zip(lossA[:6], cC[:6])) and len(cC) >= 6
+diffE = any(abs(a - e) / max(a, 1e-6) > 5e-3 for a, e in zip(lossA[:6], cE[:6]))
+okD = "Traceback" not in open(f"{OUT}/D.log").read() and os.path.exists(f"{OUT}/D/checkpoint_final.pt")
+print("S4I_SMOKE", "PASS" if (mx == 0.0 and okC and okD) else "FAIL", f"(control bit-exact={mx == 0.0}, order matches={okC}, old order differed={diffE}, B2+reward runs={okD})")
+PY
+rm -rf "$OUT"/A "$OUT"/B "$OUT"/C "$OUT"/D "$OUT"/E

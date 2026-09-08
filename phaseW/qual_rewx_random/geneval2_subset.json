@@ -1,0 +1,42 @@
+[
+ {
+  "idx": 78,
+  "category": "geneval2",
+  "prompt": "three pink chairs"
+ },
+ {
+  "idx": 132,
+  "category": "geneval2",
+  "prompt": "six flowers in front of a umbrella"
+ },
+ {
+  "idx": 140,
+  "category": "geneval2",
+  "prompt": "a trumpet under six cookies"
+ },
+ {
+  "idx": 237,
+  "category": "geneval2",
+  "prompt": "a black chair and three wooden birds"
+ },
+ {
+  "idx": 518,
+  "category": "geneval2",
+  "prompt": "six flamingos behind a black bagel, and six sparkling elephants"
+ },
+ {
+  "idx": 582,
+  "category": "geneval2",
+  "prompt": "three metal lions playing with three flamingos, and three bears"
+ },
+ {
+  "idx": 681,
+  "category": "geneval2",
+  "prompt": "a croissant in front of five wooden flamingos under four blue cookies"
+ },
+ {
+  "idx": 772,
+  "category": "geneval2",
+  "prompt": "a purple umbrella to the left of four striped guitars to the left of three sparkling violins"
+ }
+]
