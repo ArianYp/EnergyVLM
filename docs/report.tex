@@ -8,6 +8,8 @@
 \usepackage{microtype}
 \usepackage{float}
 \usepackage{tikz}
+\usepackage{algorithm}
+\usepackage{algpseudocode}
 \usetikzlibrary{arrows.meta,positioning,fit,calc}
 \usepackage[hidelinks]{hyperref}
 
@@ -357,6 +359,119 @@ where the arms differ in four things and nothing else. Figure~\ref{fig:pipeline}
 \label{fig:rewardloop}
 \end{figure}
 Two further terms appear only in the ablations and are written where they are used: the real-photograph regression (Section~\ref{sec:ablations}) adds a pseudo-Huber term between $\hat{x}_0$ and the VAE latent of $x^{\mathrm{ref}}$; the evolving-teacher variant replaces the frozen teacher in $z^{(j)}$ and $\tilde{x}_0$ by an EMA copy of the student.
+
+
+\subsection{Pseudocode}
+\label{sec:pseudocode}
+Algorithms~\ref{alg:cache} to~\ref{alg:reward} give every variant in executable form. Algorithm~\ref{alg:update} is the trainer; the arms differ only in which branch of Algorithms~\ref{alg:weights}, \ref{alg:estimator} and~\ref{alg:reward} it takes, and in which score column the cache carries.
+
+\begin{algorithm}[H]
+\caption{Candidate cache and offline scoring (once per training pool)}
+\label{alg:cache}
+\begin{algorithmic}[1]
+\Require captions $c$ with index $\texttt{idx}$ and reference photograph $x^{\mathrm{ref}}$; frozen teacher $v_T$; VAE decoder $\Dec$; DINOv2 embedder $u^{\mathrm{pat}}$; optional projector $P$
+\State $u_{\mathrm{ref}}\gets u^{\mathrm{pat}}(x^{\mathrm{ref}})$ \Comment{photo squashed to $512^2$, DINOv2-B patch mean, L2-normalised}
+\For{$j=1,\dots,N$}
+  \State $\varepsilon^{(j)}\gets\mathcal{N}(0,I)$ seeded by $1000\cdot\texttt{idx}+j$
+  \State $z^{(j)}_0,\dots,z^{(j)}_K\gets\mathrm{Euler}_K(\varepsilon^{(j)};v_T,c,w{=}7)$ \Comment{$K=8$; states are not stored}
+  \State $S_j\gets\langle u^{\mathrm{pat}}(\Dec(z^{(j)}_K)),u_{\mathrm{ref}}\rangle$ \Comment{RGB score; other scorers replace this line}
+  \State $\hat S_j\gets\langle P(z^{(j)}_K),u_{\mathrm{ref}}\rangle$ \Comment{latent score, if $P$ is given; no decode}
+\EndFor
+\State $J^{\mathrm{rand}}\gets\mathcal{U}\{1..N\}$ \Comment{the random arm's draw, stored so every seed shares it}
+\State store $(\texttt{idx},\ \texttt{seed\_base}{=}1000\cdot\texttt{idx},\ S_{1..N},\ \hat S_{1..N},\ J^{\mathrm{rand}})$
+\end{algorithmic}
+\end{algorithm}
+
+\begin{algorithm}[H]
+\caption{One training update (all arms)}
+\label{alg:update}
+\begin{algorithmic}[1]
+\Require cache record of caption $c$; student $v_\theta$; frozen teacher $v_T$; window $\mathcal{K}=\{3,\dots,7\}$; $\Delta\in\{1,2,3\}$; rule, estimator, score column, reward setting
+\State $w\gets\textsc{Weights}(\text{record},\text{rule},\text{score column},T)$ \Comment{Algorithm~\ref{alg:weights}}
+\State $\mathcal{J}\gets\textsc{Estimator}(w,\text{estimator},\text{visit})$ \Comment{Algorithm~\ref{alg:estimator}: list of (candidate, weight)}
+\State $\Delta_k\gets\mathcal{U}\{1,2,3\}$ for $k\in\mathcal{K}$ \Comment{one draw per update, shared by every candidate in $\mathcal{J}$}
+\State $g\gets0$
+\For{$(j,\omega_j)\in\mathcal{J}$}
+  \State $z_0,\dots,z_K\gets\mathrm{Euler}_K(\varepsilon^{(j)};v_T,c,w{=}7)$ with $\varepsilon^{(j)}$ from seed $\texttt{seed\_base}+j$ \Comment{same trajectory as scored}
+  \For{$k\in\mathcal{K}$} \Comment{batched into one student forward}
+    \State $s\gets k-\Delta_k$;\quad $\hat{x}_0^{(k)}\gets z_s-\sigma_s\,v_\theta(z_s,\sigma_s,c)$ \Comment{student, one conditional pass}
+    \State $\tilde{x}_0^{(k)}\gets z_k-\sigma_k\,(z_{k+1}-z_k)/(\sigma_{k+1}-\sigma_k)$ \Comment{teacher target, stop-gradient}
+  \EndFor
+  \State $\ell^{(j)}\gets\frac{1}{|\mathcal{K}|}\sum_{k}\big[\sqrt{\lVert\hat{x}_0^{(k)}-\tilde{x}_0^{(k)}\rVert^2+c_h^2}-c_h\big]$
+  \If{reward arm} $\ell^{(j)}\gets\ell^{(j)}-\lambda\,\textsc{Reward}(\hat{x}_0^{(k)}\text{ for the two least-noisy }s)$ \Comment{Algorithm~\ref{alg:reward}} \EndIf
+  \State $g\gets g+\omega_j\,\nabla_\theta\ell^{(j)}$ \Comment{back-propagated per candidate; peak memory of one}
+\EndFor
+\State $g\gets g\cdot\min(1,\gamma/\lVert g\rVert)$;\quad $\theta\gets\mathrm{AdamW}(\theta,g)$ \Comment{$\gamma=1$; always active}
+\If{reward arm} \textsc{MonitorAndRefresh}() every 100 updates \Comment{Algorithm~\ref{alg:reward}} \EndIf
+\end{algorithmic}
+\end{algorithm}
+
+\begin{algorithm}[H]
+\caption{\textsc{Weights}: the selection rule}
+\label{alg:weights}
+\begin{algorithmic}[1]
+\Require record with scores $S_{1..N}$ (RGB) or $\hat S_{1..N}$ (latent) and stored draw $J^{\mathrm{rand}}$; rule; temperature $T$
+\If{rule = random} \Return $w=\mathbb{1}[j=J^{\mathrm{rand}}]$
+\ElsIf{rule = argmax} \Return $w=\mathbb{1}[j=\argmax_l S_l]$
+\ElsIf{rule = Boltzmann} \Return $w_j=\exp\big((S_j-\max_lS_l)/T\big)\big/\sum_l\exp\big((S_l-\max_lS_l)/T\big)$ \Comment{raw scores, no z-scoring}
+\ElsIf{rule = uniform} \Return $w_j=1/N$
+\EndIf
+\end{algorithmic}
+\end{algorithm}
+
+\begin{algorithm}[H]
+\caption{\textsc{Estimator}: which candidates this update trains on, and with what weight}
+\label{alg:estimator}
+\begin{algorithmic}[1]
+\Require weights $w$; estimator; selection RNG $\xi$ (private, seeded by the run seed); caption index $\texttt{idx}$; map seed $m$
+\If{$w$ is one-hot} \Return $\{(\argmax w,\,1)\}$ \Comment{all estimators coincide}
+\ElsIf{estimator = exact} \Return $\{(j,w_j):w_j>0\}$ \Comment{$N$ rollouts and $N$ student passes}
+\ElsIf{estimator = sampled} $J\sim\mathrm{Cat}(w)$ using $\xi$;\ \Return $\{(J,1)\}$ \Comment{fresh draw on every visit}
+\ElsIf{estimator = kept} $J_c\sim\mathrm{Cat}(w)$ using $\mathrm{RNG}(m,\texttt{idx})$;\ \Return $\{(J_c,1)\}$ \Comment{same draw on every visit and rank}
+\ElsIf{estimator = MC-$M$} $J_1,\dots,J_M\overset{\mathrm{iid}}{\sim}\mathrm{Cat}(w)$ using $\xi$;\ \Return $\{(j,\ \#\{m:J_m=j\}/M):\#>0\}$
+\EndIf
+\end{algorithmic}
+\end{algorithm}
+
+\begin{algorithm}[H]
+\caption{Latent projector training (once, offline)}
+\label{alg:projector}
+\begin{algorithmic}[1]
+\Require 22,000 training and 2,000 validation captions, none in the pool the projector will score; teacher; $\Dec$; $u^{\mathrm{pat}}$; $\tau=0.04$, $\lambda_{\mathrm{rank}}=1$
+\For{every caption} \Comment{data, 10 GPU shards, 7 GPU-hours}
+  \State re-roll $z^{(1..4)}_K$ from the cached seeds; $e_j\gets u^{\mathrm{pat}}(\Dec(z^{(j)}_K))$; $u_{\mathrm{ref}}\gets u^{\mathrm{pat}}(x^{\mathrm{ref}})$; $S_j\gets\langle e_j,u_{\mathrm{ref}}\rangle$
+  \State store $(z^{(j)}_K\ \text{bf16},\ e_j,\ u_{\mathrm{ref}},\ S_{1..4})$ \Comment{recomputed $S$ matches the cache to 0.002}
+\EndFor
+\State $P\gets$ conv encoder $(64,128,256,512,512)$ + MLP $512{-}1024{-}768$, L2-normalised output; 6.8M parameters
+\For{30 epochs, batches of 32 captions} \Comment{AdamW, one-cycle lr $3\times10^{-4}$, five minutes}
+  \State $\hat e_j\gets P(z^{(j)}_K)$;\quad $\hat S_j\gets\langle\hat e_j,u_{\mathrm{ref}}\rangle$
+  \State $\mathcal{L}\gets\mathrm{mean}_j\big[1-\langle\hat e_j,e_j\rangle\big]+\lambda_{\mathrm{rank}}\,\mathrm{KL}\big(\mathrm{softmax}(S/\tau)\,\|\,\mathrm{softmax}(\hat S/\tau)\big)$
+  \State update $P$; after each epoch measure top-1 agreement, Spearman, regret and VQAScore headroom on the validation captions
+\EndFor
+\State keep the epoch with the lowest validation regret; score the target pool's cached candidates with it (Algorithm~\ref{alg:cache}, line 6)
+\end{algorithmic}
+\end{algorithm}
+
+\begin{algorithm}[H]
+\caption{\textsc{Reward} and \textsc{MonitorAndRefresh} (reward arms only)}
+\label{alg:reward}
+\begin{algorithmic}[1]
+\Require projector $P$ (frozen weights, differentiable in its input); $u_{\mathrm{ref}}$ per caption; $\lambda=80$; buffer $B$ of recent $\hat{x}_0$; RGB scorer; replay set of 2,000 teacher-candidate captions
+\Procedure{Reward}{$\hat{x}_0^{(s_1)},\hat{x}_0^{(s_2)}$} \Comment{the two clean estimates from the least-noisy inputs}
+  \State push $\hat{x}_0^{(s_1)}$ (detached) into $B$;\quad \Return $\frac12\sum_{i}\langle P(\hat{x}_0^{(s_i)}),u_{\mathrm{ref}}\rangle$ \Comment{gradient flows through $P$ into $\theta$}
+\EndProcedure
+\Procedure{MonitorAndRefresh}{}
+  \State $X\gets$ the 32 most recent entries of $B$;\quad $e\gets u^{\mathrm{pat}}(\Dec(X))$ \Comment{decode + DINOv2, forward only}
+  \State log $\mathrm{mean}\langle e,u_{\mathrm{ref}}\rangle$ (true RGB score), $\mathrm{mean}\langle P(X),u_{\mathrm{ref}}\rangle$ (reward), and their correlation over $X$ \Comment{the hacking monitor}
+  \If{refreshed arm}
+    \For{4 steps} \Comment{AdamW on $P$, lr $10^{-4}$}
+      \State $\mathcal{L}_P\gets\mathrm{mean}\big[1-\langle P(X),e\rangle\big]+\mathcal{L}_{\text{replay}}$ \Comment{$\mathcal{L}_{\text{replay}}$: Algorithm~\ref{alg:projector} line 8 on 8 replay captions}
+      \State update $P$
+    \EndFor
+  \EndIf
+\EndProcedure
+\end{algorithmic}
+\end{algorithm}
 
 \subsection{Every arm against the four choices}
 Table~\ref{tab:arms} lists every arm as its choice of weights, estimator, score and reward.
