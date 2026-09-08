@@ -7,6 +7,8 @@
 \usepackage{array}
 \usepackage{microtype}
 \usepackage{float}
+\usepackage{tikz}
+\usetikzlibrary{arrows.meta,positioning,fit,calc}
 \usepackage[hidelinks]{hyperref}
 
 \DeclareMathOperator*{\argmax}{arg\,max}
@@ -31,7 +33,7 @@ We distil Stable Diffusion 3.5 Medium into a 4-step student with consistency dis
 \paragraph{Method in one paragraph.}
 The teacher is SD3.5-Medium with classifier-free guidance $w=7$ and 8 Euler steps. For each caption we roll out $N=4$ candidates from four fixed seeds. A scorer ranks the four decoded images and the best one is stored in a manifest. Training re-rolls only the chosen trajectory and regresses the student's clean-image estimate at a noisier state onto the teacher's clean-image estimate at a less noisy state. The student is sampled with 4 steps and no guidance. The only thing that differs between arms is which one of the four trajectories the student sees.
 
-\paragraph{Where things are defined.} Section~\ref{sec:arms} states the single objective every trained model minimises, tabulates every arm as a choice of weights, estimator, score and reward (Table~\ref{tab:arms}), lists every network with its size (Table~\ref{tab:networks}), and compares all 3k-pool arms in four figures.
+\paragraph{Where things are defined.} Section~\ref{sec:arms} states the single objective every trained model minimises, tabulates every arm as a choice of weights, estimator, score and reward (Table~\ref{tab:arms}), lists every network with its size (Table~\ref{tab:networks}), and compares all 3k-pool arms in four figures. Two names recur: the \emph{RGB scorer} is the DINOv2 score of the decoded candidate image, and the \emph{latent scorer} is the projector that scores the candidate's latent without decoding it. The projector is used in three settings, in this order: frozen as an offline selector, frozen as a reward inside training, and refreshed during training (Table~\ref{tab:projector_uses}).
 
 \paragraph{Main numbers.}
 Table~\ref{tab:summary} gives the headline results. All deltas are paired against the random-selection student on identical prompts.
@@ -155,7 +157,7 @@ The score is the cosine similarity to the reference photograph $x^{\mathrm{ref}}
 \begin{equation}
 S_j=\big\langle u^{\mathrm{pat}}(I_j),\,u^{\mathrm{pat}}(x^{\mathrm{ref}})\big\rangle.
 \end{equation}
-Candidates are decoded at $512\times512$. The reference photograph is first resized (squashed, aspect ratio not preserved) to $512\times512$ with bicubic interpolation, so both enter the DINO processor as squares and the centre crop discards nothing. There is no text model in this scorer. The caption enters only through its photograph.
+Because this scorer reads the decoded image, it is called the \emph{RGB scorer} in the rest of this document, in contrast to the \emph{latent scorer} of Section~\ref{sec:latent}, which reads the candidate's latent and never decodes it. Candidates are decoded at $512\times512$. The reference photograph is first resized (squashed, aspect ratio not preserved) to $512\times512$ with bicubic interpolation, so both enter the DINO processor as squares and the centre crop discards nothing. There is no text model in this scorer. The caption enters only through its photograph.
 
 \subsection{Other scorers}
 \begin{itemize}
@@ -278,13 +280,82 @@ with $z^{(j)}$ the frozen teacher's trajectory of candidate $j$, $\hat{x}_0$ the
 \mathcal{L}(\theta)=\mathbb{E}_c\Big[\sum_{j=1}^{N}w_j(c)\,\ell_c^{(j)}(\theta)\Big]\;-\;\lambda\,\mathbb{E}_c\big[r_c(\theta)\big],
 \label{eq:unified}
 \end{equation}
-where the arms differ in four things and nothing else:
-\begin{enumerate}
-\item \textbf{The weights} $w(c)$ over the candidates. They are a function of a per-candidate score $S_j(c)$ and a temperature: one-hot on $\argmax_jS_j$ (argmax), one-hot on a stored uniform draw (random), the Boltzmann weights $\pi_j=\exp(S_j/T)/\sum_l\exp(S_l/T)$, or uniform $1/N$.
-\item \textbf{The estimator} of the weighted sum. \emph{Exact}: every candidate with $w_j>0$ is rolled out and its loss is weighted by $w_j$ (cost proportional to the number of candidates). \emph{Sampled}: one index $J\sim w$ is drawn on each visit of the caption and $\ell^{(J)}$ is used (single-candidate cost; same expected gradient, different optimizer updates, Section~\ref{sec:graddiag}). \emph{Kept}: $J_c\sim w$ is drawn once per caption and reused on every visit. \emph{Same-caption Monte Carlo}: $M$ independent draws per visit, losses weighted by their counts over $M$ (implemented, not run). For one-hot weights the four estimators coincide.
-\item \textbf{The score} $S_j$. RGB: $S_j=\langle u^{\mathrm{pat}}(\Dec(z_K^{(j)})),u^{\mathrm{pat}}(x^{\mathrm{ref}})\rangle$, the DINOv2 patch-mean cosine between the decoded candidate and the reference photograph (Section~\ref{sec:scorers}). Latent: $\hat S_j=\langle P(z_K^{(j)}),u^{\mathrm{pat}}(x^{\mathrm{ref}})\rangle$, with the candidate side replaced by a projector on the terminal latent (Section~\ref{sec:latent}). VQAScore and the other scorers of Table~\ref{tab:headroom} are further choices of $S$.
-\item \textbf{The reward} $r_c(\theta)=\frac{1}{R}\sum_{s\in\mathcal{R}}\langle P(\hat{x}_0(z^{(J)}_s;\theta)),u^{\mathrm{pat}}(x^{\mathrm{ref}})\rangle$ on the student's own clean estimates from the $R$ least-noisy supervised inputs, with $\lambda>0$ only in the reward arms of Section~\ref{sec:reward}; $P$ is frozen or refreshed against the RGB scorer during training. Everywhere else $\lambda=0$.
-\end{enumerate}
+where the arms differ in four things and nothing else. Figure~\ref{fig:pipeline} shows where each enters one training update.
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[
+  node distance=5mm and 7mm, >=Latex, font=\footnotesize,
+  box/.style={draw, rounded corners=2pt, align=center, inner sep=4pt, minimum height=9mm},
+  choice/.style={draw, rounded corners=2pt, align=left, inner sep=4pt, fill=black!4},
+  opt/.style={draw, dashed, rounded corners=2pt, align=center, inner sep=4pt, fill=black!2},
+  lab/.style={font=\bfseries\footnotesize, fill=white, inner sep=1pt}]
+\node[box] (cap) {caption $c$\\ reference photo $x^{\mathrm{ref}}$};
+\node[box, right=of cap] (tea) {frozen teacher\\ 8 Euler steps, $w{=}7$\\ seeds $1000\cdot\texttt{idx}+j$};
+\node[box, right=of tea] (cand) {$N{=}4$ candidate\\ trajectories\\ $z^{(1)},\dots,z^{(4)}$};
+\node[choice, right=of cand] (score) {\textbf{\textcircled{3} score} $S_j$\\ RGB (decoded image): $\Dec(z_K^{(j)})\to$ DINOv2 $\to\cos$\\ latent (no decode): $P(z_K^{(j)})\to\cos$\\ both against $u^{\mathrm{pat}}(x^{\mathrm{ref}})$};
+\node[choice, below=of score] (w) {\textbf{\textcircled{1} weights} $w(c)$\\ one-hot argmax\\ one-hot stored random draw\\ softmax$(S/T)$\\ uniform $1/N$};
+\node[choice, left=of w] (est) {\textbf{\textcircled{2} estimator}\\ exact: all $j$ with $w_j{>}0$\\ sampled: $J\sim w$ per visit\\ kept: $J_c\sim w$ once\\ MC: $M$ draws per visit};
+\node[box, left=of est] (loss) {student loss\\ $\sum_j w_j\,\ell_c^{(j)}(\theta)$\\ window states, $\Delta$ draws};
+\node[box, left=of loss] (step) {clip to norm 1\\ AdamW step};
+\node[opt, below=of loss] (rew) {\textbf{\textcircled{4} reward} (reward arms only)\\ $-\lambda\,\langle P(\hat{x}_0),u^{\mathrm{pat}}(x^{\mathrm{ref}})\rangle$};
+\draw[->] (cap) -- (tea); \draw[->] (tea) -- (cand); \draw[->] (cand) -- (score);
+\draw[->] (score) -- (w); \draw[->] (w) -- (est); \draw[->] (est) -- (loss); \draw[->] (loss) -- (step);
+\draw[->, dashed] (rew) -- (loss);
+\draw[->] (cap.north) -- ++(0,5mm) -| node[pos=0.25, above, font=\scriptsize]{$x^{\mathrm{ref}}$ enters only as $u^{\mathrm{pat}}(x^{\mathrm{ref}})$} (score.north);
+\end{tikzpicture}
+\caption{One training update. Every arm follows this flow; the four numbered blocks are the only places where arms differ (Table~\ref{tab:arms}). The reference photograph enters only through its DINOv2 embedding, in the score and, in the reward arms, in the reward.}
+\label{fig:pipeline}
+\end{figure}
+
+\begin{itemize}
+\item \textbf{\textcircled{1} The weights $w(c)$ over the candidates.} A function of a per-candidate score $S_j(c)$ and a temperature $T$:
+  \begin{itemize}
+  \item \emph{argmax}: $w_j=\mathbb{1}[j=\argmax_l S_l]$ (the method);
+  \item \emph{random}: $w_j=\mathbb{1}[j=J_c]$ with $J_c\sim\mathcal{U}\{1..N\}$ drawn once and stored in the cache (the baseline);
+  \item \emph{Boltzmann}: $w_j=\pi_j=\exp(S_j/T)\big/\sum_l\exp(S_l/T)$, on the raw score scale;
+  \item \emph{uniform}: $w_j=1/N$ (the $T\to\infty$ limit; no selection).
+  \end{itemize}
+\item \textbf{\textcircled{2} The estimator of the weighted sum $\sum_jw_j\ell^{(j)}$.} For one-hot weights all four coincide.
+  \begin{itemize}
+  \item \emph{exact}: every candidate with $w_j>0$ is rolled out and its loss weighted by $w_j$; cost proportional to the number of candidates;
+  \item \emph{sampled}: one index $J\sim w$ is drawn on each visit of the caption and $\ell^{(J)}$ is used; single-candidate cost, the same expected gradient, different optimizer updates (Section~\ref{sec:graddiag});
+  \item \emph{kept}: $J_c\sim w$ is drawn once per caption and reused on every visit (the persistence control);
+  \item \emph{same-caption Monte Carlo}: $M$ independent draws per visit, losses weighted by their counts over $M$ (implemented, not run).
+  \end{itemize}
+\item \textbf{\textcircled{3} The score $S_j$.} Both use the reference photograph only through its DINOv2 patch-mean embedding $u^{\mathrm{pat}}(x^{\mathrm{ref}})$:
+  \begin{itemize}
+  \item \emph{RGB}, the decoded-image scorer of Section~\ref{sec:scorers}, named for reading the decoded RGB image: $S_j=\big\langle u^{\mathrm{pat}}(\Dec(z_K^{(j)})),\,u^{\mathrm{pat}}(x^{\mathrm{ref}})\big\rangle$, the candidate decoded and embedded with DINOv2;
+  \item \emph{latent} (Section~\ref{sec:latent}): $\hat S_j=\big\langle P(z_K^{(j)}),\,u^{\mathrm{pat}}(x^{\mathrm{ref}})\big\rangle$, the candidate's terminal latent mapped into the same space by the projector $P$, no decode;
+  \item VQAScore, DINOv2 CLS, CLIP-I, ImageReward and PickScore (Table~\ref{tab:headroom}) are further choices of $S$, used with argmax only.
+  \end{itemize}
+\item \textbf{\textcircled{4} The reward $r_c(\theta)$} (Section~\ref{sec:reward}; $\lambda=0$ everywhere else):
+  \begin{itemize}
+  \item $r_c(\theta)=\frac{1}{R}\sum_{s\in\mathcal{R}}\big\langle P(\hat{x}_0(z^{(J)}_s;\theta)),\,u^{\mathrm{pat}}(x^{\mathrm{ref}})\big\rangle$ on the student's own clean estimates from the $R=2$ least-noisy supervised inputs, with the gradient flowing through $P$ into the student;
+  \item \emph{frozen}: $P$ is the offline projector throughout;
+  \item \emph{refreshed}: every 100 updates $P$ takes four steps toward the RGB scorer on decoded recent predictions, with replay of teacher candidates (Figure~\ref{fig:rewardloop}).
+  \end{itemize}
+\end{itemize}
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[node distance=5mm and 8mm, >=Latex, font=\footnotesize,
+  box/.style={draw, rounded corners=2pt, align=center, inner sep=4pt, minimum height=8mm},
+  opt/.style={draw, dashed, rounded corners=2pt, align=center, inner sep=4pt, fill=black!2}]
+\node[box] (xh) {student clean estimate\\ $\hat{x}_0(z_s;\theta)$};
+\node[box, right=of xh] (P) {projector $P$\\ (6.8M, frozen)};
+\node[box, right=of P] (r) {reward $r=\langle P(\hat{x}_0),u^{\mathrm{pat}}(x^{\mathrm{ref}})\rangle$\\ $\to$ loss $-\lambda r$, $\lambda=80$};
+\node[box, below=9mm of xh] (dec) {every 100 updates:\\ decode 32 recent $\hat{x}_0$\\ $\to$ DINOv2 $\to$ true RGB score};
+\node[box, right=of dec] (mon) {monitor\\ RGB score, $P$ score,\\ their correlation};
+\node[opt, right=of mon] (ref) {refresh (one arm only)\\ 4 AdamW steps of $P$ on the\\ decoded predictions + replay};
+\draw[->] (xh) -- (P); \draw[->] (P) -- (r);
+\draw[->] (r.north) -- ++(0,4mm) -| node[pos=0.25, above, font=\scriptsize]{gradient through $P$ into $\theta$} (xh.north);
+\draw[->] (xh) -- (dec); \draw[->] (dec) -- (mon); \draw[->] (mon) -- (ref);
+\draw[->, dashed] (ref.north) |- (P.east);
+\end{tikzpicture}
+\caption{The reward arms of Section~\ref{sec:reward}. Solid: the reward path used on every update. Below: the hacking monitor that decodes recent predictions and scores them with the RGB scorer, and, in the refreshed arm, the projector update it feeds.}
+\label{fig:rewardloop}
+\end{figure}
 Two further terms appear only in the ablations and are written where they are used: the real-photograph regression (Section~\ref{sec:ablations}) adds a pseudo-Huber term between $\hat{x}_0$ and the VAE latent of $x^{\mathrm{ref}}$; the evolving-teacher variant replaces the frozen teacher in $z^{(j)}$ and $\tilde{x}_0$ by an EMA copy of the student.
 
 \subsection{Every arm against the four choices}
@@ -340,6 +411,29 @@ Text encoders & CLIP-L, CLIP-G, T5-XXL & caption conditioning of both & no \\
 VAE & SD3.5 VAE & decode candidates for scoring; decode for evaluation & no \\
 RGB scorer & DINOv2-B, 86M; patch-mean, CLS dropped, L2-normalised & $S_j$ (offline) & no \\
 Latent projector $P$ & 5-stage conv encoder (64, 128, 256, 512, 512; GN, SiLU), global mean pool, MLP 512--1024--768, L2-normalised; 6.8M & $\hat S_j$ (offline) and the reward $r_c$ & once, offline, on 22k held-out captions (5 min); refreshed during training in one reward arm \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{The projector's three settings, in the order they were tried}
+The latent projector $P$ appears in three settings that build on each other; Table~\ref{tab:projector_uses} lists them in order, with the check that sits between the second and the first.
+
+\begin{table}[H]
+\centering
+\caption{The three uses of the latent projector $P$. In every setting $P$ is first trained once, offline, on 22,000 held-out captions (five minutes); the settings differ in what it scores and whether it moves afterwards.}
+\label{tab:projector_uses}
+\footnotesize\setlength{\tabcolsep}{4pt}
+\begin{tabular}{>{\raggedright\arraybackslash}p{0.6cm} >{\raggedright\arraybackslash}p{2.9cm} >{\raggedright\arraybackslash}p{3.3cm} >{\raggedright\arraybackslash}p{2.8cm} >{\raggedright\arraybackslash}p{4.2cm}}
+\toprule
+ & setting & what $P$ scores, when & arms & outcome \\
+\midrule
+1 & \textbf{offline selector, frozen} (Section~\ref{sec:latent}) & the cached teacher candidates $z_K^{(j)}$, once before training; the score goes into the cache and the trainer is unchanged & argmax, latent scorer; Boltzmann $T{=}0.04$ exact, latent scorer & recovers 34\% of the VQAScore headroom (RGB: 44\%); trained students $0.003$ below their RGB counterparts, identical fidelity \\
+\addlinespace
+-- & \textbf{transfer check} (Section~\ref{sec:latent}, R0) & the students' own 4-step samples, offline & none (diagnostic) & agreement with the RGB scorer drops (top-1 0.51 $\to$ 0.37); fine-tuning on 1,000 student latents does not restore it \\
+\addlinespace
+2 & \textbf{in-loop reward, frozen} (Section~\ref{sec:reward}) & the student's clean estimates $\hat{x}_0$ at the two least-noisy supervised inputs, on every update; $-\lambda r$ added to the loss, $\lambda=80$ & argmax + projector reward, frozen & reward rises 0.03; true RGB score of the same predictions does not; CompBench $-0.003\pm0.005$ vs argmax \\
+\addlinespace
+3 & \textbf{in-loop reward, refreshed} (Section~\ref{sec:reward}) & as 2, and every 100 updates $P$ takes four steps toward the RGB scorer on 32 decoded recent predictions, with replay of teacher candidates & argmax + projector reward, refreshed & reward rises 0.04; RGB score flat; agreement with the RGB scorer 0.41 vs 0.36 frozen; CompBench $+0.000\pm0.008$ vs argmax \\
 \bottomrule
 \end{tabular}
 \end{table}
