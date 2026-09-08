@@ -1439,6 +1439,23 @@ Figures~\ref{fig:qual_rx_cb} and~\ref{fig:qual_rx_ge} do the same for the exact-
 \label{fig:qual_rx_ge}
 \end{figure}
 
+\paragraph{Randomly selected prompts.}
+The cherry-picked sheets show the extremes. Figures~\ref{fig:qual_rnd_cb} and~\ref{fig:qual_rnd_ge} show eight prompts per benchmark drawn uniformly at random with a fixed seed, no score involved, in the same layout. They are what typical behaviour looks like: the three students are close to one another on most prompts, the exact-reward student is slightly the most photographic in surfaces and lighting, and the per-prompt scores go both ways. On this draw the exact-reward student beats argmax on four of the eight CompBench prompts (mean 0.73 against 0.64) and on two of the eight GenEval2 prompts (mean 0.25 against 0.36); across all prompts of the same two models it wins 47.8\% of CompBench prompts, loses 37.2\% and ties the rest, and wins 52.6\% of GenEval2 prompts. A win rate a few points above one half is what an average gain of 0.011 looks like prompt by prompt, and the sheets should be read that way: a broad small shift, not a uniform improvement.
+
+\begin{figure}[p]
+\centering
+\includegraphics[width=\textwidth]{figs/qual_rewx_random_compbench.jpg}
+\caption{Eight T2I-CompBench prompts drawn uniformly at random (numpy seed 2026), no score involved; same columns and models as Figure~\ref{fig:qual_rx_cb}.}
+\label{fig:qual_rnd_cb}
+\end{figure}
+
+\begin{figure}[p]
+\centering
+\includegraphics[width=\textwidth]{figs/qual_rewx_random_geneval2.jpg}
+\caption{Eight GenEval2 prompts drawn uniformly at random, same rule and layout as Figure~\ref{fig:qual_rnd_cb}.}
+\label{fig:qual_rnd_ge}
+\end{figure}
+
 \clearpage
 \section{Cost}
 \label{sec:cost}

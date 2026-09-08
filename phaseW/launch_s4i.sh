@@ -14,7 +14,10 @@ REW="--reward_mode rgb --reward_lambda 15.504 --reward_grad_probe_every 500"
 submit () {  # variant seed trainer extra tagx
   local V=$1 S=$2 TR=$3 EX=$4 TX=$5
   local TAG="${V}${TX}"
-  local T=$(bsub -U iclr_2026 -env "all,VARIANT=$V,COUP=fresh,PSIG=0,SEED=$S,TRAINER=$TR,EXTRA=$EX,TAGX=$TX" < ablations/phaseW_train_s4.lsf | grep -oE "[0-9]{6}")
+  local ENV="all,VARIANT=$V,COUP=fresh,PSIG=0,SEED=$S,TRAINER=$TR"
+  [ -n "$EX" ] && ENV="$ENV,EXTRA=$EX"      # bsub -env rejects empty values ("Invalid syntax for option -env")
+  [ -n "$TX" ] && ENV="$ENV,TAGX=$TX"
+  local T=$(bsub -U iclr_2026 -env "$ENV" < ablations/phaseW_train_s4.lsf | grep -oE "[0-9]{6}")
   local RUN="checkpoints/phaseS4/phaseS4_${TAG}_s${S}_${T}"
   local E1=$(bsub -U iclr_2026 -w "done($T)" -env "all,EVAL_LABEL=S4_${TAG}_s${S},EVAL_CKPT=$RUN/checkpoint_final.pt,EVAL_CFG=1.0" < ablations/phaseN_eval_alignment.lsf | grep -oE "[0-9]{6}")
   local AV=$(bsub -U iclr_2026 -w "done($T)" -env "all,RUN=$RUN,STEPS=2000:4000:final" < phaseW/average_ckpts.lsf | grep -oE "[0-9]{6}")
