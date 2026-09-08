@@ -175,6 +175,13 @@ every seed in both settings. What the ablations established:
   grows by 16%.
 - **Teacher.** With a 28-step or a 16-step cfg-4.5 teacher the within-caption score spread halves
   and the trained gain vanishes: this is a fixed-teacher gain, not a substitute for teacher quality.
+- **Latent scorer as a reward.** Adding `-lambda * cos(P(x0_hat), DINO(photo))` on the student's
+  least-noisy clean estimates (lambda set so the reward gradient is 20% of the consistency
+  gradient), with the projector frozen or refreshed every 100 updates on decoded predictions: the
+  reward rises by 0.03-0.04 in every run, the true RGB score of the same predictions does not
+  (-0.024 to 0.000), and CompBench is unchanged (-0.003 / +0.000 vs argmax after averaging). A
+  proxy-optimisation signature; not adopted. The projector ranks teacher candidates, not student
+  predictions (top-1 agreement with the RGB scorer 0.37 on students' own samples vs 0.51).
 - **Not adopted.** Regressing onto the reference photograph (lambda 0.2) costs 0.02-0.03 CompBench;
   an EMA-of-student teacher collapses at decay 0.999 (its online selection entropy rising to 0.93
   is the early warning) and is inert at 0.9999.
