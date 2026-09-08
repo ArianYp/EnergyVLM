@@ -61,7 +61,9 @@ classifier-free guidance w = 7. Candidate j of caption `idx` starts from `manual
 so the cache stores only scores and the trainer re-rolls the winner from its seed.
 
 Score: `S_j = cos( mean_patches DINOv2(candidate_j), mean_patches DINOv2(reference photo) )`,
-CLS token dropped. Selection: `argmax_j S_j`, frozen offline; no gradient reaches the scorer.
+CLS token dropped. Selection: `argmax_j S_j`, frozen offline; no gradient reaches the scorer. (The
+reward arms below are the exception: `--reward_mode rgb` back-propagates through the frozen scorer
+into the student.)
 
 Distillation, per update, over teacher states k in the window 0.4K..0.9K:
 ```

@@ -20,7 +20,7 @@ import numpy as np
 
 ARMS = {"rewX": "argmax + exact DINO reward", "rewF": "argmax + projector reward, frozen", "rewR": "argmax + projector reward, refreshed"}
 COL = {"rewX": "#c0392b", "rewF": "#7f8c8d", "rewR": "#2c3e50", "argmax": "#2980b9"}
-KEYS = ["_step", "reward/r_mean", "reward/rgb_score", "reward/rgb_proj_corr", "train/loss_cd", "train/loss"]
+KEYS = ["_step", "reward/r_mean", "reward/rgb_score", "reward/proj_score", "reward/rgb_proj_corr", "train/loss_cd", "train/loss"]
 
 
 def fetch(project, run_regex):
@@ -108,10 +108,13 @@ def main():
             L = min(len(c[1]) for c in curves)
             ax[0].plot(curves[0][0][:L], np.mean([c[1][:L] for c in curves], 0), color=COL[arm], lw=2.2, ls="-" if arm == "rewX" else "--", label=ARMS[arm] + " (seed mean)")
         for i, (seed, h) in enumerate(runs):
-            s, r, v = np.asarray(h["_step"]), np.asarray(h["reward/r_mean"]), np.asarray(h["reward/rgb_score"]); m = np.isfinite(v) & np.isfinite(r)
-            ax[1].plot(s[m], r[m] - v[m], color=COL[arm], lw=1.6 if arm == "rewX" else 1.0, ls="-" if arm == "rewX" else "--", alpha=0.9 if arm == "rewX" else 0.6, label=ARMS[arm] if i == 0 else None)
+            # matched approximation gap: reward-path score minus offline RGB score on the SAME monitor
+            # latents, one point per monitor evaluation (repeated logged values dropped)
+            s, pr, v = np.asarray(h["_step"]), np.asarray(h["reward/proj_score"]), np.asarray(h["reward/rgb_score"]); m = np.isfinite(v) & np.isfinite(pr)
+            s, pr, v = s[m], pr[m], v[m]; keep = np.r_[True, (np.diff(pr) != 0) | (np.diff(v) != 0)]
+            ax[1].plot(s[keep], pr[keep] - v[keep], color=COL[arm], lw=1.6 if arm == "rewX" else 1.0, ls="-" if arm == "rewX" else "--", alpha=0.9 if arm == "rewX" else 0.6, label=ARMS[arm] if i == 0 else None)
     ax[0].set_xlabel("update"); ax[0].set_ylabel("RGB DINO score of decoded $\\hat{x}_0$ (offline scorer)"); ax[0].set_title("(a) the true score of the predictions (700-update running mean)", fontsize=9); ax[0].legend(fontsize=7, loc="lower right")
-    ax[1].axhline(0, color="k", lw=0.6); ax[1].set_xlabel("update"); ax[1].set_ylabel("reward $-$ true RGB score"); ax[1].set_title("(b) proxy gap: reward minus the monitor"); ax[1].legend(fontsize=7)
+    ax[1].axhline(0, color="k", lw=0.6); ax[1].set_xlabel("update"); ax[1].set_ylabel("reward-path score $-$ offline RGB score, same latents"); ax[1].set_title("(b) approximation gap on the monitor latents", fontsize=9); ax[1].legend(fontsize=7)
     for i, (seed, h) in enumerate(sorted(data.get("argmax", {}).items())):
         s, v = smooth(h["_step"], h["train/loss"]); ax[2].plot(s, v, color=COL["argmax"], lw=1.0, alpha=0.7, label="argmax (no reward)" if i == 0 else None)
     for i, (seed, h) in enumerate(sorted(data.get("rewX", {}).items())):

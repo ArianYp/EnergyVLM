@@ -40,10 +40,12 @@ Reward arms (--reward_mode, single-candidate selectors only): -lambda * r is add
            reward the projector approximates (report Sec. 11.7). About 1.2x the step time.
 Every --reward_monitor_every updates the 32 most recent predictions are decoded and scored by the
 OFFLINE scorer (8-bit image, HF processor) and logged next to the reward: the hacking monitor.
-Note: loading the scorer (and constructing the projector) advances the global torch generator
-before the sampler's first draw, so a reward arm visits the captions in a different order from a
-reward-free run with the same --seed (initial weights, noise-level draws and candidate seeds are
-unchanged). Kept as is so the released trainer reproduces the reported runs bit for bit.
+RNG note: loading the scorer (and constructing the projector) advances the global torch generator.
+The trainer saves the generator state before loading the reward machinery and restores it after, so
+a reward arm visits the captions in the same order as a reward-free run with the same --seed, and a
+reward mode with --reward_lambda 0 (scorer loaded, no reward term) is bit-identical to no reward.
+The first reward runs of the report (Sections 11.6 and the first exact-reward run of 11.7) predate
+this and saw a different caption order; --reward_legacy_rng reproduces them.
 
 --accum M accumulates M captions per optimizer update (batch M per GPU at the same per-update
 cost); --num_steps counts optimizer updates, so the data budget is num_steps * accum * world.
@@ -244,6 +246,8 @@ def main() -> None:
     ap.add_argument("--reward_replay", default="cache/reward/replay.pt", help="teacher-candidate latents replayed during refresh and used to verify the rgb path")
     ap.add_argument("--reward_monitor_every", type=int, default=100, help="decode + offline-score recent predictions next to the reward (hacking monitor)")
     ap.add_argument("--reward_grad_probe", type=int, default=0, help="print ||grad CD|| and ||grad reward|| separately for the first N updates (for setting lambda)")
+    ap.add_argument("--reward_grad_probe_every", type=int, default=0, help="log ||grad CD||, ||grad reward||, their ratio and cosine every N updates")
+    ap.add_argument("--reward_legacy_rng", action="store_true", help="do NOT restore the global RNG after loading the reward machinery (reproduces the first reward runs)")
     ap.add_argument("--dino_id", default="facebook/dinov2-base")
     ap.add_argument("--K", type=int, default=8, help="teacher steps")
     ap.add_argument("--cfg", type=float, default=7.0, help="teacher guidance")
@@ -376,10 +380,12 @@ def main() -> None:
         print(f"[selection] window={args.window} K={K} supervised_k={score_idxs} "
               f"caption->candidate sha256={h.hexdigest()[:16]}", flush=True)
 
-    reward_on = args.reward_mode != "none" and args.reward_lambda != 0.0
+    reward_load = args.reward_mode != "none"                 # machinery loaded (also at lambda 0: the zero-weight control)
+    reward_on = reward_load and args.reward_lambda != 0.0
     loss_cd_v = None
     proj = rgb_reward = scorer = None
-    if reward_on:
+    _rng_cpu = torch.random.get_rng_state(); _rng_cuda = torch.cuda.get_rng_state_all()
+    if reward_load:
         assert not exact_soft, "the reward arms are single-candidate arms"
         assert world == 1 or args.reward_refresh_every == 0, "projector refresh is implemented for a single GPU"
         assert args.reward_mode == "proj" or args.reward_refresh_every == 0, "refresh applies to the projector only"
@@ -410,10 +416,15 @@ def main() -> None:
         replay = torch.load(args.reward_replay, map_location="cpu", weights_only=False) if args.reward_refresh_every > 0 else None
         proj_opt = torch.optim.AdamW(proj.parameters(), lr=args.reward_refresh_lr, weight_decay=0.01) if args.reward_refresh_every > 0 else None
         rbuf = []
-        reward_stats = {"r": 0.0, "n": 0, "rgb": float("nan"), "proj": float("nan"), "corr": float("nan"), "refresh_loss": float("nan")}
+        reward_stats = {"r": 0.0, "n": 0, "rgb": float("nan"), "proj": float("nan"), "corr": float("nan"), "refresh_loss": float("nan"),
+                        "g_cd": float("nan"), "g_r": float("nan"), "g_cos": float("nan")}
         if is_main:
             print(f"[reward] mode={args.reward_mode} projector {args.reward_proj if proj is not None else None} lambda={args.reward_lambda} "
                   f"states={args.reward_states} refresh_every={args.reward_refresh_every} monitor_every={args.reward_monitor_every} refs={len(ref_emb)}", flush=True)
+        if not args.reward_legacy_rng:
+            torch.random.set_rng_state(_rng_cpu); torch.cuda.set_rng_state_all(_rng_cuda)
+            if is_main:
+                print("[reward] global RNG state restored after loading the reward machinery: caption order matches the reward-free run", flush=True)
 
     sample_prompts = None
     if is_main and args.wandb_project and args.sample_prompts and args.sample_every > 0:
@@ -524,15 +535,16 @@ def main() -> None:
                         _ehat = proj(_xr).float()
                     _r = (_ehat * _eref[None]).sum(-1)
                 _lr = -args.reward_lambda * _r.mean()
-                if is_main and gstep < args.reward_grad_probe:
+                if is_main and (gstep < args.reward_grad_probe or (args.reward_grad_probe_every and gstep % args.reward_grad_probe_every == 0)):
                     _ps = [p for p in student_module.parameters() if p.requires_grad]
                     _g1 = torch.autograd.grad(loss, _ps, retain_graph=True, allow_unused=True)
                     _g2 = torch.autograd.grad(_lr, _ps, retain_graph=True, allow_unused=True)
                     _n1 = float(torch.sqrt(sum((g.float() ** 2).sum() for g in _g1 if g is not None)))
                     _n2 = float(torch.sqrt(sum((g.float() ** 2).sum() for g in _g2 if g is not None)))
                     _dot = float(sum((a.float() * b.float()).sum() for a, b in zip(_g1, _g2) if a is not None and b is not None))
+                    reward_stats.update({"g_cd": _n1, "g_r": _n2, "g_cos": _dot / max(_n1 * _n2, 1e-9)})
                     print(f"[reward-probe] step {gstep} ||grad CD||={_n1:.2f} ||grad reward||={_n2:.4f} ratio={_n2 / max(_n1, 1e-9):.4f} "
-                          f"cos(CD,reward)={_dot / max(_n1 * _n2, 1e-9):.4f} r={float(_r.mean()):.4f}", flush=True)
+                          f"cos(CD,reward)={_dot / max(_n1 * _n2, 1e-9):.4f} r={float(_r.mean()):.4f} cd={float(loss.detach()):.4f}", flush=True)
                     del _g1, _g2
                 loss_cd_v = float(loss.detach())
                 loss = loss + _lr
@@ -611,7 +623,10 @@ def main() -> None:
                 if reward_on:
                     payload.update({"reward/r_mean": reward_stats["r"] / max(reward_stats["n"], 1), "reward/rgb_score": reward_stats["rgb"],
                                     "reward/proj_score": reward_stats["proj"], "reward/rgb_proj_corr": reward_stats["corr"],
-                                    "reward/refresh_loss": reward_stats["refresh_loss"], "train/loss_cd": loss_cd_v})
+                                    "reward/refresh_loss": reward_stats["refresh_loss"], "train/loss_cd": loss_cd_v,
+                                    "reward/grad_norm_cd": reward_stats["g_cd"], "reward/grad_norm_reward": reward_stats["g_r"],
+                                    "reward/grad_ratio": reward_stats["g_r"] / reward_stats["g_cd"] if reward_stats["g_cd"] == reward_stats["g_cd"] else float("nan"),
+                                    "reward/grad_cos": reward_stats["g_cos"]})
                     reward_stats["r"] = 0.0; reward_stats["n"] = 0
                 wandb.log(payload, step=gstep)
         if (is_main and sample_prompts and args.sample_every > 0 and gstep % args.sample_every == 0):

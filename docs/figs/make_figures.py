@@ -261,8 +261,9 @@ ARM_ORDER = [  # label prefix, display name, family
     ("S4_CD_latent_full-T0.04", "Boltzmann T=0.04 exact, latent scorer", "latent scorer"),
     ("S4_CD_dinop_hard-rewF", "argmax + projector reward, frozen", "projector reward"),
     ("S4_CD_dinop_hard-rewR", "argmax + projector reward, refreshed", "projector reward"),
+    ("S4_CD_dinop_hard-rewX", "argmax + exact DINO reward", "exact reward"),
 ]
-FAM_COLOR = {"reference": "#333333", "soft weighting": "#1f77b4", "sampled estimator": "#d62728", "latent scorer": "#9467bd", "projector reward": "#2ca02c"}
+FAM_COLOR = {"reference": "#333333", "soft weighting": "#1f77b4", "sampled estimator": "#d62728", "latent scorer": "#9467bd", "projector reward": "#2ca02c", "exact reward": "#ff7f0e"}
 
 
 def fidelity_rows(path="phaseW/fidelity_s4_report.md"):

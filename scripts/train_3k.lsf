@@ -66,7 +66,7 @@ torchrun --standalone --nproc-per-node=1 train/distill.py \
   --seed "$SEED" --num_steps "$STEPS" --num_warmup_steps "$WARMUP" --lr "$LR" --temp "$TEMP" --map_seed "$MAP_SEED" --mc_draws "$MCD" --score_field "$SCORE_FIELD" \
   --K 8 --cfg 7.0 --window 0.4,0.9 --delta_min 1 --delta_max 3 --height 512 \
   --gradient_checkpointing --save_every 2000 --log_every 10 \
-  --reward_mode "$REWARD_MODE" --reward_lambda "$REWARD_LAMBDA" --reward_refresh_every "$REWARD_REFRESH" \
+  --reward_mode "$REWARD_MODE" --reward_lambda "$REWARD_LAMBDA" --reward_refresh_every "$REWARD_REFRESH" --reward_grad_probe_every "${REWARD_PROBE_EVERY:-500}" \
   --reward_proj "$REWARD_PROJ" --reward_ref "$REWARD_REF" --reward_replay "$REWARD_REPLAY" \
   --sample_every "${SAMPLE_EVERY:-0}" --sample_prompts "${SAMPLE_PROMPTS:-pools/sample_prompts.json}" \
   ${WANDB_PROJECT:+--wandb_project "$WANDB_PROJECT" --wandb_run_name "$RUN"}
