@@ -31,15 +31,24 @@ common/      sampling.py (teacher rollout, decode)  distributed.py (torchrun set
 data/        build_pool.py       training captions paired with their photographs
              build_eval_pool.py  T2I-CompBench, GenEval2 and COCO-val prompt pools
              build_candidates.py the candidate cache: 4 trajectories per caption, scored
-train/       distill.py          the trainer (--selector random | dino_patch | boltzmann |
+             build_latents.py    terminal latents + DINO embeddings of held-out captions (latent scorer data)
+             build_latent_manifest.py  the train / val / test split of those captions
+             build_reward_refs.py  reference-photo embeddings and a replay set for the reward arms
+train/       distill.py          the trainer (--selector random | dino_patch | latent | boltzmann |
                                  boltzmann_sample | boltzmann_frozen | boltzmann_mc |
-                                 uniform_visit; --accum for larger batches)
+                                 uniform_visit; --accum for larger batches; --reward_mode proj | rgb
+                                 adds a reward on the student's clean estimates)
+             latent_scorer.py    the decode-free latent projector (trained once, offline)
              average_checkpoints.py  uniform average of the last checkpoints of a run
 eval/        generate.py         sample a model on a prompt pool (paired noise per prompt)
              compbench.py        T2I-CompBench with the official evaluators
              geneval2.py         GenEval2 with the official evaluator
              fidelity.py         FID, CMMD, precision, recall vs COCO val2017
              compare_arms.py     paired per-prompt comparison of evaluated models
+             grad_diagnostic.py  per-candidate gradient geometry of the selection rules
+             latent_scorer_regret.py  the latent scorer on students' own samples
+             heldout_dino.py / heldout_compare.py  held-out DINO monitor of the reward arms
+             reward_monitor.py   the in-training reward vs. true-score monitor, from wandb
 scripts/     LSF launchers for each stage; env.sh holds cluster paths
 third_party/ (not included) T2I-CompBench, GenEval2, t2v_metrics clones, see below
 ```
@@ -106,6 +115,17 @@ bsub -w "done($A)" -env "all,LABEL=dino_patch_avg_s0,CKPT=checkpoints/dino_patch
 # 7. absolute per-category tables (markdown + LaTeX)
 python eval/absolute_tables.py --model "naive=out/eval/eval_random_s[0-9]" \
     --model "DINO patches=out/eval/eval_dino_patch_s[0-9]" --tex out/absolute_tables.tex
+
+# 8. the reward arms (3k configuration): reference embeddings + replay from the latent shards of
+#    train/latent_scorer.py, then a reward on the student's own clean estimates (report 11.6-11.7)
+python data/build_reward_refs.py --shards cache/latents --out_dir cache/reward
+bsub -env "all,SELECTOR=dino_patch,SEED=0,REWARD_MODE=proj,REWARD_LAMBDA=80"                    < scripts/train_3k.lsf   # frozen projector
+bsub -env "all,SELECTOR=dino_patch,SEED=0,REWARD_MODE=proj,REWARD_LAMBDA=80,REWARD_REFRESH=100" < scripts/train_3k.lsf   # refreshed projector
+bsub -env "all,SELECTOR=dino_patch,SEED=0,REWARD_MODE=rgb,REWARD_LAMBDA=15.5"                   < scripts/train_3k.lsf   # exact decode + DINOv2
+python eval/heldout_dino.py --ckpt checkpoints/dino_patch-rewX_3k_s0/checkpoint_avg_last5.pt \
+    --manifest cache/latents/manifest.jsonl --out out/heldout/dino_patch-rewX_s0@avg_last5.json   # per checkpoint, every arm
+python eval/heldout_compare.py --dir out/heldout
+python eval/reward_monitor.py --project $WANDB_PROJECT
 ```
 
 Two training configurations are used in the report. `scripts/train_3k.lsf` is the small one
@@ -182,6 +202,15 @@ every seed in both settings. What the ablations established:
   (-0.024 to 0.000), and CompBench is unchanged (-0.003 / +0.000 vs argmax after averaging). A
   proxy-optimisation signature; not adopted. The projector ranks teacher candidates, not student
   predictions (top-1 agreement with the RGB scorer 0.37 on students' own samples vs 0.51).
+- **The exact reward works.** Replacing the projector by the RGB scorer itself (`--reward_mode rgb`:
+  VAE decode, differentiable resize/crop/normalise, DINOv2 in fp32, gradients through both; verified
+  against the offline scorer to 0.011, lambda 15.5 for the same 20% gradient ratio, 1.17x wall-clock)
+  raises the true DINO score of the predictions in training (0.583 -> 0.608), and after averaging
+  gives CompBench +0.011 +- 0.006 over argmax (every seed; +0.025 over random, p 0.01), GenEval2 +1.5,
+  CMMD 0.80 -> 0.69 with precision +0.05 and recall +0.02, and held-out DINO of the clean estimates
+  +0.008 (p 0.01). Three seeds, 3k pool, one lambda; not yet run at 118k. Note that loading the scorer
+  advances the global RNG before the first data draw, so reward arms visit captions in a different
+  order from the argmax arm at the same seed (documented in `train/distill.py`; contrasts conservative).
 - **Not adopted.** Regressing onto the reference photograph (lambda 0.2) costs 0.02-0.03 CompBench;
   an EMA-of-student teacher collapses at decay 0.999 (its online selection entropy rising to 0.93
   is the early warning) and is inert at 0.9999.

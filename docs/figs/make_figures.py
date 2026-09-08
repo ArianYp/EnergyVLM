@@ -1,13 +1,9 @@
-"""Figures for docs/report.tex, exactly as they were produced. The script reads the evaluation
-records and candidate caches of the experimental repository that produced the report (the
-`phaseN/eval_*/alignment.json` records and `phaseN/coco_selection_*/selection_rank*.jsonl`
-caches referenced below); with this release code the same records are written by
-eval/compbench.py + eval/geneval2.py (alignment.json per evaluated model) and
-data/build_candidates.py (the cache), so point the globs at `out/eval/eval_<label>_*` and
-`cache/*` to regenerate from new runs. The per-run numbers the figures are built from are also
-printed to stdout so they can be checked against the tables in the report.
+#!/usr/bin/env python3
+"""Figures for reports/scored_distillation_final.tex. All numbers are read from the evaluation
+records under phaseN/ and the candidate caches; the few that come from finished analyses are
+inlined with their source named.
 
-    python3 docs/figs/make_figures.py          # writes docs/figs/*.pdf and prints tables
+    python3 reports/figs/make_figures.py          # writes reports/figs/*.pdf and prints tables
 """
 from __future__ import annotations
 
@@ -23,7 +19,7 @@ import matplotlib.pyplot as plt   # noqa: E402
 import numpy as np                # noqa: E402
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-OUT = os.path.join(ROOT, "docs", "figs")
+OUT = os.path.join(ROOT, "reports", "figs")
 os.chdir(ROOT)
 plt.rcParams.update({"font.size": 9, "axes.spines.top": False, "axes.spines.right": False,
                      "figure.dpi": 150, "savefig.bbox": "tight"})
