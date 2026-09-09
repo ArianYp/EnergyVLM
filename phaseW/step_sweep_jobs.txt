@@ -1,0 +1,8 @@
+CD_dinop_hard-rewXi steps=2 138459
+CD_dinop_hard-rewXi steps=8 138460
+CD_dinop_hard-rewXi steps=16 138461
+CD_dinop_hard-rewXi steps=28 138462
+CD_dinop_hard steps=2 138463
+CD_dinop_hard steps=8 138464
+CD_dinop_hard steps=16 138465
+CD_dinop_hard steps=28 138466

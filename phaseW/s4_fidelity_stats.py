@@ -19,7 +19,13 @@ ARMS = [("S4_B2", "random (fixed draw)"), ("S4_CD_dinop_hard", "argmax"),
         ("S4_CD_dinop_catfreeze-T0.04", "Boltzmann T=0.04, frozen draw"),
         ("S4_CD_latent_hard", "latent scorer, argmax"), ("S4_CD_latent_full-T0.04", "latent scorer, Boltzmann T=0.04, exact"),
         ("S4_CD_dinop_hard-rewF", "argmax + projector reward (frozen)"), ("S4_CD_dinop_hard-rewR", "argmax + projector reward (refreshed)"),
-        ("S4_CD_dinop_hard-rewX", "argmax + exact DINO reward")]
+        ("S4_CD_dinop_hard-rewX", "argmax + exact DINO reward"),
+        ("S4_B2-rewXi", "random pick + exact DINO reward"), ("S4_CD_dinop_hard-rewXi", "argmax + exact DINO reward (RNG-restored)"),
+        ("S4_CD_dinop_hard-rewXi-l7.75", "exact reward, lambda 7.75"), ("S4_CD_dinop_hard-rewXi-l31", "exact reward, lambda 31"),
+        ("S4_CD_dinop_hard-rewXi-l62", "exact reward, lambda 62"), ("S4_CD_dinop_hard-rewXi-R1", "exact reward, 1 state"),
+        ("S4_CD_dinop_hard-rewXi-R5", "exact reward, 5 states"), ("S4_CD_dinop_hard-rewXi-noisiest", "exact reward, 2 noisiest states"),
+        ("S4_CD_dinop_hard-rewXi-bilinear", "exact reward, bilinear resize"), ("S4_CD_dinop_hard-rewXi-bf16", "exact reward, bf16 DINO"),
+        ("S4_CD_dinop_hard-rewRi-s16", "projector reward, refreshed, 16 steps"), ("S4_CD_dinop_hard-rewRi-e25", "projector reward, refreshed every 25")]
 NAMES = dict(ARMS)
 import os
 paths = sys.argv[1:] if len(sys.argv) > 1 else [p for p in ("phaseW/fidelity_s4_report.md", "phaseW/fidelity_s4i_report.md", "phaseW/fidelity_s4j_report.md") if os.path.exists(p)]
@@ -64,7 +70,13 @@ for suffix, title in (("", "raw final checkpoints"), ("-avglast3", "average of t
                  ("S4_CD_dinop_catfreeze-T0.04", "S4_CD_dinop_hard"), ("S4_CD_dinop_full-T0.04", "S4_CD_dinop_cat-T0.04"),
                  ("S4_CD_latent_hard", "S4_CD_dinop_hard"), ("S4_CD_latent_full-T0.04", "S4_CD_dinop_full-T0.04"), ("S4_CD_latent_hard", "S4_B2"),
                  ("S4_CD_dinop_hard-rewF", "S4_CD_dinop_hard"), ("S4_CD_dinop_hard-rewR", "S4_CD_dinop_hard"), ("S4_CD_dinop_hard-rewR", "S4_CD_dinop_hard-rewF"),
-                 ("S4_CD_dinop_hard-rewX", "S4_CD_dinop_hard"), ("S4_CD_dinop_hard-rewX", "S4_B2"), ("S4_CD_dinop_hard-rewX", "S4_CD_dinop_hard-rewR")):
+                 ("S4_CD_dinop_hard-rewX", "S4_CD_dinop_hard"), ("S4_CD_dinop_hard-rewX", "S4_B2"), ("S4_CD_dinop_hard-rewX", "S4_CD_dinop_hard-rewR"),
+                 ("S4_B2-rewXi", "S4_B2"), ("S4_CD_dinop_hard-rewXi", "S4_CD_dinop_hard"), ("S4_CD_dinop_hard-rewXi", "S4_B2-rewXi"),
+                 ("S4_CD_dinop_hard-rewXi-l7.75", "S4_CD_dinop_hard-rewXi"), ("S4_CD_dinop_hard-rewXi-l31", "S4_CD_dinop_hard-rewXi"),
+                 ("S4_CD_dinop_hard-rewXi-l62", "S4_CD_dinop_hard-rewXi"), ("S4_CD_dinop_hard-rewXi-R1", "S4_CD_dinop_hard-rewXi"),
+                 ("S4_CD_dinop_hard-rewXi-R5", "S4_CD_dinop_hard-rewXi"), ("S4_CD_dinop_hard-rewXi-noisiest", "S4_CD_dinop_hard-rewXi"),
+                 ("S4_CD_dinop_hard-rewXi-bilinear", "S4_CD_dinop_hard-rewXi"), ("S4_CD_dinop_hard-rewXi-bf16", "S4_CD_dinop_hard-rewXi"),
+                 ("S4_CD_dinop_hard-rewRi-s16", "S4_CD_dinop_hard"), ("S4_CD_dinop_hard-rewRi-e25", "S4_CD_dinop_hard")):
         ra, rb = rows.get((a, suffix)), rows.get((b, suffix))
         if not ra or not rb:
             continue

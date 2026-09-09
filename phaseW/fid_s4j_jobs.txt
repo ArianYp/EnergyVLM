@@ -28,4 +28,4 @@ CD_dinop_hard-rewXi-bilinear-avglast3 2 137907
 CD_dinop_hard-rewXi-bf16-avglast3 2 137908
 CD_dinop_hard-rewRi-s16-avglast3 2 137909
 CD_dinop_hard-rewRi-e25-avglast3 2 137910
-fidscore 137911
+fidscore 138526
