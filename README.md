@@ -210,9 +210,15 @@ every seed in both settings. What the ablations established:
   raises the true DINO score of the predictions in training (0.583 -> 0.608), and after averaging
   gives CompBench +0.011 +- 0.006 over argmax (every seed; +0.025 over random, p 0.01), GenEval2 +1.5,
   CMMD 0.80 -> 0.69 with precision +0.05 and recall +0.02, and held-out DINO of the clean estimates
-  +0.008 (p 0.01). Three seeds, 3k pool, one lambda; not yet run at 118k. Note that loading the scorer
-  advances the global RNG before the first data draw, so reward arms visit captions in a different
-  order from the argmax arm at the same seed (documented in `train/distill.py`; contrasts conservative).
+  +0.008 (p 0.01). Those first three runs saw a different caption order from the argmax arm (the
+  scorer load advanced the global RNG before the first data draw; the trainer now restores it).
+- **Selection x reward factorial** (five seeds per cell, caption order matched, averaged models):
+  CompBench random 0.4751, random + reward 0.4819, argmax 0.4868, argmax + reward 0.4923. The two
+  effects are additive (interaction -0.001 +- 0.006); selection stays worth +0.010 with the reward
+  present (p 0.02), the reward is worth +0.0055 over argmax (p 0.004) and +0.007 over random; on
+  fidelity the reward is the larger lever (CMMD -0.07 to -0.10, p 0.001) and selection's effect is
+  not resolved. Argmax + exact reward vs naive distillation: +0.017 CompBench (p 0.002), +1.9 GenEval2
+  (p 0.003), CMMD 0.73 vs 0.85. Half of the first-reported +0.011 was the caption order (`docs/reward/`).
 - **Not adopted.** Regressing onto the reference photograph (lambda 0.2) costs 0.02-0.03 CompBench;
   an EMA-of-student teacher collapses at decay 0.999 (its online selection entropy rising to 0.93
   is the early warning) and is inert at 0.9999.
