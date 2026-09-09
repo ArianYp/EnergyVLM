@@ -1,0 +1,258 @@
+<title>Argmax + Exact Reward Pipeline</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+:root{
+  --bg:#EEF1F5; --panel:#FFFFFF; --ink:#18212B; --ink-2:#4A5563; --line:#C9D1DC;
+  --frozen:#5B6B7C; --frozen-bg:#E6EAF0;
+  --train:#1F4E9C; --train-bg:#DCE7FA;
+  --data:#4F6B2F; --data-bg:#E4ECD9;
+  --op:#7A5C1E; --op-bg:#F3EAD3;
+  --rew:#8A2D6B; --rew-bg:#F1DEEA;
+  --proj:#B07A12; --proj-bg:#FBF0D2;
+  --mono:'IBM Plex Mono',ui-monospace,SFMono-Regular,Menlo,monospace;
+  --sans:'IBM Plex Sans',system-ui,-apple-system,Segoe UI,sans-serif;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#12161C; --panel:#1B2129; --ink:#E7EBF0; --ink-2:#A6B0BC; --line:#37414D;
+    --frozen:#A9B5C3; --frozen-bg:#27303B;
+    --train:#8DB4F2; --train-bg:#1E3352;
+    --data:#B7CF8E; --data-bg:#2A3822;
+    --op:#E1C27A; --op-bg:#3A3220;
+    --rew:#E39AC9; --rew-bg:#41243A;
+    --proj:#E7B94A; --proj-bg:#3F3418;
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#12161C; --panel:#1B2129; --ink:#E7EBF0; --ink-2:#A6B0BC; --line:#37414D;
+  --frozen:#A9B5C3; --frozen-bg:#27303B;
+  --train:#8DB4F2; --train-bg:#1E3352;
+  --data:#B7CF8E; --data-bg:#2A3822;
+  --op:#E1C27A; --op-bg:#3A3220;
+  --rew:#E39AC9; --rew-bg:#41243A;
+  --proj:#E7B94A; --proj-bg:#3F3418;
+}
+body{background:var(--bg);color:var(--ink);font-family:var(--sans);font-size:14px;line-height:1.45;margin:0;}
+.page{max-width:1280px;margin:0 auto;padding:28px 24px 64px;}
+h1{font-size:26px;font-weight:600;margin:0 0 6px;text-wrap:balance;letter-spacing:-.01em}
+.sub{color:var(--ink-2);max-width:72ch;margin:0 0 18px}
+h2{font-size:15px;font-weight:600;margin:0;letter-spacing:.02em}
+.eyebrow{font-family:var(--mono);font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--ink-2)}
+.legend{display:flex;flex-wrap:wrap;gap:10px 18px;margin:0 0 22px;font-size:12.5px}
+.legend span{display:inline-flex;align-items:center;gap:7px}
+.sw{width:22px;height:13px;border-radius:2px;border:1.5px solid}
+.sw.frozen{background:var(--frozen-bg);border-color:var(--frozen)}
+.sw.train{background:var(--train-bg);border-color:var(--train)}
+.sw.data{background:var(--data-bg);border-color:var(--data)}
+.sw.op{background:var(--op-bg);border-color:var(--op)}
+.sw.rew{background:var(--rew-bg);border-color:var(--rew)}
+.sw.proj{background:var(--proj-bg);border-color:var(--proj);border-style:dashed}
+.stage{background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:18px 20px 16px;margin:0 0 18px;overflow-x:auto}
+.stage-head{display:flex;justify-content:space-between;align-items:baseline;gap:16px;border-bottom:1px solid var(--line);padding-bottom:10px;margin-bottom:14px;flex-wrap:wrap}
+.stage-head .meta{font-family:var(--mono);font-size:12px;color:var(--ink-2)}
+.grid{display:grid;grid-template-columns:230px 1fr;gap:18px;align-items:start;min-width:980px}
+.datacol{display:flex;flex-direction:column;gap:10px}
+.datacol .eyebrow{margin-bottom:-4px}
+.d{background:var(--data-bg);border:1.5px solid var(--data);border-radius:4px;padding:8px 10px;font-size:12.5px}
+.d b{display:block;font-weight:600;margin-bottom:2px}
+.d code{font-family:var(--mono);font-size:11.5px;color:var(--ink-2)}
+.flow{display:flex;align-items:stretch;gap:0;flex-wrap:nowrap}
+.flow .b{flex:1 1 0;min-width:120px;border-radius:4px;padding:8px 10px;font-size:12.5px;display:flex;flex-direction:column;gap:3px;border:1.5px solid}
+.b.frozen{background:var(--frozen-bg);border-color:var(--frozen)}
+.b.train{background:var(--train-bg);border-color:var(--train)}
+.b.op{background:var(--op-bg);border-color:var(--op)}
+.b.rew{background:var(--rew-bg);border-color:var(--rew)}
+.b.proj{background:var(--proj-bg);border-color:var(--proj);border-style:dashed}
+.b.data{background:var(--data-bg);border-color:var(--data)}
+.b .t{font-weight:600}
+.b .k{font-family:var(--mono);font-size:11px;color:var(--ink-2)}
+.b .g{font-size:11.5px;margin-top:auto;padding-top:4px}
+.arr{flex:0 0 26px;display:flex;align-items:center;justify-content:center;color:var(--ink-2);font-size:18px}
+.rows{display:flex;flex-direction:column;gap:12px}
+.rowlabel{font-family:var(--mono);font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--ink-2);margin-bottom:5px}
+.band{border-radius:4px;padding:7px 12px;font-size:12.5px;display:grid;grid-template-columns:auto 1fr;gap:12px;align-items:baseline}
+.band .tag{font-family:var(--mono);font-size:11.5px;font-weight:500;white-space:nowrap}
+.band.cd{background:var(--train-bg);border-left:4px solid var(--train)}
+.band.rw{background:var(--rew-bg);border-left:4px solid var(--rew)}
+.band.pj{background:var(--proj-bg);border-left:4px dashed var(--proj)}
+.band.none{background:var(--frozen-bg);border-left:4px solid var(--frozen)}
+.loss{background:var(--panel);border:1.5px solid var(--ink);border-radius:4px;padding:9px 12px;font-family:var(--mono);font-size:12.5px}
+.loss .cdc{color:var(--train)} .loss .rwc{color:var(--rew)}
+.note{font-size:12.5px;color:var(--ink-2);margin:8px 0 0;max-width:110ch}
+table{border-collapse:collapse;width:100%;font-size:12.5px;font-variant-numeric:tabular-nums}
+th,td{text-align:left;padding:6px 10px;border-bottom:1px solid var(--line);vertical-align:top}
+th{font-weight:600;font-size:11.5px;letter-spacing:.04em;text-transform:uppercase;color:var(--ink-2)}
+td.mono{font-family:var(--mono);font-size:12px}
+.two{display:grid;grid-template-columns:1fr 1fr;gap:18px}
+@media (max-width:900px){.two{grid-template-columns:1fr}}
+.pill{display:inline-block;font-family:var(--mono);font-size:10.5px;padding:1px 6px;border-radius:3px;border:1px solid;margin-left:4px}
+.pill.f{color:var(--frozen);border-color:var(--frozen)} .pill.tr{color:var(--train);border-color:var(--train)}
+</style>
+
+<div class="page">
+  <div class="eyebrow">Scored consistency distillation · 3k configuration · state of 9 Sep 2026</div>
+  <h1>Argmax + Exact Reward Pipeline</h1>
+  <p class="sub">Block diagram of the best model so far: SD3.5-Medium distilled to 4 steps on argmax-selected teacher trajectories, with the exact DINO reward on the student's own clean estimates. This model contains <b>no projector</b>. The latent projector <i>P</i> appears only in the two projector-reward variants; its exact position is drawn as the dashed alternative branch in Stage 1 so the substitution is visible.</p>
+
+  <div class="legend">
+    <span><i class="sw frozen"></i>frozen network (no weight update)</span>
+    <span><i class="sw train"></i>trainable network (the student)</span>
+    <span><i class="sw data"></i>data / cached artifact</span>
+    <span><i class="sw op"></i>differentiable operation</span>
+    <span><i class="sw rew"></i>reward path (gradient passes through frozen weights into the student)</span>
+    <span><i class="sw proj"></i>projector variant (not in the best model)</span>
+  </div>
+
+  <!-- STAGE 0 -->
+  <section class="stage">
+    <div class="stage-head"><h2>Stage 0 · Offline candidate pool and selection (once, no gradients anywhere)</h2><span class="meta">3,000 captions · 4 candidates each · 0.95 s per caption on one H100</span></div>
+    <div class="grid">
+      <div class="datacol">
+        <div class="eyebrow">Data in</div>
+        <div class="d"><b>COCO train2017 captions + their photographs</b>3,000-caption pool (the 3k configuration); 113,948 at the 118k scale<br><code>idx, prompt, reference.jpg</code></div>
+        <div class="d"><b>Seeds</b>candidate <i>j</i> of caption <i>idx</i> starts from <code>manual_seed(idx·1000 + j)</code>, so nothing but seeds is stored</div>
+        <div class="eyebrow" style="margin-top:6px">Data out</div>
+        <div class="d"><b>Candidate cache</b> (JSONL, no latents)<br><code>seed_base, S_1..S_4 (dino_patch_cos), argmax j*, random_idx</code></div>
+        <div class="d"><b>Reference embeddings</b> <code>u_ref = DINO(photo)</code>, one 768-d unit vector per caption (fp16), reused by the reward in Stage 1</div>
+      </div>
+      <div class="rows">
+        <div>
+          <div class="rowlabel">candidate generation</div>
+          <div class="flow">
+            <div class="b frozen"><span class="t">Text encoders</span><span class="k">CLIP-L · CLIP-G · T5-XXL</span><span class="g">caption → sequence + pooled embeddings</span></div>
+            <div class="arr">→</div>
+            <div class="b frozen"><span class="t">Teacher: SD3.5-M MMDiT</span><span class="k">2.5B · bf16 · frozen</span><span class="g">4 rollouts × 8 Euler steps, CFG w=7 → terminal latents z<sub>8</sub><sup>(1..4)</sup> [16×64×64]</span></div>
+            <div class="arr">→</div>
+            <div class="b frozen"><span class="t">VAE decoder</span><span class="k">SD3.5 VAE · frozen</span><span class="g">z<sub>8</sub><sup>(j)</sup> → image 512×512</span></div>
+            <div class="arr">→</div>
+            <div class="b frozen"><span class="t">RGB scorer: DINOv2-B</span><span class="k">86M · patch mean, CLS dropped, L2-norm</span><span class="g">e<sub>j</sub> = DINO(image<sub>j</sub>); u<sub>ref</sub> = DINO(photo, squashed to 512²)</span></div>
+            <div class="arr">→</div>
+            <div class="b op"><span class="t">Score and select</span><span class="k">S<sub>j</sub> = ⟨e<sub>j</sub>, u<sub>ref</sub>⟩ ; j* = argmax<sub>j</sub> S<sub>j</sub></span><span class="g">stored in the cache; the baseline stores a uniform random draw instead</span></div>
+          </div>
+        </div>
+        <div class="band none"><span class="tag">gradients</span><span>None. Every network here is frozen and run under no_grad; selection is a discrete choice written to the cache. The photograph enters only as its DINO embedding u<sub>ref</sub>.</span></div>
+        <div class="band pj"><span class="tag">projector variant</span><span>The offline latent scorer replaces [VAE → DINOv2] here by <i>P</i>(z<sub>8</sub>) trained once on 22,000 held-out captions (cosine to e<sub>j</sub> + ranking KL, τ=0.04). Not used by the best model, whose scores come from the RGB path above.</span></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- STAGE 1 -->
+  <section class="stage">
+    <div class="stage-head"><h2>Stage 1 · One training update (repeated 6,000 times; one caption per update)</h2><span class="meta">AdamW lr 1e-5, warm-up 300, global grad clip 1.0 · λ = 15.5 · 81 min per run on H200 (1.17× the reward-free run)</span></div>
+    <div class="grid">
+      <div class="datacol">
+        <div class="eyebrow">Data in, per update</div>
+        <div class="d"><b>One cached caption</b> in shuffled order (two passes over the 3,000)<br><code>prompt, seed_base, j*, u_ref</code></div>
+        <div class="d"><b>Re-rolled teacher trajectory of candidate j*</b> z<sub>0</sub>…z<sub>8</sub>, recomputed from its seed under no_grad (never stored)</div>
+        <div class="d"><b>Noise-level draws</b> Δ<sub>k</sub> ~ U{1,2,3} for each supervised state k ∈ {3,…,7}, from a private RNG</div>
+        <div class="eyebrow" style="margin-top:6px">Data used only by the monitor</div>
+        <div class="d"><b>32 most recent x̂<sub>0</sub></b> decoded offline every 100 updates with the PIL scorer: the true score, logged next to the reward; no gradient</div>
+      </div>
+      <div class="rows">
+        <div>
+          <div class="rowlabel">A · consistency branch (identical to the argmax arm)</div>
+          <div class="flow">
+            <div class="b data"><span class="t">Teacher states</span><span class="k">z<sub>k−Δ</sub> (input) · z<sub>k</sub>, z<sub>k+1</sub> (target)</span><span class="g">5 supervised states per update, batched</span></div>
+            <div class="arr">→</div>
+            <div class="b train"><span class="t">Student: SD3.5-M MMDiT</span><span class="k">2.5B · fp32 master weights · init = teacher</span><span class="g">one conditional pass, no guidance: v<sub>θ</sub>(z<sub>k−Δ</sub>, c)</span></div>
+            <div class="arr">→</div>
+            <div class="b op"><span class="t">Clean estimate</span><span class="k">x̂<sub>0</sub> = z<sub>k−Δ</sub> − σ<sub>k−Δ</sub>·v<sub>θ</sub></span><span class="g">latent [16×64×64], keeps the graph</span></div>
+            <div class="arr">→</div>
+            <div class="b op"><span class="t">Consistency loss</span><span class="k">L<sub>CD</sub> = mean<sub>k</sub> √(‖x̂<sub>0</sub> − x<sub>0,k</sub>‖² + c²) − c</span><span class="g">target x<sub>0,k</sub> = z<sub>k</sub> − σ<sub>k</sub>·(z<sub>k+1</sub>−z<sub>k</sub>)/(σ<sub>k+1</sub>−σ<sub>k</sub>), stop-gradient</span></div>
+          </div>
+        </div>
+        <div>
+          <div class="rowlabel">B · exact reward branch (the addition; the two least-noisy of the five x̂<sub>0</sub>)</div>
+          <div class="flow">
+            <div class="b op"><span class="t">Pick states</span><span class="k">2 least-noisy x̂<sub>0</sub></span><span class="g">σ-sorted; the noisier three are too blurry to score</span></div>
+            <div class="arr">→</div>
+            <div class="b frozen"><span class="t">VAE decoder</span><span class="k">frozen · activation checkpointing</span><span class="g">latent unscale → image in [−1,1]; <b>gradient passes through</b></span></div>
+            <div class="arr">→</div>
+            <div class="b op"><span class="t">Differentiable preprocessing</span><span class="k">[0,1] · bicubic antialiased resize 256 · centre crop 224 · ImageNet norm</span><span class="g">tensor ops only: no 8-bit, no PIL</span></div>
+            <div class="arr">→</div>
+            <div class="b frozen"><span class="t">DINOv2-B, fp32</span><span class="k">frozen · patch mean · L2-norm</span><span class="g">same scorer as Stage 0; <b>gradient passes through</b> to its input</span></div>
+            <div class="arr">→</div>
+            <div class="b rew"><span class="t">Reward</span><span class="k">r = ½ Σ ⟨DINO(dec(x̂<sub>0</sub>)), u<sub>ref</sub>⟩</span><span class="g">u<sub>ref</sub> from the Stage-0 cache; verified against the offline scorer to 0.011</span></div>
+          </div>
+        </div>
+        <div>
+          <div class="rowlabel">B′ · where the projector sat in the projector-reward variants (replaced by B in the best model)</div>
+          <div class="flow">
+            <div class="b op"><span class="t">Pick states</span><span class="k">same 2 least-noisy x̂<sub>0</sub></span></div>
+            <div class="arr">→</div>
+            <div class="b proj"><span class="t">Latent projector <i>P</i></span><span class="k">5-stage conv (64,128,256,512,512) · GN, SiLU · mean pool · MLP 512-1024-768 · 6.8M</span><span class="g">reads the latent directly, no decode; frozen, or refreshed every 100 updates (4 AdamW steps on 32 decoded x̂<sub>0</sub> + replay of 2,000 teacher captions)</span></div>
+            <div class="arr">→</div>
+            <div class="b proj"><span class="t">Proxy reward</span><span class="k">r̂ = ½ Σ ⟨P(x̂<sub>0</sub>), u<sub>ref</sub>⟩ · λ = 80</span><span class="g">outcome: r̂ rose 0.03–0.04, the true score did not; CompBench ±0.003 vs argmax; not adopted</span></div>
+          </div>
+        </div>
+        <div class="loss">L(θ) = <span class="cdc">L<sub>CD</sub>(θ)</span> − <span class="rwc">λ · r(θ)</span>,&nbsp; λ = 15.5 (set so ‖∇r‖ ≈ 20% of ‖∇L<sub>CD</sub>‖ on the first 8 updates; the ratio drifts to 25–37% by the end)&nbsp; → clip global norm to 1 → AdamW step on θ (student only)</div>
+        <div class="band cd"><span class="tag">∂L<sub>CD</sub>/∂θ</span><span>flows from the loss into x̂<sub>0</sub> and into the <b>student weights</b> only. The teacher, its targets x<sub>0,k</sub> and the trajectory are detached. Nothing in branch B is touched by this gradient.</span></div>
+        <div class="band rw"><span class="tag">∂r/∂θ</span><span>flows backward through <b>DINOv2</b> (frozen weights, input gradient only) → preprocessing → <b>VAE decoder</b> (frozen weights, input gradient only) → x̂<sub>0</sub> → <b>student weights</b>. No weight of DINOv2 or the VAE changes; they act as a fixed differentiable measuring instrument. The gradient is nearly orthogonal to ∂L<sub>CD</sub> (cosine 0.04 at the probe points).</span></div>
+        <div class="band pj"><span class="tag">variant</span><span>projector-reward arms: ∂r̂ flows through <i>P</i> (frozen weights) into the student; in the refreshed arm a separate loss L<sub>refresh</sub> = [1 − ⟨P(x̂<sub>0</sub>), DINO(dec(x̂<sub>0</sub>))⟩] + replay(cosine + ranking KL) updates <b>P only</b>, with x̂<sub>0</sub> detached from the student.</span></div>
+        <div class="band none"><span class="tag">monitor</span><span>every 100 updates the 32 latest x̂<sub>0</sub> are decoded to 8-bit images and scored by the offline PIL path; logged as the true score next to the reward, plus the reward-path score on the same latents (gap 0.000 ± 0.001 for the exact reward, −0.17 for the projector). No gradient.</span></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- STAGE 2 -->
+  <section class="stage">
+    <div class="stage-head"><h2>Stage 2 · Checkpoint averaging, sampling and evaluation (no teacher, no reward machinery at inference)</h2><span class="meta">student at 4 Euler steps, w = 1 · same cost as any 4-step model</span></div>
+    <div class="grid">
+      <div class="datacol">
+        <div class="eyebrow">Data in</div>
+        <div class="d"><b>T2I-CompBench</b> 2,398 prompts, 8 categories (1 image/prompt; official protocol 10)</div>
+        <div class="d"><b>GenEval2</b> 800 prompts, Qwen3-VL judge</div>
+        <div class="d"><b>COCO val2017</b> 5,000 captions → FID, CMMD, precision, recall vs the real photos</div>
+        <div class="d"><b>Held-out validation captions</b> 300 (and 16) never in the pool, with their photos → DINO of clean estimates and of 4-step samples</div>
+      </div>
+      <div class="rows">
+        <div class="flow">
+          <div class="b data"><span class="t">Checkpoints 2k · 4k · 6k</span><span class="g">uniform weight average = the reported model</span></div>
+          <div class="arr">→</div>
+          <div class="b train"><span class="t">Averaged student</span><span class="k">4 Euler steps, w = 1, identical noise per prompt across arms</span></div>
+          <div class="arr">→</div>
+          <div class="b frozen"><span class="t">VAE decoder</span><span class="g">latent → image</span></div>
+          <div class="arr">→</div>
+          <div class="b frozen"><span class="t">Evaluators</span><span class="k">BLIP-VQA · UniDet · CLIP · Qwen3-VL · CLIP-L/14 (CMMD) · Inception (FID) · DINOv2 (held-out)</span><span class="g">none share weights with the reward except the held-out DINO check, which is reported separately</span></div>
+        </div>
+        <div class="band none"><span class="tag">gradients</span><span>None. Selection, teacher, reward, decoder-in-the-loop and monitor all belong to training; the deployed network is the plain 4-step student.</span></div>
+        <div class="two">
+          <div>
+            <div class="rowlabel">factorial, averaged models, 5 seeds per cell (CompBench)</div>
+            <table>
+              <tr><th></th><th>no reward</th><th>exact reward</th><th>reward effect</th></tr>
+              <tr><td>random pick</td><td class="mono">0.4751</td><td class="mono">0.4819</td><td class="mono">+0.0068 (p 0.07)</td></tr>
+              <tr><td>argmax</td><td class="mono">0.4863</td><td class="mono"><b>0.4923</b></td><td class="mono">+0.0058 (p 0.014)</td></tr>
+              <tr><td>selection effect</td><td class="mono">+0.0109 (p 0.04)</td><td class="mono">+0.0104 (p 0.02)</td><td class="mono">interaction ≈ 0</td></tr>
+            </table>
+          </div>
+          <div>
+            <div class="rowlabel">fidelity of the same models (CMMD ↓ · precision ↑ · recall ↑)</div>
+            <table>
+              <tr><th></th><th>CMMD</th><th>precision</th><th>recall</th></tr>
+              <tr><td>random pick</td><td class="mono">0.846</td><td class="mono">0.478</td><td class="mono">0.055</td></tr>
+              <tr><td>argmax</td><td class="mono">0.794</td><td class="mono">0.497</td><td class="mono">0.066</td></tr>
+              <tr><td>argmax + exact reward</td><td class="mono"><b>0.726</b></td><td class="mono"><b>0.522</b></td><td class="mono"><b>0.082</b></td></tr>
+            </table>
+          </div>
+        </div>
+        <p class="note">Held-out, 300 validation captions: DINO similarity of the deployed 4-step samples to the photographs is 0.608 for argmax + exact reward against 0.589 for argmax (p 0.04 over seeds, ahead on 69% of captions). Under the official ten-image CompBench protocol the three first-round exact-reward models average 0.4987 against 0.4774 for random pick.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- NETWORKS -->
+  <section class="stage">
+    <div class="stage-head"><h2>Every network, where it sits, and what reaches it</h2></div>
+    <table>
+      <tr><th>Network</th><th>Size · precision</th><th>Stage 0</th><th>Stage 1</th><th>Stage 2</th><th>Weights updated by</th></tr>
+      <tr><td>Text encoders (CLIP-L, CLIP-G, T5-XXL)</td><td class="mono">frozen, bf16</td><td>caption → conditioning</td><td>same, for teacher and student</td><td>same</td><td>nothing</td></tr>
+      <tr><td>Teacher MMDiT</td><td class="mono">2.5B · bf16</td><td>4 candidate rollouts, w=7</td><td>re-rolls the selected trajectory; targets x<sub>0,k</sub> (stop-grad)</td><td>absent</td><td>nothing (fixed teacher; no EMA)</td></tr>
+      <tr><td>Student MMDiT <span class="pill tr">trainable</span></td><td class="mono">2.5B · fp32 master, bf16 autocast</td><td>absent</td><td>x̂<sub>0</sub> at 5 window states</td><td>the deployed 4-step sampler (averaged weights)</td><td><span style="color:var(--train)">∂L<sub>CD</sub></span> and <span style="color:var(--rew)">∂r</span></td></tr>
+      <tr><td>VAE decoder</td><td class="mono">frozen, bf16</td><td>decode candidates for scoring</td><td>decode 2 clean estimates inside the loop, <b>gradient through</b></td><td>decode samples</td><td>nothing</td></tr>
+      <tr><td>DINOv2-B (RGB scorer)</td><td class="mono">86M · fp32 in the loop</td><td>S<sub>j</sub> and u<sub>ref</sub></td><td>the reward, <b>gradient through</b>; the offline PIL copy is the monitor</td><td>held-out check only</td><td>nothing</td></tr>
+      <tr><td>Latent projector <i>P</i> <span class="pill f">variant only</span></td><td class="mono">6.8M · bf16 autocast</td><td>offline latent scorer (variant)</td><td>proxy reward r̂ (variant); refreshed by L<sub>refresh</sub> in one arm</td><td>absent</td><td>offline training once; L<sub>refresh</sub> in the refreshed arm; <b>never present in the best model</b></td></tr>
+    </table>
+    <p class="note">Reading the colours: blue is the only network whose weights move. Slate networks are frozen instruments; in Stage 1 two of them (VAE decoder, DINOv2) let a gradient pass through them without changing. Plum marks that pass-through reward path. Amber, dashed, marks where the projector stood in the variants that were tried and set aside.</p>
+  </section>
+</div>
