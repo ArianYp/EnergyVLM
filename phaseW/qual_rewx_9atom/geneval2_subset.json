@@ -1,0 +1,62 @@
+[
+ {
+  "idx": 668,
+  "category": "geneval2",
+  "prompt": "a red koala, and six blue cats behind six red mushrooms"
+ },
+ {
+  "idx": 663,
+  "category": "geneval2",
+  "prompt": "a red croissant to the right of a red monkey in front of three sparkling umbrellas"
+ },
+ {
+  "idx": 604,
+  "category": "geneval2",
+  "prompt": "a black dog, and six yellow birds behind seven glass clocks"
+ },
+ {
+  "idx": 678,
+  "category": "geneval2",
+  "prompt": "a stone penguin, and six stone elephants behind six metal cars"
+ },
+ {
+  "idx": 661,
+  "category": "geneval2",
+  "prompt": "a red guitar, and two blue trumpets to the right of five checkered flamingos"
+ },
+ {
+  "idx": 699,
+  "category": "geneval2",
+  "prompt": "three violins to the left of two blue backpacks on top of a blue elephant"
+ },
+ {
+  "idx": 642,
+  "category": "geneval2",
+  "prompt": "a trumpet to the left of six sparkling cars in front of two brown pigs"
+ },
+ {
+  "idx": 609,
+  "category": "geneval2",
+  "prompt": "three checkered cows, and two bicycles behind four green pigs"
+ },
+ {
+  "idx": 635,
+  "category": "geneval2",
+  "prompt": "three yellow pigs behind a checkered penguin on top of six suitcases"
+ },
+ {
+  "idx": 680,
+  "category": "geneval2",
+  "prompt": "two glass candles under a purple giraffe in front of a red croissant"
+ },
+ {
+  "idx": 686,
+  "category": "geneval2",
+  "prompt": "a stone guitar to the left of a black cookie in front of seven green donuts"
+ },
+ {
+  "idx": 644,
+  "category": "geneval2",
+  "prompt": "a yellow truck on top of two black guitars, and four checkered zebras"
+ }
+]

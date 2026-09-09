@@ -1,0 +1,270 @@
+{
+ "geneval2": [
+  {
+   "idx": 668,
+   "prompt": "a red koala, and six blue cats behind six red mushrooms",
+   "category": "geneval2 \u00b7 9 atoms",
+   "margin": 0.5650911321698991,
+   "random": 0.04619963710696441,
+   "argmax": 0.5230954832809284,
+   "reward": 0.6112907692768635,
+   "skills": [
+    "count",
+    "attribute",
+    "object",
+    "count",
+    "attribute",
+    "object",
+    "position",
+    "count",
+    "attribute",
+    "object"
+   ],
+   "panel": "gain"
+  },
+  {
+   "idx": 663,
+   "prompt": "a red croissant to the right of a red monkey in front of three sparkling umbrellas",
+   "category": "geneval2 \u00b7 9 atoms",
+   "margin": 0.429130305858952,
+   "random": 0.10805913380258907,
+   "argmax": 0.7372185030030729,
+   "reward": 0.5371894396615411,
+   "skills": [
+    "count",
+    "attribute",
+    "object",
+    "position",
+    "count",
+    "attribute",
+    "object",
+    "position",
+    "count",
+    "attribute",
+    "object"
+   ],
+   "panel": "gain"
+  },
+  {
+   "idx": 604,
+   "prompt": "a black dog, and six yellow birds behind seven glass clocks",
+   "category": "geneval2 \u00b7 9 atoms",
+   "margin": 0.42419760387599226,
+   "random": 0.067973137413097,
+   "argmax": 0.12404931400059925,
+   "reward": 0.4921707412890893,
+   "skills": [
+    "count",
+    "attribute",
+    "object",
+    "count",
+    "attribute",
+    "object",
+    "position",
+    "count",
+    "attribute",
+    "object"
+   ],
+   "panel": "gain"
+  },
+  {
+   "idx": 678,
+   "prompt": "a stone penguin, and six stone elephants behind six metal cars",
+   "category": "geneval2 \u00b7 9 atoms",
+   "margin": 0.41239309659027024,
+   "random": 0.1552165580417372,
+   "argmax": 0.3604919634882645,
+   "reward": 0.5676096546320074,
+   "skills": [
+    "count",
+    "attribute",
+    "object",
+    "count",
+    "attribute",
+    "object",
+    "position",
+    "count",
+    "attribute",
+    "object"
+   ],
+   "panel": "gain"
+  },
+  {
+   "idx": 661,
+   "prompt": "a red guitar, and two blue trumpets to the right of five checkered flamingos",
+   "category": "geneval2 \u00b7 9 atoms",
+   "margin": 0.41224177527100414,
+   "random": 0.08652210209423387,
+   "argmax": 0.25047583851275274,
+   "reward": 0.49876387736523803,
+   "skills": [
+    "count",
+    "attribute",
+    "object",
+    "count",
+    "attribute",
+    "object",
+    "position",
+    "count",
+    "attribute",
+    "object"
+   ],
+   "panel": "gain"
+  },
+  {
+   "idx": 699,
+   "prompt": "three violins to the left of two blue backpacks on top of a blue elephant",
+   "category": "geneval2 \u00b7 9 atoms",
+   "margin": 0.38591626079857577,
+   "random": 0.15950391302436276,
+   "argmax": 0.3393167099773765,
+   "reward": 0.5454201738229385,
+   "skills": [
+    "count",
+    "object",
+    "position",
+    "count",
+    "attribute",
+    "object",
+    "position",
+    "count",
+    "attribute",
+    "object"
+   ],
+   "panel": "gain"
+  },
+  {
+   "idx": 642,
+   "prompt": "a trumpet to the left of six sparkling cars in front of two brown pigs",
+   "category": "geneval2 \u00b7 9 atoms",
+   "margin": 0.33931479902168776,
+   "random": 0.11766335843284438,
+   "argmax": 0.4013391255321304,
+   "reward": 0.45697815745453213,
+   "skills": [
+    "count",
+    "object",
+    "position",
+    "count",
+    "attribute",
+    "object",
+    "position",
+    "count",
+    "attribute",
+    "object"
+   ],
+   "panel": "gain"
+  },
+  {
+   "idx": 609,
+   "prompt": "three checkered cows, and two bicycles behind four green pigs",
+   "category": "geneval2 \u00b7 9 atoms",
+   "margin": 0.2679050195688584,
+   "random": 0.133031355655931,
+   "argmax": 0.4393000010877483,
+   "reward": 0.4009363752247894,
+   "skills": [
+    "count",
+    "attribute",
+    "object",
+    "count",
+    "object",
+    "position",
+    "count",
+    "attribute",
+    "object"
+   ],
+   "panel": "gain"
+  },
+  {
+   "idx": 635,
+   "prompt": "three yellow pigs behind a checkered penguin on top of six suitcases",
+   "category": "geneval2 \u00b7 9 atoms",
+   "margin": -0.7256390820302486,
+   "random": 0.7608898720845676,
+   "argmax": 0.18449647394708524,
+   "reward": 0.03525079005431899,
+   "skills": [
+    "count",
+    "attribute",
+    "object",
+    "position",
+    "count",
+    "attribute",
+    "object",
+    "position",
+    "count",
+    "object"
+   ],
+   "panel": "loss"
+  },
+  {
+   "idx": 680,
+   "prompt": "two glass candles under a purple giraffe in front of a red croissant",
+   "category": "geneval2 \u00b7 9 atoms",
+   "margin": -0.6583657729295262,
+   "random": 0.9729277188383703,
+   "argmax": 0.4447323026202052,
+   "reward": 0.314561945908844,
+   "skills": [
+    "count",
+    "attribute",
+    "object",
+    "position",
+    "count",
+    "attribute",
+    "object",
+    "position",
+    "count",
+    "attribute",
+    "object"
+   ],
+   "panel": "loss"
+  },
+  {
+   "idx": 686,
+   "prompt": "a stone guitar to the left of a black cookie in front of seven green donuts",
+   "category": "geneval2 \u00b7 9 atoms",
+   "margin": -0.6202751361762604,
+   "random": 0.7870868469072553,
+   "argmax": 0.16606923097489246,
+   "reward": 0.16681171073099493,
+   "skills": [
+    "count",
+    "attribute",
+    "object",
+    "position",
+    "count",
+    "attribute",
+    "object",
+    "position",
+    "count",
+    "attribute",
+    "object"
+   ],
+   "panel": "loss"
+  },
+  {
+   "idx": 644,
+   "prompt": "a yellow truck on top of two black guitars, and four checkered zebras",
+   "category": "geneval2 \u00b7 9 atoms",
+   "margin": -0.5185622568799381,
+   "random": 0.5678365073252827,
+   "argmax": 0.04985012518842933,
+   "reward": 0.049274250445344656,
+   "skills": [
+    "count",
+    "attribute",
+    "object",
+    "position",
+    "count",
+    "attribute",
+    "object",
+    "count",
+    "attribute",
+    "object"
+   ],
+   "panel": "loss"
+  }
+ ]
+}

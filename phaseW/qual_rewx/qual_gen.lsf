@@ -25,10 +25,11 @@ export XDG_CACHE_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache
 export TOKENIZERS_PARALLELISM=false
 source ~/.secrets/hf_token
 ROOT=${ROOT:-phaseW/qual_rewx}
-declare -A CK=( [RANDOM]=checkpoints/phaseS4/phaseS4_B2_s0_130449/checkpoint_avg_last5.pt
-                [ARGMAX]=checkpoints/phaseS4/phaseS4_CD_dinop_hard_s0_130455/checkpoint_avg_last5.pt
-                [REWARD]=checkpoints/phaseS4/phaseS4_CD_dinop_hard-rewX_s0_136368/checkpoint_avg_last5.pt )
-for B in compbench geneval2; do
+declare -A CK=( [RANDOM]=${RANDOM_CKPT:-checkpoints/phaseS4/phaseS4_B2_s0_130449/checkpoint_avg_last5.pt}
+                [ARGMAX]=${ARGMAX_CKPT:-checkpoints/phaseS4/phaseS4_CD_dinop_hard_s0_130455/checkpoint_avg_last5.pt}
+                [REWARD]=${REWARD_CKPT:-checkpoints/phaseS4/phaseS4_CD_dinop_hard-rewX_s0_136368/checkpoint_avg_last5.pt} )
+BENCHES=${BENCHES:-compbench geneval2}
+for B in $BENCHES; do
   for CFG in 1.0 7.0; do
     TAG=$(echo "$CFG" | cut -d. -f1)
     python3 exp0/phaseA_generate.py --out_root "$ROOT/gen_${B}" --label "BASE_cfg${TAG}" --checkpoint base \
@@ -39,7 +40,7 @@ for B in compbench geneval2; do
       --cfg 1.0 --prompts_json "$ROOT/${B}_subset.json" --steps_list 4
   done
 done
-for B in compbench geneval2; do
-  python3 phaseW/qual_rewx/build_figure.py --bench $B --root "$ROOT" --out "$ROOT/fig_${B}.png"
+for B in $BENCHES; do
+  python3 phaseW/qual_rewx/build_figure.py --bench $B --root "$ROOT" --out "$ROOT/fig_${B}.png" ${FIG_TITLE:+--title "$FIG_TITLE"} ${FIG_RULE:+--rule "$FIG_RULE"}
 done
 echo "[$(date --iso-8601=seconds)] QUAL_REWX_DONE"

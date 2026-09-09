@@ -49,6 +49,8 @@ def main() -> None:
     ap.add_argument("--bench", required=True, choices=["compbench", "geneval2"])
     ap.add_argument("--root", default="phaseW/qual_rewx")
     ap.add_argument("--out", required=True)
+    ap.add_argument("--title", default=None, help="override the sheet title")
+    ap.add_argument("--rule", default=None, help="override the selection-rule footer")
     args = ap.parse_args()
     root = Path(args.root)
     sel = json.loads((root / "selection.json").read_text())[args.bench]
@@ -59,7 +61,9 @@ def main() -> None:
     H = HEAD_H + nrow * (CELL + FOOT_H + PAD) + PAD + 34 + 26
     sheet = Image.new("RGB", (W, H), (250, 250, 250)); d = ImageDraw.Draw(sheet)
     f_hd, f_pr, f_sc, f_ti = font(15, True), font(14), font(14, True), font(15, True)
-    if random_rows:
+    if args.title:
+        d.text((PAD, 8), args.title, fill=(150, 40, 40), font=f_ti)
+    elif random_rows:
         d.text((PAD, 8), f"RANDOMLY SELECTED prompts (fixed draw, not chosen by any score)  |  {args.bench}  |  "
                          "averaged checkpoints, seed 0, identical initial noise across all columns", fill=(40, 90, 40), font=f_ti)
     else:
@@ -93,7 +97,8 @@ def main() -> None:
                 d.rectangle([x - 2, y - 2, x + CELL + 1, y + CELL + 1], outline=(20, 110, 40), width=3)
             if key:
                 d.text((x + 4, y + CELL + 4), f"{key} {item[key]:.2f}", fill=SCORE_COL[key], font=f_sc)
-    rule = ("Selection rule: uniform random draw of prompts (numpy seed 2026), no score involved. Representative of typical behaviour."
+    rule = (args.rule if args.rule else
+            "Selection rule: uniform random draw of prompts (numpy seed 2026), no score involved. Representative of typical behaviour."
             if random_rows else
             "Selection rule: per-prompt (exact reward - argmax) benchmark margin of the two shown models (one seed each), "
             "max 2 per CompBench category, top 8 then bottom 4. Not representative of typical behaviour.")
