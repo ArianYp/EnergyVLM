@@ -1,0 +1,33 @@
+#!/usr/bin/env bash
+#BSUB -J sd-W-qual-spatial
+#BSUB -G s10396
+#BSUB -q training-parallel
+#BSUB -n 4
+#BSUB -W 2:00
+#BSUB -R "span[hosts=1]"
+#BSUB -R "select[mem>128000]"
+#BSUB -R "rusage[mem=128000]"
+#BSUB -M 128000
+#BSUB -gpu "num=1:mode=exclusive_process:gmem=40G"
+#BSUB -cwd /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM
+#BSUB -o /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-W-qual-spatial-%J.out
+#BSUB -e /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-W-qual-spatial-%J.err
+# Student-vs-teacher sheet on randomly drawn SPATIAL prompts: the best student (argmax + exact reward,
+# averaged seed 0) at 4 and 28 steps, the frozen teacher at 28 steps without and with guidance.
+set -euo pipefail
+export PATH="/software/cellgen/team361/ha11/envs/nichejepa/bin:$PATH"
+export HF_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/huggingface
+export TORCH_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/torch
+export XDG_CACHE_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/xdg
+export TOKENIZERS_PARALLELISM=false
+source ~/.secrets/hf_token
+ROOT=phaseW/qual_spatial
+CK=checkpoints/phaseS4/phaseS4_CD_dinop_hard-rewXi_s0_136980/checkpoint_avg_last5.pt
+for B in compbench geneval2; do
+  python3 exp0/phaseA_generate.py --out_root "$ROOT/gen_${B}" --label BASE_cfg7 --checkpoint base --cfg 7.0 --prompts_json "$ROOT/${B}_subset.json" --steps_list 28
+  python3 exp0/phaseA_generate.py --out_root "$ROOT/gen_${B}" --label BASE_cfg1 --checkpoint base --cfg 1.0 --prompts_json "$ROOT/${B}_subset.json" --steps_list 28
+  python3 exp0/phaseA_generate.py --out_root "$ROOT/gen_${B}" --label STEPS --checkpoint "$CK" --cfg 1.0 --prompts_json "$ROOT/${B}_subset.json" --steps_list 4,28
+  python3 phaseW/qual_rewx/build_teacher_figure.py --bench $B --sel_root "$ROOT" --student_root "$ROOT" --base_root "$ROOT" --out "$ROOT/fig_${B}.png" \
+    --title "STUDENT vs TEACHER on SPATIAL prompts (random draw)  |  $B  |  argmax + exact reward student (averaged, seed 0) at 4 and 28 steps vs the frozen SD3.5-M teacher at 28 steps  |  identical initial noise"
+done
+echo QUAL_SPATIAL_DONE

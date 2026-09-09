@@ -1,0 +1,102 @@
+{
+ "compbench": [
+  {
+   "idx": 907,
+   "prompt": "a butterfly on the left of a candle",
+   "category": "spatial",
+   "panel": "random"
+  },
+  {
+   "idx": 952,
+   "prompt": "a plate on the bottom of a man",
+   "category": "spatial",
+   "panel": "random"
+  },
+  {
+   "idx": 1090,
+   "prompt": "a person on side of a table",
+   "category": "spatial",
+   "panel": "random"
+  },
+  {
+   "idx": 1151,
+   "prompt": "a mouse on the left of a train",
+   "category": "spatial",
+   "panel": "random"
+  },
+  {
+   "idx": 1304,
+   "prompt": "a plate hidden by a person",
+   "category": "3d_spatial",
+   "panel": "random"
+  },
+  {
+   "idx": 1308,
+   "prompt": "a man hidden by a backpack",
+   "category": "3d_spatial",
+   "panel": "random"
+  },
+  {
+   "idx": 1389,
+   "prompt": "a sheep hidden by a fish",
+   "category": "3d_spatial",
+   "panel": "random"
+  },
+  {
+   "idx": 1447,
+   "prompt": "a computer in front of a phone",
+   "category": "3d_spatial",
+   "panel": "random"
+  }
+ ],
+ "geneval2": [
+  {
+   "idx": 212,
+   "prompt": "a candle, and a blue truck in front of a cookie",
+   "category": "geneval2 \u00b7 position \u00b7 5 atoms",
+   "panel": "random"
+  },
+  {
+   "idx": 281,
+   "prompt": "a spotted truck on top of four rabbits",
+   "category": "geneval2 \u00b7 position \u00b7 5 atoms",
+   "panel": "random"
+  },
+  {
+   "idx": 291,
+   "prompt": "a flower behind three plastic backpacks",
+   "category": "geneval2 \u00b7 position \u00b7 5 atoms",
+   "panel": "random"
+  },
+  {
+   "idx": 383,
+   "prompt": "a horse, and two sparkling bagels under a candle",
+   "category": "geneval2 \u00b7 position \u00b7 6 atoms",
+   "panel": "random"
+  },
+  {
+   "idx": 607,
+   "prompt": "two metal dogs, and two glass guitars on top of a plastic pig",
+   "category": "geneval2 \u00b7 position \u00b7 9 atoms",
+   "panel": "random"
+  },
+  {
+   "idx": 643,
+   "prompt": "six motorcycles behind four umbrellas under five checkered violins",
+   "category": "geneval2 \u00b7 position \u00b7 9 atoms",
+   "panel": "random"
+  },
+  {
+   "idx": 717,
+   "prompt": "seven blue candles in front of three motorcycles under three purple sheeps",
+   "category": "geneval2 \u00b7 position \u00b7 10 atoms",
+   "panel": "random"
+  },
+  {
+   "idx": 779,
+   "prompt": "two kangaroos to the left of five white sheeps in front of four red trucks",
+   "category": "geneval2 \u00b7 position \u00b7 10 atoms",
+   "panel": "random"
+  }
+ ]
+}

@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+#BSUB -J sd-W-qual-steps
+#BSUB -G s10396
+#BSUB -q training-parallel
+#BSUB -n 4
+#BSUB -W 2:00
+#BSUB -R "span[hosts=1]"
+#BSUB -R "select[mem>128000]"
+#BSUB -R "rusage[mem=128000]"
+#BSUB -M 128000
+#BSUB -gpu "num=1:mode=exclusive_process:gmem=40G"
+#BSUB -cwd /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM
+#BSUB -o /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-W-qual-steps-%J.out
+#BSUB -e /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-W-qual-steps-%J.err
+# The argmax + exact reward student (averaged, seed 0) at 2/4/8/16/28 steps on the randomly drawn
+# prompts of the representative sheet; the base 28-step column is reused from phaseW/qual_rewx_random.
+set -euo pipefail
+export PATH="/software/cellgen/team361/ha11/envs/nichejepa/bin:$PATH"
+export HF_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/huggingface
+export TORCH_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/torch
+export XDG_CACHE_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/xdg
+export TOKENIZERS_PARALLELISM=false
+source ~/.secrets/hf_token
+CK=checkpoints/phaseS4/phaseS4_CD_dinop_hard-rewXi_s0_136980/checkpoint_avg_last5.pt
+for B in compbench geneval2; do
+  python3 exp0/phaseA_generate.py --out_root "phaseW/qual_steps/gen_${B}" --label STEPS --checkpoint "$CK" \
+    --cfg 1.0 --prompts_json "phaseW/qual_rewx_random/${B}_subset.json" --steps_list 2,4,8,16,28
+  python3 phaseW/qual_rewx/build_steps_figure.py --bench $B --out "phaseW/qual_steps/fig_${B}.png"
+done
+echo QUAL_STEPS_DONE
