@@ -1,0 +1,137 @@
+#!/usr/bin/env bash
+#BSUB -J sd-phaseN-eval1
+#BSUB -G s10396
+#BSUB -q training-parallel
+#BSUB -n 4
+#BSUB -W 24:00
+#BSUB -R "span[hosts=1]"
+#BSUB -R "select[mem>128000]"
+#BSUB -R "rusage[mem=128000]"
+#BSUB -M 128000
+#BSUB -gpu "num=1:mode=exclusive_process:gmem=40G"
+#BSUB -cwd /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM
+#BSUB -o /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-phaseN-eval-%J.out
+#BSUB -e /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-phaseN-eval-%J.err
+
+# Prompt-image ALIGNMENT evaluation for one Phase-N student. T2I-CompBench and GenEval2 only:
+# fidelity and diversity are cross-model contrasts and are not what this campaign is testing.
+#
+# THE CFG TRAP. `ablations/phaseFP_eval_model.lsf` hardcodes `--cfg 1` on every generation call,
+# and `exp0/phaseA_generate.py` defaults to `--cfg 1.0` with the help text "1 for distilled
+# students". That is correct for the project's older GUIDANCE-DISTILLED students, which internalise
+# CFG and are sampled unguided. The Phase-N students are trained with `--student_cfg 7`, i.e. their
+# own prediction is CFG-mixed, so they must be SAMPLED at cfg 7. Evaluating them at cfg 1 would
+# cripple every arm by the same amount, which is the dangerous kind of bug: the arms would still be
+# comparable to each other and the numbers would look self-consistent while all being wrong.
+#
+#   bsub -env "all,EVAL_LABEL=W_energy_soft_s0,EVAL_CKPT=checkpoints/phaseN/<run>/student_final.pt" < this
+set -euo pipefail
+
+export PATH="/software/cellgen/team361/ha11/envs/nichejepa/bin:$PATH"
+export HF_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/huggingface
+export TORCH_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/torch
+export XDG_CACHE_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/xdg
+export TOKENIZERS_PARALLELISM=false
+export NCCL_NVLS_ENABLE=0
+export WANDB_MODE=disabled
+source ~/.secrets/hf_token
+
+: "${EVAL_LABEL:?missing model label}"
+: "${EVAL_CKPT:?missing checkpoint path, or the string 'base'}"
+POOL=${EVAL_POOL:-phaseFP/eval_pool_101203}
+STEPS=${EVAL_STEPS:-4}
+CFG=${EVAL_CFG:-7.0}
+
+JOB=${LSB_JOBID:-local}
+ROOT="phaseN/eval_${EVAL_LABEL}_${JOB}"
+if [[ -e "$ROOT" ]]; then echo "Refusing to overwrite $ROOT" >&2; exit 2; fi
+
+test -s "$POOL/manifest.json"
+# A "file exists and is non-empty" test is NOT sufficient: a checkpoint mid-write passes it and
+# produces a plausible-looking but wrong evaluation. During this campaign a final checkpoint was
+# observed at 5.9 GB while still being written, against 9.88 GB complete. Load it and check the
+# recorded step instead.
+if [[ "$EVAL_CKPT" != "base" ]]; then
+  test -s "$EVAL_CKPT"
+  python3 - <<CKPT
+import torch
+ck = torch.load("$EVAL_CKPT", map_location="cpu", mmap=True, weights_only=False)
+assert "model" in ck, sorted(ck)
+n = len(ck["model"])
+step = int(ck.get("step", -1))
+assert n > 500, "state dict has only %d tensors; checkpoint is truncated" % n
+assert step >= ${EVAL_MIN_STEP:-6000}, "checkpoint is from step %d, expected the final step" % step
+print("checkpoint OK: %d tensors, step %d, variant %s" % (n, step, ck.get("variant")))
+CKPT
+fi
+# The manifests are immutable inputs: re-verify their hashes before spending GPU hours.
+( cd "$POOL" && jq -r '.sha256 | to_entries[] | "\(.value)  \(.key)"' manifest.json | sha256sum -c - )
+
+mkdir -p "$ROOT"
+cp "$POOL/manifest.json" "$ROOT/pool_manifest.json"
+echo "[$(date --iso-8601=seconds)] Phase-N eval | label=$EVAL_LABEL ckpt=$EVAL_CKPT steps=$STEPS cfg=$CFG"
+nvidia-smi --query-gpu=index,name,memory.total --format=csv
+
+echo "[$(date --iso-8601=seconds)] STAGE generation start"
+echo "=== Generation at ${STEPS} steps, CFG ${CFG} (matched to training) ==="
+# One process serves BOTH pools after a single pipeline + checkpoint load (comma-lists). Verified
+# byte-identical to the previous two-invocation form on 24 images, job 128553
+# (phaseW/verify_generate_refactor.lsf): per-item sharding and seeding are untouched.
+torchrun --standalone --nproc-per-node=1 exp0/phaseA_generate.py \
+  --out_root "$ROOT/compbench,$ROOT/geneval2" --label "$EVAL_LABEL" --checkpoint "$EVAL_CKPT" \
+  --cfg "$CFG" --prompts_json "$POOL/compbench_prompts.json,$POOL/geneval2_prompts.json" \
+  --steps_list "$STEPS"
+
+echo "[$(date --iso-8601=seconds)] STAGE compbench scoring start"
+echo "=== Official T2I-CompBench ==="
+for CAT in color shape texture spatial 3d_spatial numeracy non_spatial complex; do
+  D="$ROOT/compbench_scores/${EVAL_LABEL}_s${STEPS}_${CAT}"
+  python3 phaseC/compbench_eval.py stage \
+    --images "$ROOT/compbench/images/${EVAL_LABEL}" --prompts "$POOL/compbench_prompts.json" \
+    --steps "$STEPS" --categories "$CAT" --out "$D"
+  python3 phaseC/compbench_eval.py run --dir "$D" --skip_done
+  python3 phaseC/compbench_eval.py collect --dir "$D" --routing_split val
+done
+
+echo "[$(date --iso-8601=seconds)] STAGE geneval2 scoring start"
+echo "=== Official GenEval2 Soft-TIFA ==="
+D="$ROOT/geneval2_scores/${EVAL_LABEL}_s${STEPS}"
+python3 phaseC/geneval2_eval.py stage --images "$ROOT/geneval2/images/${EVAL_LABEL}" \
+  --pool "$POOL/geneval2_prompts.json" --steps "$STEPS" --out "$D"
+python3 phaseC/geneval2_eval.py run --dir "$D" --method soft_tifa_gm --skip_done
+python3 phaseC/geneval2_eval.py collect --dir "$D" --method soft_tifa_gm
+
+for CAT in color shape texture spatial 3d_spatial numeracy non_spatial complex; do
+  test -s "$ROOT/compbench_scores/${EVAL_LABEL}_s${STEPS}_${CAT}/scores.json"
+done
+test -s "$D/scores.json"
+
+python3 - <<PY
+import json, glob, os
+import hashlib, subprocess, importlib
+def sha(p):
+    h=hashlib.sha256()
+    with open(p,"rb") as f:
+        for c in iter(lambda: f.read(1<<24), b""): h.update(c)
+    return h.hexdigest()
+def rev(d):
+    try: return subprocess.run(["git","-C",d,"rev-parse","HEAD"],capture_output=True,text=True).stdout.strip()
+    except Exception: return None
+pins={"evaluators":{d:rev(d) for d in ("T2I-CompBench","GenEval2","t2v_metrics")},
+      "repo_commit":rev("."),
+      "packages":{m:getattr(importlib.import_module(m),"__version__",None) for m in ("torch","diffusers","transformers")},
+      "pool_manifest":json.load(open("$ROOT/pool_manifest.json")),
+      "checkpoint_sha256":(sha("$EVAL_CKPT") if "$EVAL_CKPT"!="base" else "base")}
+subprocess.run("pip freeze > $ROOT/pip_freeze.txt", shell=True)
+out={"label":"$EVAL_LABEL","ckpt":"$EVAL_CKPT","steps":$STEPS,"cfg":float("$CFG"),"compbench":{},"pins":pins}
+for p in sorted(glob.glob("$ROOT/compbench_scores/*/scores.json")):
+    cat=os.path.basename(os.path.dirname(p)).split("_s${STEPS}_")[-1]
+    out["compbench"][cat]=json.load(open(p))["mean"]
+out["compbench_mean"]=sum(out["compbench"].values())/len(out["compbench"])
+out["geneval2"]=json.load(open("$D/scores.json")).get("mean")
+json.dump(out, open("$ROOT/alignment.json","w"), indent=2)
+print(json.dumps(out, indent=2))
+PY
+
+echo "[$(date --iso-8601=seconds)] Phase-N eval complete: $ROOT"
+if command -v my-job-stats >/dev/null 2>&1; then my-job-stats -a -n -s; fi
