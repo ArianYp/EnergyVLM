@@ -13,9 +13,9 @@ ROWS = [
     (1143, "a candle on the top of a chicken", "top/bottom"),
 ]
 COLS = [
-    ("Student, 4 steps\n(no guidance)", lambda i: ROOT / f"gen2/images/STUDENT/p{i:05d}/s4/cand0.png"),
-    ("Student, 8 steps\n(no guidance)", lambda i: ROOT / f"gen3/images/STUDENT/p{i:05d}/s8/cand0.png"),
-    ("Student, 28 steps\n(no guidance)", lambda i: ROOT / f"gen3/images/STUDENT/p{i:05d}/s28/cand0.png"),
+    ("Student, 4 steps\n(no guidance)", lambda i: ROOT / f"gen4/images/STUDENT/p{i:05d}/s4/cand0.png"),
+    ("Student, 8 steps\n(no guidance)", lambda i: ROOT / f"gen4/images/STUDENT/p{i:05d}/s8/cand0.png"),
+    ("Student, 28 steps\n(no guidance)", lambda i: ROOT / f"gen4/images/STUDENT/p{i:05d}/s28/cand0.png"),
     ("Frozen teacher, 28 steps\n(CFG, w=7)", lambda i: ROOT / f"gen2/images/TEACHER/p{i:05d}/s28/cand0.png"),
 ]
 
