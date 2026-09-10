@@ -222,6 +222,15 @@ every seed in both settings. What the ablations established:
 - **Not adopted.** Regressing onto the reference photograph (lambda 0.2) costs 0.02-0.03 CompBench;
   an EMA-of-student teacher collapses at decay 0.999 (its online selection entropy rising to 0.93
   is the early warning) and is inert at 0.9999.
+- **The reward is under-weighted at 15.5.** A one-factor ablation (three seeds each) shows CompBench,
+  CMMD, precision and recall all improving monotonically from lambda 7.75 to 62, and rewarding all
+  five supervised states instead of the two least-noisy adds +0.0093 CompBench (p 0.02). Combining
+  lambda 31 with all five states (three seeds) gives CompBench 0.5082, +0.0153 over the recipe
+  (p 0.012) and +0.0093/+0.0060 over either factor alone, CMMD 0.64 matching lambda 62's fidelity
+  without its GenEval2 cost -- but GenEval2 (23.59) and FID (31.5) both move the wrong way past what
+  either factor gives alone. The same reward re-tried on two stronger teachers (28-step w=7, 16-step
+  w=4.5) moves CompBench in the same direction as on the 8-step teacher but is not resolved at three
+  seeds (+0.005, +0.006, both n.s.).
 
 ## Logging
 
