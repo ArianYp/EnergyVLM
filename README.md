@@ -231,6 +231,12 @@ every seed in both settings. What the ablations established:
   either factor gives alone. The same reward re-tried on two stronger teachers (28-step w=7, 16-step
   w=4.5) moves CompBench in the same direction as on the 8-step teacher but is not resolved at three
   seeds (+0.005, +0.006, both n.s.).
+- **The exact reward holds at the full 118k scale.** Unmodified (lambda 15.504), three seeds,
+  56,974 updates: CompBench 0.4930 vs argmax-only 0.4843 (+0.0087, every seed positive, p 0.08) and
+  vs random 0.4668 (+0.0262, p 0.003); GenEval2 23.03 vs 21.58 (+1.45). Fidelity improves further on
+  top of selection's own gain: CMMD 0.683 vs argmax's 0.783 vs random's 0.837, FID 30.79 vs 31.09,
+  precision 0.563 vs 0.518, recall 0.087 vs 0.067. Confirms the 3k-scale factorial result at 40x the
+  caption count.
 
 ## Logging
 
