@@ -1,0 +1,474 @@
+
+\documentclass{article} % For LaTeX2e
+\usepackage{iclr2027_conference,times}
+
+% Optional math commands from https://github.com/goodfeli/dlbook_notation.
+\input{math_commands.tex}
+
+\usepackage{hyperref}
+\usepackage{url}
+\usepackage{amsmath,amssymb}
+\usepackage{booktabs}
+\usepackage{graphicx}
+\usepackage{array}
+\usepackage{algorithm}
+\usepackage{algpseudocode}
+
+\DeclareMathOperator*{\argmaxop}{arg\,max}
+\DeclareMathOperator{\Dec}{Dec}
+\DeclareMathOperator{\sgop}{sg}
+\newcommand{\fitbox}[1]{\resizebox{\ifdim\width>\linewidth\linewidth\else\width\fi}{!}{#1}}
+
+\title{Scored Consistency Distillation of SD3.5-Medium\\with an Exact Photographic Reward}
+
+\author{Anonymous Author(s) \\ Affiliation \\ Address \\ \texttt{email}}
+
+%\iclrfinalcopy % Uncomment for camera-ready version, but NOT for submission.
+\begin{document}
+
+\maketitle
+
+\section{Method}
+\label{sec:method}
+
+We distil SD3.5-Medium, a 2.5B-parameter rectified-flow transformer, into a 4-step student. The
+method has two parts. First, for every training caption the frozen teacher produces several
+candidate generations, and a scorer that reads a reference photograph of the caption picks one of
+them; the student is trained only on the picked trajectory. Second, an exact photographic reward
+term pulls the student's own predictions toward the same photograph during training. Both parts use
+the same underlying quantity, the DINOv2 similarity of an image to the photograph the caption
+describes, and neither reads the caption text or any language model.
+
+\subsection{Preliminaries: rectified-flow distillation}
+\label{sec:prelim}
+The teacher is a rectified-flow model with frozen weights $\theta_T$. A clean latent $x_0$ and
+Gaussian noise $\varepsilon\sim\mathcal N(0,I)$ define a straight path $z_\sigma=(1-\sigma)x_0+\sigma\varepsilon$,
+$\sigma\in[0,1]$, and the network predicts the velocity $v=\varepsilon-x_0$ conditioned on the
+caption $c$. Sampling is Euler integration on a $\sigma$ grid, $z_{k+1}=z_k+(\sigma_{k+1}-\sigma_k)\,v_\theta(z_k,\sigma_k,c)$,
+with classifier-free guidance $v^{\mathrm{cfg}}=v_\theta(z,\sigma,\varnothing)+w\big(v_\theta(z,\sigma,c)-v_\theta(z,\sigma,\varnothing)\big)$
+at $w=7$ for the teacher. The student $v_\theta$ is a full copy of the same transformer, initialised
+from $\theta_T$, and is the only network that trains; the teacher, the text encoders and the VAE
+decoder $\Dec$ stay frozen throughout. There is no momentum target, no exponential moving average
+and no stop-gradient copy of the student anywhere in the recipe: every training target below is a
+deterministic function of the frozen teacher.
+
+Consistency distillation trains the student to jump directly to the clean-latent estimate that the
+teacher reaches only after several further steps, so that a 4-step Euler rollout of the student
+reproduces an 8-step teacher trajectory. This is the sole mechanism that turns an 8-step teacher
+into a 4-step student; nothing below changes it. What varies is which trajectory the student is
+trained on, and what, besides matching that trajectory, the training loss asks the student's own
+predictions to do.
+
+\subsection{Candidate generation and photographic scoring}
+\label{sec:selection}
+For every training caption $c$ with reference photograph $x^{\mathrm{ref}}$ (its COCO source image),
+we draw $N=4$ candidate teacher trajectories from four independent seeds and score each one against
+the photograph.
+
+\paragraph{Candidates.} Candidate $j$ uses Gaussian noise $\varepsilon^{(j)}$ seeded deterministically
+from the caption index, and is an 8-step Euler rollout of the teacher at guidance $w=7$:
+\begin{equation}
+\varepsilon^{(j)}\sim\mathcal N(0,I)\ \text{(seeded by caption and $j$)},\qquad
+z^{(j)}_0,\dots,z^{(j)}_8=\mathrm{Euler}_{K=8}\big(\varepsilon^{(j)};v_T^{\mathrm{cfg}},c\big).
+\end{equation}
+Only the seed, not the trajectory, needs to be stored: any candidate can be re-rolled exactly from
+its seed whenever it is needed again, at scoring time and later at training time.
+
+\paragraph{Scoring.} Each candidate is decoded, $I_j=\Dec(z^{(j)}_8)$, and embedded with a frozen
+DINOv2-B vision transformer. We drop the CLS token, mean-pool the $P{=}256$ patch tokens and
+$\ell_2$-normalise:
+\begin{equation}
+u(I)=\frac{\frac1P\sum_{p=1}^{P}h_p(I)}{\big\lVert\frac1P\sum_{p=1}^{P}h_p(I)\big\rVert},\qquad
+S_j=\big\langle u(I_j),\,u(x^{\mathrm{ref}})\big\rangle .
+\label{eq:score}
+\end{equation}
+$u(x^{\mathrm{ref}})$ is computed once per caption. This scorer needs no caption text, no VLM and no
+learned preference model: it is a fixed, off-the-shelf self-supervised image encoder, applied
+identically to a generated candidate and to a real photograph.
+
+\paragraph{Selection.} We select the best candidate by hard argmax over the score,
+\begin{equation}
+j^\star=\argmaxop_{j\in\{1,\dots,N\}}S_j ,
+\label{eq:argmax}
+\end{equation}
+and every subsequent training visit of caption $c$ trains only on trajectory $j^\star$. Selection is
+computed once, offline, before training starts, and is never revisited: no gradient flows through
+the scorer, and the training loop simply re-rolls trajectory $j^\star$ from its stored seed. A random
+baseline replaces $j^\star$ with a uniform draw over $\{1,\dots,N\}$, stored so that every training
+seed sees the same draw; this isolates the effect of \emph{which} trajectory a caption trains on
+from everything else in the recipe.
+
+\subsection{Consistency distillation loss}
+\label{sec:cd}
+Let $z_0,\dots,z_8$ be the selected teacher trajectory. Training supervises a window of states
+$\mathcal K=\{3,4,5,6,7\}$ on the 8-step grid. For $k\in\mathcal K$, the teacher's realised chord
+across its own step and the clean-latent estimate it implies are
+\begin{equation}
+\bar v_k=\frac{z_{k+1}-z_k}{\sigma_{k+1}-\sigma_k},\qquad
+\tilde x_0^{(k)}=z_k-\sigma_k\,\bar v_k ,
+\end{equation}
+which is exact algebra for a straight path. The student is placed at a \emph{noisier} state than the
+one the target was read from: for each $k$ we draw $\Delta_k\sim\mathcal U\{1,2,3\}$ independently and
+afresh on every visit, set $s=k-\Delta_k$, and the student forms its own clean-latent estimate with a
+single conditional forward pass and no guidance,
+\begin{equation}
+\hat x_0^{(s)}=z_s-\sigma_s\,v_\theta(z_s,\sigma_s,c).
+\end{equation}
+The consistency loss is a pseudo-Huber distance in $x_0$-space, averaged over the window:
+\begin{equation}
+\ell_c(\theta)=\frac{1}{|\mathcal K|}\sum_{k\in\mathcal K}\rho\Big(\hat x_0^{(k-\Delta_k)}-\sgop\big[\tilde x_0^{(k)}\big]\Big),
+\qquad \rho(u)=\sqrt{\lVert u\rVert_2^2+c_h^2}-c_h ,
+\label{eq:cdloss}
+\end{equation}
+with $\sgop[\cdot]$ a stop-gradient and $c_h$ a small constant scaled to the latent dimensionality.
+Because the student is trained with a single conditional pass against $w{=}7$ teacher trajectories,
+guidance is absorbed into its prediction: the student is sampled at $w{=}1$, with no classifier-free
+guidance at inference.
+
+\subsection{Exact photographic reward}
+\label{sec:reward}
+Selection alone only changes which of the teacher's four trajectories the student is trained on; it
+never moves the student's own predictions toward the photograph directly. The reward does. On every
+training update, in addition to matching the (stop-gradiented) teacher targets, the student's own
+clean-latent estimates at the two least-noisy supervised states are decoded, re-embedded with the
+same DINOv2 scorer used for selection, and pulled toward the reference photograph by gradient:
+\begin{equation}
+r_c(\theta)=\frac12\sum_{i=1}^{2}\big\langle u\big(\Dec(\hat x_0^{(s_i)})\big),\,u(x^{\mathrm{ref}})\big\rangle ,
+\label{eq:reward}
+\end{equation}
+where $\Dec$, DINOv2 and $u(x^{\mathrm{ref}})$ are exactly the frozen decoder and scorer of
+Section~\ref{sec:selection}: the reward is differentiated through the VAE decoder and through
+DINOv2, both with frozen weights, into the student. No stop-gradient is used inside $r_c$. The full
+per-caption training objective is
+\begin{equation}
+\mathcal L(\theta)=\mathbb E_c\big[\ell_c(\theta)\big]\;-\;\lambda\,\mathbb E_c\big[r_c(\theta)\big] ,
+\label{eq:objective}
+\end{equation}
+combining Equations~\ref{eq:cdloss} and~\ref{eq:reward}. The weight $\lambda{=}15.504$ is set once,
+before training, so that the raw reward gradient's norm is 20\% of the raw consistency gradient's
+norm, measured over a short probe at the start of training; the realised ratio drifts to 25--40\%
+over a full run. The method reads the reference photograph twice: once, offline, to choose which of
+four trajectories to train on, and once, inside every training step, to pull the student's own
+predictions toward it directly.
+
+\subsection{Training algorithm}
+\label{sec:pseudocode}
+Algorithm~\ref{alg:method} states the full method in two phases: candidate generation and selection
+happen once, before training starts, for every caption; the training loop then repeats one simple
+update. Every quantity below was defined precisely in Sections~\ref{sec:selection}--\ref{sec:reward}
+above; the pseudocode intentionally does not re-derive the equations, only names which one each line
+uses, so that the flow of the method stays visible at a glance.
+
+\begin{algorithm}[t]
+\caption{Scored consistency distillation with an exact photographic reward}
+\label{alg:method}
+\begin{algorithmic}[1]
+\Statex \textbf{Phase 1 -- Choose a trajectory for every caption (once, before training).}
+\For{each training caption $c$, with reference photograph $x^{\mathrm{ref}}$}
+  \State Generate $N{=}4$ candidate images by rolling out the frozen teacher from 4 seeds \Comment{Section~\ref{sec:selection}, first paragraph}
+  \State Score every candidate's similarity to $x^{\mathrm{ref}}$ with the DINOv2 scorer $u(\cdot)$ \Comment{Equation~\ref{eq:score}}
+  \State Keep only the seed of the best-scoring candidate $j^\star$ \Comment{Equation~\ref{eq:argmax}; nothing else is stored}
+\EndFor
+\Statex \textbf{Phase 2 -- Train the student (repeat every optimiser step).}
+\For{each optimiser step}
+  \State Pick a caption $c$; regenerate its kept trajectory $j^\star$ from the stored seed
+  \State At 5 noise levels along that trajectory, compute the teacher's target and the student's (one-step-noisier) prediction \Comment{Section~\ref{sec:cd}}
+  \State $\ell_c\gets$ average distance between the student's predictions and the teacher's targets \Comment{Equation~\ref{eq:cdloss}}
+  \State $r_c\gets$ average photographic reward of the student's 2 least-noisy predictions \Comment{Equation~\ref{eq:reward}}
+  \State Take a gradient step on $\ell_c-\lambda\,r_c$ (clip the gradient norm to 1; AdamW) \Comment{Equation~\ref{eq:objective}}
+\EndFor
+\end{algorithmic}
+\end{algorithm}
+
+At inference the student is sampled with 4 Euler steps on its own grid, $w{=}1$, with no guidance and
+no candidate generation: Phase 1 and the reward only apply at training time. The trained student is a
+single frozen network; nothing about candidate pools, scorers or the reward survives into the
+deployed model.
+
+\section{Experimental Setup}
+\label{sec:setup}
+
+\paragraph{Data.} Training captions come from COCO \texttt{train2017}, each paired with the
+photograph it was originally written for; that photograph is used only by the scorer and the
+reward, and never enters the student's training input. Two pools are used: a \textbf{3k pool} of
+3,000 captions drawn once with a fixed seed, used for every multi-seed comparison, and a
+\textbf{118k pool} of 113,948 captions, used to test whether the recipe holds at scale. All
+evaluation uses a separate, sealed pool built once with a fixed seed; evaluation references and
+fidelity targets come from COCO \texttt{val2017}, so no evaluation caption or photograph is seen in
+training.
+
+\paragraph{Training configurations.} Table~\ref{tab:hyper} gives both configurations. Both use
+AdamW, global gradient-norm clipping at 1, fp32 master weights under bf16 autocast, and a frozen
+teacher, text encoders and VAE. The 118k configuration uses 4 GPUs in data parallel, one caption per
+GPU per step; its reported student is the uniform weight average of the last five saved checkpoints,
+which is necessary because consecutive checkpoints otherwise differ by up to 0.035 CompBench under
+this schedule.
+
+\begin{table}[t]
+\centering
+\caption{Training configurations. Both use identical code, differing only in scale.}
+\label{tab:hyper}
+\fitbox{%
+\begin{tabular}{l l l}
+\toprule
+ & 3k configuration & 118k configuration \\
+\midrule
+Captions & 3,000 & 113,948 \\
+GPUs & 1 & 4, data-parallel, one caption per GPU per step \\
+Updates & 6,000 (2 passes) & 56,974 (2 passes) \\
+Training seeds & 3 -- 5 & 3 \\
+Learning rate & $10^{-5}$ & $2\times10^{-5}$ \\
+Warm-up & 300 steps & 1,000 steps \\
+Reward weight $\lambda$ & 15.504 & -- (Section~\ref{sec:results-scale}) \\
+Reported weights & final step & uniform average, last 5 checkpoints \\
+\bottomrule
+\end{tabular}}
+\end{table}
+
+\paragraph{Evaluation.} We report alignment with T2I-CompBench (8 categories: color, shape, texture,
+2D-spatial, 3D-spatial, numeracy, non-spatial, complex; one image per prompt unless stated, and the
+official ten-images-per-prompt protocol where noted) and GenEval2 (object, count, attribute,
+position and verb skills, atom counts 3 to 10, scored as the geometric mean over atoms). We report
+fidelity with FID, CMMD, precision and recall against 5,000 held-out COCO \texttt{val2017}
+photographs. Every arm and every seed is evaluated on exactly the same evaluation pool. Unless
+stated, all reported numbers are for a student sampled with 4 Euler steps, $w{=}1$.
+
+\section{Results}
+\label{sec:results}
+
+\subsection{Alignment}
+\label{sec:results-align}
+Table~\ref{tab:main} compares three training recipes on the 3k pool, matched in every other respect:
+random trajectory selection with no reward (the naive baseline), argmax selection with no reward,
+and argmax selection with the exact photographic reward (our full method). Both components help, and
+they combine additively: selection alone is worth $+0.012$ CompBench over the baseline, the reward
+alone (on top of selection) adds a further $+0.0055$ ($p=0.004$), and the two together are
+$+0.0172$ CompBench ($p=0.002$) and $+1.94$ GenEval2 ($p=0.003$) over the naive baseline, with every
+seed positive on both benchmarks.
+
+\begin{table}[t]
+\centering
+\caption{Alignment on the 3k pool, five training seeds, averaged checkpoints, one image per prompt.
+Deltas are seed-paired against the row above, mean $\pm$ standard deviation over seeds.}
+\label{tab:main}
+\fitbox{%
+\begin{tabular}{l c c c c}
+\toprule
+Recipe & CompBench & $\Delta$ & GenEval2 ($\times100$) & $\Delta$ \\
+\midrule
+Random selection, no reward (baseline) & $0.4751\pm0.0032$ & -- & $22.47\pm0.68$ & -- \\
+Argmax selection, no reward & $0.4868\pm0.0031$ & $+0.0117\pm0.0058$ $(p{=}0.011)$ & $23.92\pm1.29$ & $+1.46\pm1.38$ \\
+Argmax selection + exact reward (ours) & $0.4923\pm0.0021$ & $+0.0055\pm0.0021$ $(p{=}0.004)$ & $24.41\pm0.77$ & $+0.49\pm1.30$ \\
+\midrule
+\textbf{Ours vs.\ baseline} & \multicolumn{4}{c}{$+0.0172\pm0.0051$ CompBench $(p{=}0.002)$, $\quad+1.94\pm0.68$ GenEval2 $(p{=}0.003)$} \\
+\bottomrule
+\end{tabular}}
+\end{table}
+
+A one-factor sweep around this recipe (Appendix, Section~\ref{sec:appendix-titles}) finds that its
+reward weight is conservative: raising $\lambda$ to 31 and rewarding all five supervised states
+instead of the two least-noisy reaches $\mathbf{0.5082}$ CompBench, our strongest configuration on
+this metric, $+0.0153$ over the recipe above ($p=0.012$); this configuration trades some of its gain
+on GenEval2 and FID for its CompBench and CMMD gain (Appendix), so Table~\ref{tab:main}'s recipe is
+the one we report throughout the rest of this section.
+
+\paragraph{Per-category breakdown.} Table~\ref{tab:cat} breaks the CompBench gain down by category.
+The gain is not concentrated in one easy category: every one of the eight categories moves in the
+recipe's favour, and the two spatial-relation categories, historically the hardest for text-to-image
+models, show the largest absolute gains.
+
+\begin{table}[t]
+\centering
+\caption{CompBench by category, 3k pool, five seeds, one image per prompt, averaged checkpoints.}
+\label{tab:cat}
+\fitbox{%
+\begin{tabular}{l c c c}
+\toprule
+Category & Random, no reward & Ours & $\Delta$ (seed-paired) \\
+\midrule
+Color & $0.8086\pm0.0077$ & $0.8228\pm0.0110$ & $+0.0142\pm0.0140$ $(p{=}0.086)$ \\
+Shape & $0.5517\pm0.0139$ & $0.5672\pm0.0059$ & $+0.0155\pm0.0143$ $(p{=}0.071)$ \\
+Texture & $0.7151\pm0.0084$ & $0.7311\pm0.0048$ & $+0.0160\pm0.0125$ $(p{=}0.046)$ \\
+2D-spatial & $0.2110\pm0.0196$ & $0.2459\pm0.0115$ & $+0.0349\pm0.0231$ $(p{=}0.028)$ \\
+3D-spatial & $0.3030\pm0.0058$ & $0.3234\pm0.0134$ & $+0.0204\pm0.0126$ $(p{=}0.022)$ \\
+Numeracy & $0.5313\pm0.0113$ & $0.5591\pm0.0135$ & $+0.0278\pm0.0224$ $(p{=}0.050)$ \\
+Non-spatial & $0.3104\pm0.0004$ & $0.3116\pm0.0013$ & $+0.0013\pm0.0012$ $(p{=}0.072)$ \\
+Complex & $0.3700\pm0.0027$ & $0.3774\pm0.0036$ & $+0.0074\pm0.0048$ $(p{=}0.026)$ \\
+\midrule
+Mean & $0.4751\pm0.0032$ & $0.4923\pm0.0021$ & $+0.0172\pm0.0051$ $(p{=}0.002)$ \\
+\bottomrule
+\end{tabular}}
+\end{table}
+
+\paragraph{GenEval2 breakdown.} Table~\ref{tab:geneval} breaks GenEval2 down by skill and by the
+number of atomic sub-conditions a prompt has (3 to 10). Attribute binding and position, the two
+skills closest to CompBench's color and spatial categories, gain the most; the gain persists across
+every atom-count bucket, i.e.\ it does not come only from the easiest, lowest-atom prompts.
+
+\begin{table}[t]
+\centering
+\caption{GenEval2, 3k pool, five seeds, averaged checkpoints. Overall is the official geometric mean
+over atoms; atom mean is the arithmetic mean; collapsed is the fraction of prompts with a
+geometric-mean score under 0.05, i.e.\ at least one atom entirely wrong.}
+\label{tab:geneval}
+\fitbox{%
+\begin{tabular}{l c c c}
+\toprule
+Measure & Random, no reward & Ours & $\Delta$ \\
+\midrule
+Overall (official) & $22.5\pm0.7$ & $24.4\pm0.8$ & $+1.9\pm0.7$ $(p{=}0.003)$ \\
+Atom mean (arithmetic) & $61.9\pm0.8$ & $64.0\pm0.6$ & $+2.2\pm1.1$ $(p{=}0.010)$ \\
+Collapsed prompts (\%) & $36.5\pm3.6$ & $31.4\pm1.5$ & $-5.2\pm4.2$ \\
+\midrule
+Skill: object & $83.7\pm1.5$ & $85.9\pm0.7$ & $+2.3\pm2.0$ \\
+Skill: count & $35.9\pm1.1$ & $37.5\pm1.2$ & $+1.6\pm1.9$ \\
+Skill: attribute & $70.8\pm1.2$ & $73.5\pm1.0$ & $+2.7\pm1.9$ $(p{=}0.034)$ \\
+Skill: position & $48.3\pm2.9$ & $51.8\pm0.8$ & $+3.5\pm3.0$ \\
+Skill: verb & $23.5\pm4.6$ & $26.5\pm2.2$ & $+3.0\pm4.8$ \\
+\midrule
+Atoms = 3 & $44.2\pm1.8$ & $46.2\pm1.5$ & $+2.0\pm1.7$ \\
+Atoms = 4 & $34.7\pm2.7$ & $37.0\pm2.9$ & $+2.3\pm4.9$ \\
+Atoms = 5 & $24.9\pm0.4$ & $27.2\pm3.2$ & $+2.3\pm3.5$ \\
+Atoms = 6 & $22.0\pm1.1$ & $22.6\pm1.0$ & $+0.6\pm1.6$ \\
+Atoms = 7 & $17.8\pm1.7$ & $18.5\pm2.2$ & $+0.7\pm3.8$ \\
+Atoms = 8 & $13.6\pm1.1$ & $16.1\pm1.4$ & $+2.6\pm2.0$ $(p{=}0.046)$ \\
+Atoms = 9 & $13.1\pm1.0$ & $16.8\pm1.0$ & $+3.8\pm1.4$ $(p{=}0.004)$ \\
+Atoms = 10 & $9.5\pm1.3$ & $10.8\pm1.1$ & $+1.4\pm2.2$ \\
+\bottomrule
+\end{tabular}}
+\end{table}
+
+\subsection{Scaling to 118,000 captions}
+\label{sec:results-scale}
+Selection was re-tested at 118k captions with three training seeds (the exact reward has so far only
+been validated at the 3k scale above). Table~\ref{tab:scale} gives the result: $+0.0175$ CompBench
+($p=10^{-14}$) and $+1.29$ GenEval2 over the naive baseline. Under the official ten-images-per-prompt
+CompBench protocol, the far less noisy evaluation, the gain is $+0.0131$ at $p=2\times10^{-41}$
+(Table~\ref{tab:official}), and it holds in every one of the eight categories under both protocols.
+The scaled-up student closes most of the gap to its own 28-step teacher: the averaged patch student
+is 0.021 CompBench below the 28-step teacher and 0.030 above its 8-step source.
+
+\begin{table}[t]
+\centering
+\caption{118k captions, 56,974 updates, three training seeds, weight-averaged students.}
+\label{tab:scale}
+\fitbox{%
+\begin{tabular}{l c c}
+\toprule
+Recipe & CompBench (mean, $\Delta$, $p$) & GenEval2 (mean, $\Delta$, $p$) \\
+\midrule
+Random selection (baseline) & $0.4668$ & $20.29$ \\
+Argmax selection (ours) & $0.4843$, $+0.0175$, $10^{-14}$ & $21.58$, $+1.29$, $0.02$ \\
+\bottomrule
+\end{tabular}}
+\end{table}
+
+\begin{table}[t]
+\centering
+\caption{Official ten-images-per-prompt T2I-CompBench, 118k weight-averaged students, three seeds.}
+\label{tab:official}
+\fitbox{%
+\begin{tabular}{l c}
+\toprule
+Recipe & CompBench (mean, $\Delta$, $p$) \\
+\midrule
+Random selection (baseline) & $0.4719$ \\
+Argmax selection (ours) & $0.4850$, $+0.0131$, $2\times10^{-41}$ \\
+\bottomrule
+\end{tabular}}
+\end{table}
+
+\subsection{Fidelity}
+\label{sec:results-fid}
+Selection and the reward do not trade alignment for image quality; both improve fidelity to real
+photographs at the same time. Table~\ref{tab:fid3k} gives 3k-pool fidelity for the three recipes of
+Table~\ref{tab:main}; the reward is the larger lever here, lowering CMMD by 0.07--0.10 with every
+seed improving. Table~\ref{tab:fid118k} gives the 118k-scale result for selection: CMMD, precision
+and recall all improve on every one of the three seeds, and FID is unchanged within its split-half
+noise.
+
+\begin{table}[t]
+\centering
+\caption{Fidelity, 3k pool, five seeds, averaged checkpoints, 5,000 COCO \texttt{val2017} captions.}
+\label{tab:fid3k}
+\fitbox{%
+\begin{tabular}{l c c c c}
+\toprule
+Recipe & CMMD $\downarrow$ & Precision $\uparrow$ & Recall $\uparrow$ & FID $\downarrow$ \\
+\midrule
+Random selection, no reward & $0.846\pm0.035$ & $0.478$ & $0.055$ & -- \\
+Argmax selection, no reward & $0.794\pm0.023$ & $0.497$ & $0.066$ & -- \\
+Argmax selection + exact reward (ours) & $\mathbf{0.726\pm0.017}$ & $\mathbf{0.522}$ & $\mathbf{0.082}$ & -- \\
+\bottomrule
+\end{tabular}}
+\end{table}
+
+\begin{table}[t]
+\centering
+\caption{Fidelity at 118k, weight-averaged students, three seeds (s0 / s1 / s2), 5,000 COCO
+\texttt{val2017} captions. The 28-step teacher is shown for reference, not as a fair comparison at 4 steps.}
+\label{tab:fid118k}
+\fitbox{%
+\begin{tabular}{l c c c c}
+\toprule
+Recipe & FID $\downarrow$ & CMMD $\downarrow$ & Precision $\uparrow$ & Recall $\uparrow$ \\
+\midrule
+Random (baseline) & 31.08 / 30.97 / 31.44 & 0.84 / 0.84 / 0.83 & 0.485 / 0.489 / 0.503 & 0.059 / 0.066 / 0.062 \\
+Argmax selection (ours) & 30.98 / 30.83 / 31.47 & \textbf{0.78 / 0.79 / 0.78} & \textbf{0.522 / 0.511 / 0.522} & \textbf{0.071 / 0.068 / 0.063} \\
+\midrule
+Teacher, 28 steps, $w{=}7$ & 29.21 & 0.64 & 0.549 & 0.156 \\
+\bottomrule
+\end{tabular}}
+\end{table}
+
+\subsection{Qualitative results}
+\label{sec:results-qual}
+Table~\ref{tab:cat}'s 2D-spatial category is where the recipe gains the most, and Figure~\ref{fig:qual}
+shows two concrete T2I-CompBench 2D-spatial prompts behind that number. Each prompt names two objects
+and a specific left/right or top/bottom relation between them; we generated our student at its trained
+4-step budget and, to check the placement was not a 4-step accident, again at 8 and 28 steps, and
+compared against the frozen 28-step teacher sampled with classifier-free guidance ($w{=}7$), all four
+images per prompt from identical initial noise. In both prompts every one of our three student
+samples places the two named objects in the relation the prompt asks for; the guided teacher does
+not, placing them the other way around (``a boy on the left of a balloon'') or without the second
+object resting on the first (``a candle on the top of a chicken''). These two prompts were found by
+inspecting images, not by scores alone: several other high-scoring-gap prompts we checked turned out
+to be genuinely correct in both the student's and the teacher's image, with the automatic evaluator's
+score gap coming from image framing rather than a visible placement error, and are not shown here. At
+its trained 4-step budget the student's automatic CompBench score is 0.97 against the teacher's 0.00
+on the first prompt and 0.89 against 0.00 on the second; we did not re-run the automatic evaluator on
+the 8-step and 28-step student images, so only the 4-step column carries a formal score. The broader
+point is qualitative: a distilled few-step student is not, skill by skill, a strictly degraded copy of
+its many-step guided teacher.
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=0.95\textwidth]{qual_spatial_paper.pdf}
+\caption{Two T2I-CompBench 2D-spatial prompts, identical initial noise per prompt (columns are not
+independently seeded). Our student (argmax selection + exact reward, no guidance) places both named
+objects in the requested relation at 4, 8 and 28 sampling steps alike; the frozen teacher with
+guidance ($w{=}7$) does not, at 28 steps. Green borders: the requested relation is satisfied. Red
+border: it is not. Automatic CompBench 2D-spatial scores (only computed for the trained 4-step
+student and the teacher): 0.97 vs.\ 0.00 (top row), 0.89 vs.\ 0.00 (bottom row).}
+\label{fig:qual}
+\end{figure}
+
+\section{Additional Ablations}
+\label{sec:appendix-titles}
+The following ablations were run on the 3k pool and are reported in full in the appendix; only
+their titles are given here.
+\begin{itemize}
+\item Selection rule: argmax vs.\ Boltzmann-weighted vs.\ sampled vs.\ uniform candidate weighting.
+\item Reward weight $\lambda$ and number of rewarded states: a one-factor sweep and their combination.
+\item Which supervised states are rewarded: least-noisy vs.\ noisiest.
+\item A decode-free latent scorer and a learned latent reward, as alternatives to decoding.
+\item Consistency-target horizon: 1-step Tweedie estimate vs.\ a 2-step chord vs.\ the trajectory endpoint.
+\item Training objective: $x_0$ regression vs.\ segment-velocity imitation.
+\item Teacher quality: candidate generation and training with a 16-step and a 28-step teacher.
+\item Regression onto the reference photograph as a second training target.
+\item An evolving (exponential-moving-average) teacher in place of the frozen teacher.
+\item Number of candidates ($N{=}4$ vs.\ $N{=}8$) and optimiser batch size, at the 118k scale.
+\item Inference step count: sampling the 4-step student at 2, 8, 16 and 28 steps.
+\end{itemize}
+
+\end{document}

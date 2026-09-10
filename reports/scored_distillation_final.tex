@@ -1355,7 +1355,7 @@ The first exact-reward runs of Section~\ref{sec:rewardx} scored $0.4984$; the sa
 \paragraph{Against naive distillation.}
 The practical comparison is the diagonal of the table: argmax selection with the exact reward against random pick without it, the plain recipe. After averaging it is $+0.0172\pm0.0051$ CompBench ($p=0.002$) and $+1.94\pm0.68$ GenEval2 ($p=0.003$) over five seeds, with CMMD $0.73$ against $0.85$; every CompBench category moves in the same direction under both the one-image and the official ten-image protocol, and on GenEval2 every skill and every complexity bucket gains, with fewer collapsed prompts (31\% against 37\%). The per-category and per-skill tables are in the release documentation.
 
-Two further experiments followed the factorial: a one-factor ablation of the recipe (Section~\ref{sec:ladder}), and, still to run, the reward with the 16-step and 28-step teachers at fixed selection, which tests whether the reward contributes beyond filtering the weaknesses of the 8-step teacher, where the selection gain itself disappears.
+Two further experiments followed the factorial: a one-factor ablation of the recipe (Section~\ref{sec:ladder}), and the reward with the 16-step and 28-step teachers at fixed selection (Section~\ref{sec:k28}), which tests whether the reward contributes beyond filtering the weaknesses of the 8-step teacher, where the selection gain itself disappears.
 
 \subsection{One-factor ablations of the exact-reward recipe}
 \label{sec:ladder}

@@ -1,0 +1,67 @@
+[
+ {
+  "idx": 926,
+  "category": "spatial",
+  "prompt": "a bird on the top of a balloon"
+ },
+ {
+  "idx": 1048,
+  "category": "spatial",
+  "prompt": "a boy on the left of a balloon"
+ },
+ {
+  "idx": 972,
+  "category": "spatial",
+  "prompt": "a airplane on the top of a horse"
+ },
+ {
+  "idx": 1044,
+  "category": "spatial",
+  "prompt": "a woman on the right of a bowl"
+ },
+ {
+  "idx": 1066,
+  "category": "spatial",
+  "prompt": "a butterfly on side of a cup"
+ },
+ {
+  "idx": 920,
+  "category": "spatial",
+  "prompt": "a frog on the top of a cup"
+ },
+ {
+  "idx": 1057,
+  "category": "spatial",
+  "prompt": "a horse on side of a bicycle"
+ },
+ {
+  "idx": 1143,
+  "category": "spatial",
+  "prompt": "a candle on the top of a chicken"
+ },
+ {
+  "idx": 1000,
+  "category": "spatial",
+  "prompt": "a giraffe on the top of a airplane"
+ },
+ {
+  "idx": 1029,
+  "category": "spatial",
+  "prompt": "a couch on the left of a dog"
+ },
+ {
+  "idx": 1040,
+  "category": "spatial",
+  "prompt": "a sheep on the left of a clock"
+ },
+ {
+  "idx": 1019,
+  "category": "spatial",
+  "prompt": "a turtle on the left of a man"
+ },
+ {
+  "idx": 902,
+  "category": "spatial",
+  "prompt": "a dog on the bottom of a refrigerator"
+ }
+]
