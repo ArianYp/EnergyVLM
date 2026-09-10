@@ -496,6 +496,71 @@ Argmax selection (ours) & $0.4850$, $+0.0131$, $2\times10^{-41}$ \\
 \end{tabular}}
 \end{table}
 
+\paragraph{Per-category and per-skill breakdown at 118k.} Table~\ref{tab:scale_cat} gives CompBench
+by category under both protocols; every one of the eight categories gains, in both protocols, with
+no reversals. Table~\ref{tab:scale_geneval} gives the GenEval2 skill and atom-count breakdown (per
+atom, the same convention as Table~\ref{tab:geneval}); object and position are the two skills
+resolved from zero at three seeds, and the gain is broadly present across atom counts rather than
+concentrated in the easiest, lowest-atom prompts.
+
+\begin{table}[t]
+\centering
+\caption{CompBench by category at 118k, three-seed means of the weight-averaged students, under the
+one-image and the official ten-image protocol.}
+\label{tab:scale_cat}
+\fitbox{%
+\begin{tabular}{l ccc ccc}
+\toprule
+ & \multicolumn{3}{c}{one image per prompt} & \multicolumn{3}{c}{ten images per prompt (official)} \\
+Category & Random & Argmax & $\Delta$ & Random & Argmax & $\Delta$ \\
+\midrule
+Color & 0.7755 & 0.7978 & $+0.0223$ & 0.7747 & 0.7950 & $+0.0203$ \\
+Shape & 0.5338 & 0.5455 & $+0.0118$ & 0.5367 & 0.5575 & $+0.0207$ \\
+Texture & 0.7051 & 0.7233 & $+0.0182$ & 0.7166 & 0.7260 & $+0.0094$ \\
+2D-spatial & 0.1971 & 0.2279 & $+0.0308$ & 0.2112 & 0.2284 & $+0.0172$ \\
+3D-spatial & 0.2999 & 0.3224 & $+0.0224$ & 0.3116 & 0.3252 & $+0.0136$ \\
+Numeracy & 0.5483 & 0.5726 & $+0.0242$ & 0.5498 & 0.5619 & $+0.0122$ \\
+Non-spatial & 0.3141 & 0.3142 & $+0.0002$ & 0.3137 & 0.3139 & $+0.0002$ \\
+Complex & 0.3606 & 0.3707 & $+0.0101$ & 0.3607 & 0.3717 & $+0.0111$ \\
+\midrule
+Mean & 0.4668 & 0.4843 & $+0.0175$ & 0.4719 & 0.4850 & $+0.0131$ \\
+\bottomrule
+\end{tabular}}
+\end{table}
+
+\begin{table}[t]
+\centering
+\caption{GenEval2 at 118k, three seeds, weight-averaged students, one image per prompt. Overall is
+the per-prompt score (each prompt's own geometric mean over its atoms), averaged arithmetically
+across prompts; collapsed is the fraction of prompts with a geometric-mean score under 0.05. Skill
+and atom-count rows score individual atoms directly, as in Table~\ref{tab:geneval}.}
+\label{tab:scale_geneval}
+\fitbox{%
+\begin{tabular}{l c c c}
+\toprule
+Measure & Random & Argmax & $\Delta$ \\
+\midrule
+Overall (per-prompt mean) & $20.3\pm0.5$ & $21.6\pm0.4$ & $+1.3\pm0.5$ $(p{=}0.05)$ \\
+Collapsed prompts (\%) & $44.2\pm0.9$ & $41.5\pm2.9$ & $-2.6\pm2.0$ \\
+\midrule
+Skill: object (per atom) & $82.8\pm0.4$ & $84.6\pm0.1$ & $+1.7\pm0.4$ $(p{=}0.02)$ \\
+Skill: count (per atom) & $38.2\pm0.7$ & $39.1\pm0.8$ & $+1.0\pm1.4$ \\
+Skill: attribute (per atom) & $68.7\pm1.9$ & $69.9\pm1.5$ & $+1.2\pm1.3$ \\
+Skill: position (per atom) & $44.9\pm0.2$ & $47.2\pm0.2$ & $+2.3\pm0.3$ $(p{=}0.007)$ \\
+Skill: verb (per atom) & $22.2\pm3.9$ & $26.1\pm1.6$ & $+3.9\pm2.8$ \\
+\midrule
+Atoms = 3 & $71.8\pm1.0$ & $71.4\pm1.0$ & $-0.3\pm1.9$ \\
+Atoms = 4 & $72.5\pm0.3$ & $74.2\pm1.5$ & $+1.7\pm1.3$ \\
+Atoms = 5 & $66.2\pm1.1$ & $67.7\pm0.2$ & $+1.5\pm1.0$ \\
+Atoms = 6 & $65.0\pm0.6$ & $67.1\pm0.7$ & $+2.1\pm1.2$ \\
+Atoms = 7 & $59.6\pm0.2$ & $61.4\pm0.8$ & $+1.8\pm0.9$ \\
+Atoms = 8 & $56.9\pm0.1$ & $58.6\pm0.2$ & $+1.7\pm0.3$ $(p{=}0.01)$ \\
+Atoms = 9 & $54.1\pm1.4$ & $56.6\pm0.4$ & $+2.5\pm1.1$ \\
+Atoms = 10 & $50.1\pm1.0$ & $50.2\pm1.2$ & $+0.1\pm1.6$ \\
+\bottomrule
+\end{tabular}}
+\end{table}
+
 \subsection{Fidelity}
 \label{sec:results-fid}
 Selection improves fidelity to real photographs; the reward on top of it does not. Table~\ref{tab:fid3k}

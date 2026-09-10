@@ -1,0 +1,42 @@
+[
+ {
+  "idx": 165,
+  "category": "color",
+  "prompt": "A green bathroom with a mirror and a pink sink."
+ },
+ {
+  "idx": 77,
+  "category": "color",
+  "prompt": "a red stop sign and a white line"
+ },
+ {
+  "idx": 802,
+  "category": "texture",
+  "prompt": "a metallic fork and a wooden desk"
+ },
+ {
+  "idx": 624,
+  "category": "texture",
+  "prompt": "wooden pencils and a leather sofa"
+ },
+ {
+  "idx": 337,
+  "category": "shape",
+  "prompt": "a circular pendant light and a triangular wall hook"
+ },
+ {
+  "idx": 574,
+  "category": "shape",
+  "prompt": "a triangular slice of bread and a cylindrical loaf"
+ },
+ {
+  "idx": 1846,
+  "category": "complex",
+  "prompt": "The gentle, rolling hills of the countryside were a peaceful escape from the hustle and bustle of the city."
+ },
+ {
+  "idx": 1985,
+  "category": "complex",
+  "prompt": "The vibrant, glittering lights of the carnival rides spun and twirled in dizzying circles, thrilling and delighting the adventurous."
+ }
+]
