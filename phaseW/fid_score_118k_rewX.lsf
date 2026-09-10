@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+#BSUB -J sd-W-fidscore-118krewX
+#BSUB -G s10396
+#BSUB -q training-parallel
+#BSUB -n 4
+#BSUB -W 8:00
+#BSUB -R "span[hosts=1]"
+#BSUB -R "select[mem>128000]"
+#BSUB -R "rusage[mem=128000]"
+#BSUB -M 128000
+#BSUB -gpu "num=1:mode=exclusive_process:gmem=40G"
+#BSUB -cwd /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM
+#BSUB -o /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-W-fidscore-118krewX-%J.out
+#BSUB -e /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-W-fidscore-118krewX-%J.err
+# FID / CMMD / precision / recall for the 118k exact-reward runs (3 seeds), against the existing
+# 118k random and argmax-only pools (already scored in phaseT/fidelity_report.md).
+set -euo pipefail
+export PATH="/software/cellgen/team361/ha11/envs/nichejepa/bin:$PATH"
+export HF_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/huggingface
+export TORCH_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/torch
+export XDG_CACHE_HOME=/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/cache/xdg
+export TOKENIZERS_PARALLELISM=false
+export PYTHONPATH="/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM:${PYTHONPATH:-}"
+source ~/.secrets/hf_token
+MODELS="W_B2_118k-avglast5_s0,W_B2_118k-avglast5_s1,W_B2_118k-avglast5_s2,W_CD_dinop_hard_118k-avglast5_s0,W_CD_dinop_hard_118k-avglast5_s1,W_CD_dinop_hard_118k-avglast5_s2,W_CD_dinop_hard_118k-rewX-avglast5_s0,W_CD_dinop_hard_118k-rewX-avglast5_s1,W_CD_dinop_hard_118k-rewX-avglast5_s2"
+echo "[$(date --iso-8601=seconds)] scoring pools: $MODELS"
+python3 phaseC/fidelity_eval.py \
+  --gen_root phaseT/fidelity/images \
+  --models "$MODELS" \
+  --gate_models W_CD_dinop_hard_118k-rewX-avglast5_s0,W_CD_dinop_hard_118k-avglast5_s0 \
+  --steps 4 \
+  --n_ref 5000 --min_gen 1000 \
+  --title "118k scale: random vs argmax vs argmax+exact-reward, 3 seeds, weight-averaged" \
+  --out phaseW/fidelity_118k_rewX_report.md
+echo "[$(date --iso-8601=seconds)] done -> phaseW/fidelity_118k_rewX_report.md"
