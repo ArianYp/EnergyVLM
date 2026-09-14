@@ -1,0 +1,12 @@
+\begin{tabular}{l c c c c c}
+\toprule
+Reward variant & CompBench & $\Delta$ vs.\ naive ($p$) & GenEval2 & $\Delta$ vs.\ naive ($p$) & CMMD$\downarrow$ \\
+\midrule
+Naive CD (no selection, no reward) & $0.4738\pm0.0017$ & -- & $22.5\pm0.9$ & -- & $0.837$ \\
+Projector frozen & $0.4847\pm0.0075$ & $+0.0109\pm0.0075$ (0.13) & $24.2\pm0.4$ & $+1.66\pm0.60$ (0.04) & $0.810$ \\
+Refresh every 100 updates, 4 steps & $0.4876\pm0.0096$ & $+0.0138\pm0.0093$ (0.12) & $24.0\pm0.3$ & $+1.44\pm1.02$ (0.14) & $0.843$ \\
+Refresh every 25 updates, 4 steps & $0.4866\pm0.0029$ & $+0.0128\pm0.0037$ (0.03) & $23.4\pm0.3$ & $+0.85\pm0.71$ (0.17) & $0.833$ \\
+\textbf{Refresh every 100 updates, 16 steps (ours)} & $0.4887\pm0.0025$ & $+0.0149\pm0.0017$ (0.004) & $23.5\pm1.6$ & $+1.00\pm0.91$ (0.20) & $0.817$ \\
+Ours, max-pooled DINOv2 patches & $0.4814\pm0.0036$ & $+0.0077\pm0.0023$ (0.03) & $23.9\pm0.3$ & $+1.36\pm0.99$ (0.14) & -- \\
+\bottomrule
+\end{tabular}

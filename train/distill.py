@@ -38,6 +38,10 @@ Reward arms (--reward_mode, single-candidate selectors only): -lambda * r is add
            --reward_refresh_every updates on decoded recent predictions plus replay (report Sec. 11.6)
     rgb    phi = DINOv2 o VAE-decode, the RGB scorer itself, differentiable end to end; the exact
            reward the projector approximates (report Sec. 11.7). About 1.2x the step time.
+The paper's arm (paper/, "ours") is --selector dino_patch --reward_mode proj --reward_lambda 80
+--reward_refresh_every 100 --reward_refresh_steps 16: the refresh runs on rank 0 (it needs rank 0's
+buffer of recent predictions) and the refreshed projector is broadcast to every other rank right
+after, so the arm trains on any number of GPUs.
 Every --reward_monitor_every updates the 32 most recent predictions are decoded and scored by the
 OFFLINE scorer (8-bit image, HF processor) and logged next to the reward: the hacking monitor.
 RNG note: loading the scorer (and constructing the projector) advances the global torch generator.
@@ -49,6 +53,9 @@ this and saw a different caption order; --reward_legacy_rng reproduces them.
 
 --accum M accumulates M captions per optimizer update (batch M per GPU at the same per-update
 cost); --num_steps counts optimizer updates, so the data budget is num_steps * accum * world.
+--lr_schedule: after the linear warm-up the learning rate is constant (every run of the report and
+of the paper's main tables) or decays with a cosine to 0 at --num_steps (the converged schedule of
+the paper's Section 3.6); the multiplier is a function of the optimizer-update count.
 
 Multi-GPU under torchrun: a DistributedSampler shows every caption once per global epoch, so
 num_steps = epochs * n_captions / (world_size * accum).
@@ -59,6 +66,7 @@ import argparse
 import copy
 import hashlib
 import json
+import math
 import random
 import sys
 import time
@@ -218,6 +226,9 @@ def main() -> None:
     ap.add_argument("--model_id", default="stabilityai/stable-diffusion-3.5-medium")
     ap.add_argument("--num_steps", type=int, default=6000, help="optimizer updates")
     ap.add_argument("--num_warmup_steps", type=int, default=300)
+    ap.add_argument("--lr_schedule", default="constant", choices=["constant", "cosine"],
+                    help="after the linear warm-up: constant (the report and the paper's main tables) or cosine decay "
+                         "to 0 at --num_steps (the paper's converged schedule); counted in optimizer updates")
     ap.add_argument("--lr", type=float, default=1e-5)
     ap.add_argument("--weight_decay", type=float, default=0.0)
     ap.add_argument("--grad_clip", type=float, default=1.0)
@@ -318,7 +329,15 @@ def main() -> None:
 
     opt = torch.optim.AdamW([p for p in student_module.parameters() if p.requires_grad],
                             lr=args.lr, betas=(0.9, 0.999), weight_decay=args.weight_decay, eps=1e-8)
-    sched = torch.optim.lr_scheduler.LambdaLR(opt, lambda s: min(1.0, s / max(1, args.num_warmup_steps)))
+    def _lr_mult(s):
+        w = max(1, args.num_warmup_steps)
+        if s < w:
+            return s / w
+        if args.lr_schedule == "cosine":
+            T = max(1, args.num_steps - w)
+            return 0.5 * (1.0 + math.cos(math.pi * min(1.0, (s - w) / T)))
+        return 1.0
+    sched = torch.optim.lr_scheduler.LambdaLR(opt, _lr_mult)
 
     lat_c = student_module.config.in_channels
     h_lat = args.height // pipe.vae_scale_factor
@@ -387,7 +406,9 @@ def main() -> None:
     _rng_cpu = torch.random.get_rng_state(); _rng_cuda = torch.cuda.get_rng_state_all()
     if reward_load:
         assert not exact_soft, "the reward arms are single-candidate arms"
-        assert world == 1 or args.reward_refresh_every == 0, "projector refresh is implemented for a single GPU"
+        # The refresh optimizes `proj` on rank 0 only (it needs rank 0's buffer of recent
+        # predictions); every other rank's copy is re-synchronised by a broadcast right after, so
+        # the refreshed arm trains on any number of GPUs.
         assert args.reward_mode == "proj" or args.reward_refresh_every == 0, "refresh applies to the projector only"
         ref_emb = torch.load(args.reward_ref, map_location="cpu", weights_only=False)
         if args.reward_mode == "rgb" or args.reward_refresh_every > 0 or args.reward_monitor_every > 0:
@@ -438,6 +459,10 @@ def main() -> None:
     gstep = 0
     micro = 0                          # captions consumed on this rank (for --accum)
     t_last = time.time()
+    # logging window: the logged loss, per-state losses and consistency loss are means over every
+    # caption since the last log (with --accum > 1 the last caption alone is not the update's loss)
+    _wl_sum, _wl_n, _wk_sum, _wcd_sum, _wcd_n = 0.0, 0, None, 0.0, 0
+    _wandb_fail = 0
     while gstep < args.num_steps:
         try:
             rec = next(data_iter)
@@ -553,6 +578,10 @@ def main() -> None:
                 if len(rbuf) > 64:
                     rbuf.pop(0)
             (loss / args.accum).backward()
+        _wl_sum += float(loss.detach()); _wl_n += 1
+        _wk_sum = per_k.detach().float().clone() if _wk_sum is None else _wk_sum + per_k.detach().float()
+        if loss_cd_v is not None:
+            _wcd_sum += loss_cd_v; _wcd_n += 1
         micro += 1
         if micro % args.accum != 0:
             continue                      # accumulate: no clip, no step, no logging until the window closes
@@ -601,34 +630,59 @@ def main() -> None:
                 for _p in proj.parameters():
                     _p.requires_grad_(False)
                 reward_stats["refresh_loss"] = _tot / args.reward_refresh_steps
+        if (reward_on and proj is not None and world > 1
+                and args.reward_refresh_every and gstep % args.reward_refresh_every == 0):
+            # The refresh above ran on rank 0 only; every other rank's copy of `proj` is stale until
+            # this runs. The condition is rank-agnostic (gstep and the flags are identical on every
+            # rank), so every rank reaches this collective together.
+            import torch.distributed as dist
+            for _p in proj.parameters():
+                dist.broadcast(_p.data, src=0)
 
         if is_main and gstep % args.log_every == 0:
-            lv, g = float(loss.detach().item()), float(gn)
+            lv, g = _wl_sum / max(_wl_n, 1), float(gn)
             pbar.set_postfix({"loss": f"{lv:.3g}", "g": f"{g:.2g}"})
             if args.wandb_project:
                 import wandb
                 now = time.time()
                 n = max(sel_stats["n"], 1)
+                with torch.no_grad():
+                    # how far the student has moved from its initialisation (the teacher's weights):
+                    # a random walk on a plateau keeps growing, a converging run flattens
+                    _d2 = sum(float((_p.detach().float() - _q.detach().float()).pow(2).sum())
+                              for _p, _q in zip(student_module.parameters(), teacher.parameters()))
                 payload = {"train/loss": lv, "train/grad_norm": g, "train/lr": sched.get_last_lr()[0],
                            "train/epoch": epoch, "train/samples_seen": micro * world,
                            "train/steps_per_s": args.log_every / max(now - t_last, 1e-6),
                            "train/gpu_mem_max_gb": torch.cuda.max_memory_allocated() / 2 ** 30,
+                           "train/dist_from_teacher": _d2 ** 0.5,
+                           "train/clip_coef": min(1.0, args.grad_clip / max(g, 1e-12)),
                            "sel/weight_ess": sel_stats["ess"] / n, "sel/weight_entropy": sel_stats["entropy"] / n,
                            "sel/target_churn": (sel_stats["churn"] / sel_stats["revisits"]) if sel_stats["revisits"] else float("nan")}
                 t_last = now
-                for k, v in zip(score_idxs, per_k.detach().tolist()):
+                for k, v in zip(score_idxs, (_wk_sum / max(_wl_n, 1)).tolist()):
                     payload[f"train/loss_k{k}"] = v
                 for f, (s, c) in gain.items():
                     payload[f"sel/gain_{f}"] = s / max(c, 1)
                 if reward_on:
                     payload.update({"reward/r_mean": reward_stats["r"] / max(reward_stats["n"], 1), "reward/rgb_score": reward_stats["rgb"],
                                     "reward/proj_score": reward_stats["proj"], "reward/rgb_proj_corr": reward_stats["corr"],
-                                    "reward/refresh_loss": reward_stats["refresh_loss"], "train/loss_cd": loss_cd_v,
+                                    "reward/refresh_loss": reward_stats["refresh_loss"],
+                                    "train/loss_cd": (_wcd_sum / _wcd_n) if _wcd_n else loss_cd_v,
                                     "reward/grad_norm_cd": reward_stats["g_cd"], "reward/grad_norm_reward": reward_stats["g_r"],
                                     "reward/grad_ratio": reward_stats["g_r"] / reward_stats["g_cd"] if reward_stats["g_cd"] == reward_stats["g_cd"] else float("nan"),
                                     "reward/grad_cos": reward_stats["g_cos"]})
                     reward_stats["r"] = 0.0; reward_stats["n"] = 0
-                wandb.log(payload, step=gstep)
+                try:
+                    wandb.log(payload, step=gstep)
+                except Exception as e:      # a dead wandb service must not take a 13-hour run down
+                    _wandb_fail += 1
+                    if _wandb_fail <= 5 or gstep % (args.log_every * 50) == 0:
+                        import traceback
+                        print(f"[wandb] log failed at step {gstep} (failure #{_wandb_fail}): {type(e).__name__}: {e}", flush=True)
+                        traceback.print_exc()
+        if gstep % args.log_every == 0:   # every rank: start a fresh logging window
+            _wl_sum, _wl_n, _wk_sum, _wcd_sum, _wcd_n = 0.0, 0, None, 0.0, 0
         if (is_main and sample_prompts and args.sample_every > 0 and gstep % args.sample_every == 0):
             if gstep == args.sample_every:          # once: the guided 28-step teacher as reference
                 log_samples(teacher, pipe, sample_prompts, 28, args.cfg, args.height, device, gstep,
@@ -646,7 +700,10 @@ def main() -> None:
                    Path(args.output_dir) / "checkpoint_final.pt")
         if args.wandb_project:
             import wandb
-            wandb.finish()
+            try:
+                wandb.finish()
+            except Exception as e:
+                print(f"[wandb] finish failed: {type(e).__name__}: {e}", flush=True)
     teardown()
 
 

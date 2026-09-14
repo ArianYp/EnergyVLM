@@ -1,0 +1,12 @@
+\begin{tabular}{l c c c c}
+\toprule
+Model & CompBench & $\Delta$ vs.\ naive ($p$) & GenEval2 ($\times100$) & $\Delta$ vs.\ naive ($p$) \\
+\midrule
+Naive CD (random trajectory, no reward) & $0.4738\pm0.0017$ & -- & $22.53\pm0.95$ & -- \\
+\textbf{Ours} (scored trajectory + projector reward) & $\mathbf{0.4887}\pm0.0025$ & $+0.0149\pm0.0017$ (0.004) & $\mathbf{23.54}\pm1.56$ & $+1.00\pm0.91$ (0.20) \\
+\midrule
+Base model, 4 steps, $w{=}7$ (no distillation) & $0.2557$ & -- & $7.32$ & -- \\
+Teacher, 8 steps, $w{=}7$ (the distillation source) & $0.4544$ & -- & $17.58$ & -- \\
+Teacher, 28 steps, $w{=}7$ & $0.5053$ & -- & $17.05$ & -- \\
+\bottomrule
+\end{tabular}

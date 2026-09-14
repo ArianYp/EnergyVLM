@@ -1,0 +1,12 @@
+\begin{tabular}{l c c c c c c}
+\toprule
+ & \multicolumn{3}{c}{CompBench} & \multicolumn{3}{c}{GenEval2 ($\times100$)} \\
+\cmidrule(lr){2-4}\cmidrule(lr){5-7}
+Recipe (118k captions, 3 seeds, last-5 average) & mean $\pm$ sd & $\Delta$ vs.\ naive, seed-paired ($p$) & prompt-level $p$ & mean $\pm$ sd & $\Delta$ vs.\ naive ($p$) & prompt-level $p$ \\
+\midrule
+Naive CD (random trajectory, no reward) & $0.4668\pm0.0036$ & -- & -- & $20.29\pm0.48$ & -- & -- \\
+\textbf{Ours} (scored trajectory + projector reward) & $\mathbf{0.4810}\pm0.0050$ & $+0.0142\pm0.0085$ (0.10) & $<0.001$ & $\mathbf{21.66}\pm1.13$ & $+1.37\pm1.28$ (0.21) & 0.02 \\
+\midrule
+\multicolumn{7}{l}{\footnotesize Raw final checkpoints (before averaging), CompBench per seed: naive 0.4573 / 0.4570 / 0.4591; ours 0.4584 / 0.4514 / 0.4718} \\
+\bottomrule
+\end{tabular}

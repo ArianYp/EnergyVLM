@@ -7,3 +7,10 @@ out/
 pools/
 third_party/
 wandb/
+# LaTeX build products of paper/ (the compiled paper/iclr2027_conference.pdf is tracked)
+paper/*.aux
+paper/*.bbl
+paper/*.blg
+paper/*.log
+paper/*.out
+paper/*.toc

@@ -1,0 +1,10 @@
+\begin{tabular}{l c c c c}
+\toprule
+118k, seeds 0 / 1 / 2, last-5 average & CMMD $\downarrow$ & Precision $\uparrow$ & Recall $\uparrow$ & FID $\downarrow$ \\
+\midrule
+Naive CD & 0.84/0.84/0.83 & 0.485/0.489/0.503 & 0.059/0.066/0.062 & 31.08/30.97/31.44 \\
+\textbf{Ours} & 0.88/0.88/0.86 & 0.477/0.472/0.487 & 0.047/0.053/0.054 & 31.85/31.95/32.46 \\
+\midrule
+Ours $-$ naive (seed-paired, $p$) & $+0.037\pm0.006$ (0.008) & $-0.014\pm0.005$ (0.04) & $-0.011\pm0.003$ (0.02) & $+0.92\pm0.13$ (0.007) \\
+\bottomrule
+\end{tabular}

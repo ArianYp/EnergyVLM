@@ -22,6 +22,20 @@
 #   bsub -env "all,SELECTOR=random,SEED=0"     < scripts/train.lsf     # naive distillation
 #   bsub -env "all,SELECTOR=dino_patch,SEED=0" < scripts/train.lsf     # DINO-patch scored
 #
+# The paper's arm at 118k ("ours", paper/ Section 3.5: scored trajectory + the projector reward,
+# lambda 80, refreshed every 100 updates for 16 steps; the refresh runs on rank 0 and the projector
+# is broadcast to the other ranks). Reward inputs are the 118k versions of data/build_reward_refs.py:
+#   bsub -env "all,SELECTOR=dino_patch,SEED=0,REWARD_MODE=proj,REWARD_LAMBDA=80,REWARD_REFRESH=100,REWARD_REFRESH_STEPS=16,REWARD_REF=cache/reward/ref_emb_118k.pt" < scripts/train.lsf
+#
+# The paper's converged schedule (Section 3.6; cosine decay to 0, effective batch 16 = 4 GPUs x
+# ACCUM 4, peak lr 1e-5, supervised window K={4..7}; one seed each, averaged over the last checkpoints):
+#   3k pool, 16 passes = 3,000 updates:
+#     bsub -env "all,SELECTOR=random,CACHE=cache/train_3k,EPOCHS=16,ACCUM=4,LR=1e-5,WARMUP=150,LR_SCHEDULE=cosine,WINDOW=0.5:0.9,SAVE_EVERY=500,TAG=-3k" < scripts/train.lsf
+#     (+ the REWARD_* settings above with REWARD_REF=cache/reward/ref_emb.pt for "ours"; average STEPS=2000:2500:final)
+#   118k pool, 2 passes = 14,244 updates:
+#     bsub -env "all,SELECTOR=random,ACCUM=4,LR=1e-5,WARMUP=700,LR_SCHEDULE=cosine,WINDOW=0.5:0.9,SAVE_EVERY=1250" < scripts/train.lsf
+#     (average STEPS=10000:11250:12500:13750:final)
+#
 # Optional factors, each changing one thing:
 #   ACCUM=4 SAVE_EVERY=1250   batch 16 at the same data budget (14,244 updates; average steps
 #                             10000:11250:12500:13750:final afterwards, colon-separated)
@@ -37,26 +51,44 @@ GPUS=${GPUS:-4}
 EPOCHS=${EPOCHS:-2}
 LR=${LR:-2e-5}
 WARMUP=${WARMUP:-1000}
+LR_SCHEDULE=${LR_SCHEDULE:-constant}      # constant | cosine (decay to 0 at the last update)
+WINDOW=${WINDOW:-0.4:0.9}                 # supervised window; colon-separated because `bsub -env` splits on commas
 ACCUM=${ACCUM:-1}
 TEMP=${TEMP:-0.04}
 MAP_SEED=${MAP_SEED:-1000003}
 MCD=${MCD:-4}
 SCORE_FIELD=${SCORE_FIELD:-dino_patch_cos}
 SAVE_EVERY=${SAVE_EVERY:-5000}
+REWARD_MODE=${REWARD_MODE:-none}
+REWARD_LAMBDA=${REWARD_LAMBDA:-0}
+REWARD_REFRESH=${REWARD_REFRESH:-0}
+REWARD_REFRESH_STEPS=${REWARD_REFRESH_STEPS:-4}
+REWARD_PROJ=${REWARD_PROJ:-checkpoints/latent_scorer/projector.pt}
+REWARD_REF=${REWARD_REF:-cache/reward/ref_emb_118k.pt}
+REWARD_REPLAY=${REWARD_REPLAY:-cache/reward/replay.pt}
+TAG=${TAG:-}                              # free suffix for the run name (e.g. -3k when CACHE is the 3k cache)
 NREC=$(cat "$CACHE"/selection_rank*.jsonl | wc -l)
 STEPS=${STEPS:-$(python3 -c "print(int(round($EPOCHS * $NREC / ($GPUS * $ACCUM))))")}
 RUN="${SELECTOR}"
 case "$SELECTOR" in boltzmann*) RUN="${RUN}-T${TEMP}"; [ "$SCORE_FIELD" != "dino_patch_cos" ] && RUN="${RUN}-${SCORE_FIELD%_cos}";; esac
+case "$REWARD_MODE" in
+  proj) if [ "$REWARD_REFRESH" != 0 ]; then RUN="${RUN}-rewR"; [ "$REWARD_REFRESH_STEPS" != 4 ] && RUN="${RUN}-s${REWARD_REFRESH_STEPS}"; else RUN="${RUN}-rewF"; fi;;
+  rgb)  RUN="${RUN}-rewX";;
+esac
 [ "$ACCUM" != "1" ] && RUN="${RUN}-acc${ACCUM}"
-RUN="${RUN}_s${SEED}"
+[ "$LR_SCHEDULE" != "constant" ] && RUN="${RUN}-${LR_SCHEDULE}"
+RUN="${RUN}${TAG}_s${SEED}"
 mkdir -p checkpoints logs
-echo "selector=$SELECTOR seed=$SEED captions=$NREC gpus=$GPUS accum=$ACCUM epochs=$EPOCHS steps=$STEPS lr=$LR warmup=$WARMUP temp=$TEMP"
+echo "selector=$SELECTOR seed=$SEED captions=$NREC gpus=$GPUS accum=$ACCUM epochs=$EPOCHS steps=$STEPS lr=$LR warmup=$WARMUP schedule=$LR_SCHEDULE window=$WINDOW temp=$TEMP reward=$REWARD_MODE"
 
 torchrun --standalone --nproc-per-node="$GPUS" train/distill.py \
   --selector "$SELECTOR" --cache_dir "$CACHE" --output_dir "checkpoints/$RUN" \
-  --seed "$SEED" --num_steps "$STEPS" --num_warmup_steps "$WARMUP" --lr "$LR" \
+  --seed "$SEED" --num_steps "$STEPS" --num_warmup_steps "$WARMUP" --lr "$LR" --lr_schedule "$LR_SCHEDULE" \
   --accum "$ACCUM" --temp "$TEMP" --map_seed "$MAP_SEED" --mc_draws "$MCD" --score_field "$SCORE_FIELD" \
-  --K 8 --cfg 7.0 --window 0.4,0.9 --delta_min 1 --delta_max 3 --height 512 \
+  --K 8 --cfg 7.0 --window "${WINDOW//:/,}" --delta_min 1 --delta_max 3 --height 512 \
   --gradient_checkpointing --save_every "$SAVE_EVERY" --log_every 50 \
+  --reward_mode "$REWARD_MODE" --reward_lambda "$REWARD_LAMBDA" --reward_refresh_every "$REWARD_REFRESH" --reward_refresh_steps "$REWARD_REFRESH_STEPS" \
+  --reward_grad_probe_every "${REWARD_PROBE_EVERY:-500}" \
+  --reward_proj "$REWARD_PROJ" --reward_ref "$REWARD_REF" --reward_replay "$REWARD_REPLAY" \
   --sample_every "${SAMPLE_EVERY:-2000}" --sample_prompts "${SAMPLE_PROMPTS:-pools/sample_prompts.json}" \
   ${WANDB_PROJECT:+--wandb_project "$WANDB_PROJECT" --wandb_run_name "$RUN"}

@@ -36,7 +36,14 @@ source scripts/env.sh
 # data/build_reward_refs.py (REWARD_REF, REWARD_REPLAY) and train/latent_scorer.py (REWARD_PROJ):
 #   REWARD_MODE=proj REWARD_LAMBDA=80                        frozen projector reward      (-rewF)
 #   REWARD_MODE=proj REWARD_LAMBDA=80 REWARD_REFRESH=100     projector refreshed every 100 (-rewR)
+#   REWARD_MODE=proj REWARD_LAMBDA=80 REWARD_REFRESH=100 REWARD_REFRESH_STEPS=16
+#                                                            THE PAPER'S ARM ("ours", paper/): the
+#                                                            projector refreshed every 100 updates for
+#                                                            16 AdamW steps                (-rewR-s16)
 #   REWARD_MODE=rgb  REWARD_LAMBDA=15.5                      exact decode + DINOv2 reward (-rewX)
+# Every 3k run of the paper's main tables uses this launcher's defaults (constant LR after warm-up).
+# The paper's converged schedule at 3k (Section 3.6: cosine decay, batch 16, lr 1e-5, window K={4..7},
+# 3,000 updates = 16 passes) needs four GPUs and is launched with scripts/train.lsf, see there.
 
 : "${SELECTOR:?set SELECTOR (random | dino_patch | latent | boltzmann | boltzmann_sample | boltzmann_frozen | boltzmann_mc | uniform_visit)}"
 SEED=${SEED:-0}
@@ -44,6 +51,8 @@ CACHE=${CACHE:-cache/train_3k}
 STEPS=${STEPS:-6000}
 LR=${LR:-1e-5}
 WARMUP=${WARMUP:-300}
+LR_SCHEDULE=${LR_SCHEDULE:-constant}      # constant | cosine (decay to 0 at STEPS)
+WINDOW=${WINDOW:-0.4:0.9}                 # supervised window; colon-separated because `bsub -env` splits on commas
 TEMP=${TEMP:-0.04}
 MAP_SEED=${MAP_SEED:-1000003}
 MCD=${MCD:-4}
@@ -51,22 +60,29 @@ SCORE_FIELD=${SCORE_FIELD:-dino_patch_cos}
 REWARD_MODE=${REWARD_MODE:-none}
 REWARD_LAMBDA=${REWARD_LAMBDA:-0}
 REWARD_REFRESH=${REWARD_REFRESH:-0}
+REWARD_REFRESH_STEPS=${REWARD_REFRESH_STEPS:-4}
 REWARD_PROJ=${REWARD_PROJ:-checkpoints/latent_scorer/projector.pt}
 REWARD_REF=${REWARD_REF:-cache/reward/ref_emb.pt}
 REWARD_REPLAY=${REWARD_REPLAY:-cache/reward/replay.pt}
 RUN="${SELECTOR}"
 case "$SELECTOR" in boltzmann*) RUN="${RUN}-T${TEMP}"; [ "$SCORE_FIELD" != "dino_patch_cos" ] && RUN="${RUN}-${SCORE_FIELD%_cos}";; esac
-case "$REWARD_MODE" in proj) RUN="${RUN}-rew$([ "$REWARD_REFRESH" != 0 ] && echo R || echo F)";; rgb) RUN="${RUN}-rewX";; esac
+case "$REWARD_MODE" in
+  proj) if [ "$REWARD_REFRESH" != 0 ]; then RUN="${RUN}-rewR"; [ "$REWARD_REFRESH_STEPS" != 4 ] && RUN="${RUN}-s${REWARD_REFRESH_STEPS}"; else RUN="${RUN}-rewF"; fi;;
+  rgb)  RUN="${RUN}-rewX";;
+esac
+[ "$LR_SCHEDULE" != "constant" ] && RUN="${RUN}-${LR_SCHEDULE}"
 RUN="${RUN}_3k_s${SEED}"
 mkdir -p checkpoints logs
-echo "selector=$SELECTOR seed=$SEED captions=$(cat "$CACHE"/selection_rank*.jsonl | wc -l) gpus=1 steps=$STEPS lr=$LR warmup=$WARMUP temp=$TEMP"
+echo "selector=$SELECTOR seed=$SEED captions=$(cat "$CACHE"/selection_rank*.jsonl | wc -l) gpus=1 steps=$STEPS lr=$LR warmup=$WARMUP schedule=$LR_SCHEDULE window=$WINDOW temp=$TEMP"
 
 torchrun --standalone --nproc-per-node=1 train/distill.py \
   --selector "$SELECTOR" --cache_dir "$CACHE" --output_dir "checkpoints/$RUN" \
-  --seed "$SEED" --num_steps "$STEPS" --num_warmup_steps "$WARMUP" --lr "$LR" --temp "$TEMP" --map_seed "$MAP_SEED" --mc_draws "$MCD" --score_field "$SCORE_FIELD" \
-  --K 8 --cfg 7.0 --window 0.4,0.9 --delta_min 1 --delta_max 3 --height 512 \
+  --seed "$SEED" --num_steps "$STEPS" --num_warmup_steps "$WARMUP" --lr "$LR" --lr_schedule "$LR_SCHEDULE" \
+  --temp "$TEMP" --map_seed "$MAP_SEED" --mc_draws "$MCD" --score_field "$SCORE_FIELD" \
+  --K 8 --cfg 7.0 --window "${WINDOW//:/,}" --delta_min 1 --delta_max 3 --height 512 \
   --gradient_checkpointing --save_every 2000 --log_every 10 \
-  --reward_mode "$REWARD_MODE" --reward_lambda "$REWARD_LAMBDA" --reward_refresh_every "$REWARD_REFRESH" --reward_grad_probe_every "${REWARD_PROBE_EVERY:-500}" \
+  --reward_mode "$REWARD_MODE" --reward_lambda "$REWARD_LAMBDA" --reward_refresh_every "$REWARD_REFRESH" --reward_refresh_steps "$REWARD_REFRESH_STEPS" \
+  --reward_grad_probe_every "${REWARD_PROBE_EVERY:-500}" \
   --reward_proj "$REWARD_PROJ" --reward_ref "$REWARD_REF" --reward_replay "$REWARD_REPLAY" \
   --sample_every "${SAMPLE_EVERY:-0}" --sample_prompts "${SAMPLE_PROMPTS:-pools/sample_prompts.json}" \
   ${WANDB_PROJECT:+--wandb_project "$WANDB_PROJECT" --wandb_run_name "$RUN"}
