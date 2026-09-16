@@ -85,4 +85,4 @@ torchrun --standalone --nproc-per-node=1 train/distill.py \
   --reward_grad_probe_every "${REWARD_PROBE_EVERY:-500}" \
   --reward_proj "$REWARD_PROJ" --reward_ref "$REWARD_REF" --reward_replay "$REWARD_REPLAY" \
   --sample_every "${SAMPLE_EVERY:-0}" --sample_prompts "${SAMPLE_PROMPTS:-pools/sample_prompts.json}" \
-  ${WANDB_PROJECT:+--wandb_project "$WANDB_PROJECT" --wandb_run_name "$RUN"}
+  ${WANDB_PROJECT:+--wandb_project "$WANDB_PROJECT" --wandb_run_name "$RUN"} ${EXTRA:-}

@@ -1,0 +1,66 @@
+% The user's design note (2026-09-16), verbatim. The implementation in phaseW/rank/ is the first test.
+\documentclass[11pt]{article}
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath,amssymb}
+\usepackage{booktabs}
+\title{\textbf{First Test: Prompt-Aware DINO via Fixed Text Ranking}\\[0.3em]
+\large Two variants --- representation transfer (B) and ranking backprop (A)}
+\author{}
+\date{}
+\begin{document}
+\maketitle
+
+\section{Core Hypothesis Being Tested}
+DINO embeddings live in a pure-vision space: two images can be DINO-close because they share texture, color, or layout, regardless of whether they satisfy a prompt's compositional relations. Raw DINO distance to a reference therefore does not encode prompt-relational structure (attribute binding, counting, spatial relations).
+
+\textbf{Hypothesis.} A fixed text ranking over a positive prompt and its structured negatives can inject prompt-awareness into the DINO space: by forcing the projected DINO reward to follow the text order, we bend the projected subspace into one where ``closeness to the real image'' tracks compositional correctness, not just visual similarity. Aligning the diffusion model to this prompt-aware subspace then transfers that structure into the generator.
+
+In this first test the target ranking is fixed to the text order $\pi_{\text{text}}$ --- we switch off the moving projector-correction cascade of the full method and isolate the simplest question: does ranking-shaped DINO help?
+
+\section{Anchoring: The Non-Oracle Setup (O1)}
+Each generation must be scored against a reference embedding $\bar{f}$. The negatives are perturbed prompts for which no real image exists, which naively suggests generating a reference per negative with an oracle model. We deliberately avoid that in this first test.
+
+\textbf{O1 --- shared real-image anchor.} We use the single real image $x_0$ as the anchor for the positive and all negatives:
+$\bar{f} = f(x_0)$, used for every prompt $c^{(1)}, \dots, c^{(m)}$.
+The ranking logic is preserved: a generation from a corrupted prompt should land farther from the real image than the positive's generation does. No anchor is generated; $x_0$ already exists and $\bar{f}$ is cached once.
+
+\textbf{Validity condition.} O1 is clean when the negatives are compositional rearrangements of the same objects (attribute swaps, spatial swaps, count changes over the same nouns), so the real image remains a sensible reference. If a negative changes the objects entirely, a per-negative reference becomes necessary. For the first test we restrict negatives to same-object rearrangements.
+
+\textbf{Escalation path (only if O1 proves too weak).} (i) VQAScore on the student's own generations as an auxiliary reward; (ii) self-hosted SDXL/FLUX anchors generated once offline and cached, with a single-candidate open-weight VQA filter. Paid API generators/judges are a last resort.
+
+\section{Shared Scaffolding (both variants)}
+Training pair $(x_0, c^+)$; prompt list $c^{(1)} = c^+, c^{(2)}, \dots, c^{(m)}$ (positive + structured negatives); fixed text ranking $\pi_{\text{text}} : c^{(1)} \succ c^{(2)} \succ \dots \succ c^{(m)}$; frozen DINO $f(\cdot)$, cached anchor $\bar{f} := f(x_0)$; projector $g_\phi(\cdot)$ (learnable head into the prompt-aware subspace); diffusion model $\pi_\theta$ (student).
+
+Per step: (1) generate $\hat{x}_0^{(j)} \sim \pi_\theta(\cdot \mid c^{(j)})$ for $j = 1..m$; (2) DINO features $f(\hat{x}_0^{(j)})$ and anchor $\bar{f}$; (3) projected reward $R_\phi^{(j)} = \cos(g_\phi(f(\hat{x}_0^{(j)})), g_\phi(\bar{f}))$; (4) ranking loss enforcing the fixed text order (Plackett-Luce):
+\begin{equation}
+\mathcal{L}_{\text{rank}} = -\sum_{j=1}^m \left[ \frac{R_\phi^{\pi_{\text{text}}(j)}}{\kappa} - \log \sum_{k=j}^m \exp\left( \frac{R_\phi^{\pi_{\text{text}}(k)}}{\kappa} \right) \right].
+\end{equation}
+A partial-order simplification (positive $\succ$ all negatives, no order among negatives) replaces (1) with a softmax-contrastive term $-\log \frac{\exp(R_\phi^{(1)}/\kappa)}{\sum_k \exp(R_\phi^{(k)}/\kappa)}$; recommended as the most defensible starting label.
+
+\section{Variant B: Representation Transfer (no ranking backprop into model)}
+The ranking loss shapes only the projected DINO space; the diffusion model inherits that geometry through a separate REPA-style alignment term and never sees the ranking gradient directly.
+$\mathcal{L}_{\text{rank}}$ updates only $\phi$; generations are detached, $\text{sg}[\hat{x}_0^{(j)}]$. A feature-alignment term aligns the model's intermediate features $h_\theta(x_t^{(j)})$ to the projected DINO embedding of the corresponding clean image:
+\begin{equation}
+\mathcal{L}_{\text{align}}(\theta, \phi) = \sum_{j=1}^m \left\| \text{proj}_\theta(h_\theta(x_t^{(j)})) - \text{sg}[g_\phi(f(\hat{x}_0^{(j)}))] \right\|^2 .
+\end{equation}
+Objective: $\mathcal{L}^{(\text{B})} = \mathcal{L}_{\text{rank}}(\phi) + \lambda\, \mathcal{L}_{\text{align}}(\theta, \phi)$.
+What B isolates: whether prompt-aware representation transfer alone improves compositional generation --- no reward-backprop machinery, no differentiable sampling.
+
+\section{Variant A: Ranking Backprop into the Model}
+The ranking loss backpropagates through the generated images into $\theta$: the model is pushed to generate images whose projected DINO rewards rank in text order. Requires a differentiable path from $\theta$ to $\hat{x}_0^{(j)}$: either a few-step differentiable sampler with gradient checkpointing, or a one-step clean-output surrogate at a sampled timestep.
+Objective: $\mathcal{L}^{(\text{A})} = \mathcal{L}_{\text{rank}}(\theta, \phi) + \lambda_{\text{align}} \mathcal{L}_{\text{align}}(\theta, \phi)$; the alignment term may be kept as a stabilizer or dropped.
+
+\section{Comparison and Ablation Logic}
+B: no ranking gradient into $\theta$, model update via feature alignment, no differentiable sampling, projector trained by ranking, low cost, isolates representation transfer. A: ranking backprop through $\hat{x}_0$, differentiable sampling needed, high cost, isolates the generator push. Running B first de-risks A.
+
+\section{Evaluation}
+\begin{itemize}
+\item Ranking realized? Pairwise accuracy: fraction of positive-vs-negative pairs where the projected reward orders them correctly; Kendall-$\tau$ / Spearman vs.\ $\pi_{\text{text}}$ if using the full order.
+\item Generation improved? Compositional metrics on held-out prompts --- T2I-CompBench sub-scores (attribute binding, spatial), GenEval object/count/position.
+\item Representation probe. Does the projected DINO space separate compositionally-correct from -incorrect generations better than raw DINO? (linear probe or silhouette on held-out pairs).
+\item Sanity. Remove the anchor $\bar{f} \Rightarrow$ reward undefined; flatten $\kappa \to \infty \Rightarrow$ no ranking pressure $\Rightarrow$ should recover the untrained baseline.
+\end{itemize}
+
+\section{Minimal Recipe to Start}
+(1) Small set of compositional prompts; 3--5 negatives per positive by structured caption edits; O1 anchor; same-object rearrangements. (2) Frozen DINOv2 ViT-L for $f$; projector $g_\phi$ a 2--3 layer MLP with L2-normalized output; $\kappa \approx 0.1$. (3) Start with the partial order and Variant B; confirm ranking accuracy climbs and the projected space separates correct/incorrect generations. (4) Then enable the alignment transfer and measure compositional metrics; only after that, move to Variant A with a one-step clean-output surrogate.
+\end{document}

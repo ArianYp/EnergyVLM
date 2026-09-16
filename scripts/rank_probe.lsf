@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+#BSUB -J rank-probe
+#BSUB -q training-parallel
+#BSUB -n 4
+#BSUB -W 2:00
+#BSUB -R "span[hosts=1]"
+#BSUB -R "select[mem>120000]"
+#BSUB -R "rusage[mem=120000]"
+#BSUB -M 120000
+#BSUB -gpu "num=1:mode=exclusive_process:gmem=40G"
+#BSUB -o logs/rank-probe-%J.out
+#BSUB -e logs/rank-probe-%J.err
+#
+# Held-out ranking probe of one student (eval/rank_probe.py, docs/rank/): pairwise accuracy positive >
+# negative in four spaces on unseen captions, with the shuffled-anchor control.
+#   bsub -env "all,LABEL=B1f_s0,CKPT=checkpoints/<run>/checkpoint_avg_last5.pt,HEAD=checkpoints/<run>/rank_head_final.pt" < scripts/rank_probe.lsf
+set -euo pipefail
+source scripts/env.sh
+: "${LABEL:?set LABEL}"; : "${CKPT:?set CKPT (path or base)}"
+mkdir -p logs out/rank_probe
+python3 eval/rank_probe.py --ckpt "$CKPT" ${HEAD:+--head "$HEAD"} --label "$LABEL" --out "out/rank_probe/${LABEL}.json" --n "${N:-600}" --seed "${SEED:-0}"

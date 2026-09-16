@@ -1,0 +1,1024 @@
+{
+ "lenses": [
+  {
+   "findings": [
+    {
+     "id": "F1",
+     "severity": "high",
+     "category": "design",
+     "title": "B2's REPA alignment reads the DiT at sigma=0.0089 (the finished image), so the transfer channel is nearly degenerate",
+     "detail": "student_rollout keeps grad and arms the hook only on the LAST step (rank_utils.py:70-79). With the run's scheduler the 4-step rollout sigmas are [1.0, 0.8577, 0.6022, 0.0089, 0.0] (log line '[rank] negatives ... rollout sigmas'), so the hooked forward's input is z at sigma=0.0089 (timestep 8.9): essentially the final image. The alignment target is sg[g(P(z_K))] with z_K = z_3 - 0.0089*v (train_pilot_frozen_s4j.py:1393-1396, 1421), i.e. a near-deterministic function of that same input, so the loss can be driven down by the 2048-wide projector alone without changing generation. That step's velocity is multiplied by delta-sigma=-0.0089, so it barely affects samples, and the consistency branch never feeds the student at that noise level (student inputs are k-delta in 1..6, sigma 0.338..0.948; K=8 sigmas [1.0,0.9475,0.8828,0.8008,0.6938,0.548,0.338,0.0089]). REPA's mechanism relies on aligning features of NOISY inputs to a target the input does not already contain; here neither holds.",
+     "evidence": "phaseW/rank/rank_utils.py:70-79; phaseW/train_pilot_frozen_s4j.py:1393-1394,1419-1431; scheduler check: 4-step sigmas [1.0,0.8577,0.6022,0.0089,0.0], K=8 student-input sigma range 0.338..0.948; logs/lsf-sd-W-train118k-151399.out: align loss 0.98 at step 0 -> 0.078 at step 300 (fits in <300 updates, consistent with a trivially fittable target); align-probe ||grad align|| 1.2-1.6 at step 0 (non-zero, so the path is live but weak).",
+     "consequence": "A B2 null cannot be read as 'representation transfer does not help'; it tests the weakest possible version of the design note's Variant B. A B2 positive would need another explanation.",
+     "fix": "Add a --align_step k (or random k per caption) and keep grad through THAT forward only (same cost as now: one grad-enabled forward); hook the step whose input is sigma 0.6022 or 0.8577. Optionally also hook the consistency forward's supervised states (sigma 0.34-0.95) with target sg[g(P(z_K))] of the caption's own rollout; consider per-token cosine (REPA) instead of mean-pooled.",
+     "file": "phaseW/rank/rank_utils.py"
+    },
+    {
+     "id": "F2",
+     "severity": "high",
+     "category": "design",
+     "title": "B1/A confound: the head's Jacobian gain makes the shaped reward 2-3x stronger than 'ours' by step 1000, so B1-vs-ours mixes 'prompt-aware direction' with 'reward strength'",
+     "detail": "The reward in B1/A is -80*<g(P(x_hat)), g(u_ref)> (train_pilot_frozen_s4j.py:1253-1256); its gradient w.r.t. the student scales with J_g. Nothing renormalises it, and with grad_clip=1 always active (pre-clip 120-180) only the SHARE of each term in the update direction matters. Saved B1 s0 heads on the replay DINO embeddings: cos(g(e),e) 0.944 (step 500) -> 0.881 (1000) -> 0.850 (1500) -> 0.804 (2000), |W_fc2| 2.8 -> 6.5, and the ratio ||d<g(e),g(u)>/de|| / ||d<e,u>/de|| = 0.88 -> 1.16 -> 1.38 -> 1.55; A s0 at 1000: cos 0.72, gain 1.49. In the live probes ||grad reward|| goes 90-110 (step 0) -> 30-62 (500) -> 146-215 (1000) while ||grad CD|| stays 190-360, i.e. reward/CD share 0.25-0.33 -> 0.60-0.97 (B1 s0) and 0.76 (A s0). The control 'ours' runs have reward_grad_probe_every=0 (args.json), so its own share is unmeasured (the projector refresh could also move it). The same head drift lowers the mean shaped cosine (0.489 raw -> 0.435 shaped at step 2000), which is what 'reward/r_mean drifts down' in REVIEW_CONTEXT shows; reward/r_mean is a different quantity in B1/A vs B2/ours.",
+     "evidence": "train_pilot_frozen_s4j.py:1253-1259; logs/lsf-sd-W-train118k-151302.out [reward-probe] step 0/500/1000 lines; logs/...-151316.out step 1000 ratio 0.7648; head analysis on checkpoints/phaseW/phaseW_CD_dinop_hard_3k-rewRi-s16-rankB1-hp1-acc4_s0_151302/rank_head_step{500,1000,1500,2000}.pt; checkpoints/phaseW/phaseW_CD_dinop_hard_3k-rewRi-s16-hp1-acc4_s0_145176/args.json reward_grad_probe_every=0.",
+     "consequence": "Any B1/A gain over ours could be a larger effective reward weight, and any loss could be reward over-driving (the 118k audit already showed reward share matters). The contrast does not isolate the head's prompt-awareness.",
+     "fix": "(a) Measure it: at probe steps also compute the raw reward's gradient norm on the same x_hat (one extra autograd.grad) and log shaped/raw; enable --reward_grad_probe_every 500 on the control runs. (b) Control it: normalise the shaped reward gradient (divide _r by sg[||J_g^T g(u)||] estimated per step, or scale lambda by the running shaped/raw ratio), or add a 'ours + lambda_reward matched to the measured share' arm. (c) Decisive control at equal head dynamics: shuffled negatives (negatives drawn from another caption) so g moves and gains without prompt information; kappa->inf is the cheaper but weaker version.",
+     "file": "phaseW/train_pilot_frozen_s4j.py"
+    },
+    {
+     "id": "F3",
+     "severity": "medium",
+     "category": "eval",
+     "title": "probe_params (i % 4 == 0) never probes any attention/adaLN weight matrix, so the lambda_rank=1.3 / lambda_align=60 '20 percent' calibration is measured on biases and norm scales only",
+     "detail": "Every non-dual JointTransformerBlock has 32 parameter tensors and dual blocks 42, so the fixed stride selects the same roles in every block. From checkpoint_step500's key order the 228-tensor subset consists of 26 roles dominated by ff.net.0.proj.bias, ff_context.net.0.proj.bias, norm1.linear.bias, attn.norm_k.weight, to_k.bias, add_k_proj.bias, add_q_proj.bias, to_add_out.bias (16-17 blocks each); 21 of 42 block roles are never probed, including norm1.linear.weight, to_q/to_k/to_v/to_out.0/to_add_out.weight and add_{q,k,v}_proj.weight. Rank/align vs CD ratios on biases need not equal the ratios on the weight matrices that carry most of the gradient norm and most of the update. Also note the probe is per single caption (||grad CD|| 200-500 on the subset) while the accumulated 16-caption pre-clip norm is 120-180, so the per-caption gradient is mostly noise and the '20 percent share' is not the share in the mean update.",
+     "evidence": "phaseW/train_pilot_frozen_s4j.py:668-671, 1261-1263, 1409-1411, 1424-1426; key analysis of checkpoints/phaseW/phaseW_CD_dinop_hard_3k-rewRi-s16-rankB1-hp1-acc4_s0_151302/checkpoint_step500.pt (909 tensors; blocks 42/42/42/.../32/32/26); phaseW/launch_rank.sh comment 'Weights from the smoke'.",
+     "consequence": "lambda_rank and lambda_align may be far from the intended 20 percent share on the parameters that matter; the arms could be under- or over-driven, which changes what a null means.",
+     "fix": "Use a stratified fixed subset (e.g. every 4th tensor with an offset that includes weights, or a seeded random 25 percent of tensors), or compute the two full norms sequentially (one autograd.grad at a time, freeing between) at probe steps; report the share on the accumulated update once per 500 steps as well.",
+     "file": "phaseW/train_pilot_frozen_s4j.py"
+    },
+    {
+     "id": "F4",
+     "severity": "medium",
+     "category": "eval",
+     "title": "Held-out probe leaks the projector's training captions: 61 of its 300 captions are in P's 22k train split (70 in P's 27k shards); the replay set is not excluded either",
+     "detail": "probe_heldout.py excludes only the 3k pool (--exclude default phaseN/coco_selection_dinopatch; line 74-77 filters by prompt and reference of that pool). The projector P was pretrained on phaseW/latent_scorer/shards (27,000 idx, 22,000 'train'). Intersecting the probe's record idx with the shards: 61 in train, 9 in val/test, 70 total of 300. The 'latent' and 'latent_g' spaces are therefore not held-out for P (its cosine and ranking-KL losses saw those captions' teacher candidates and u_ref). replay_2k.pt carries no idx so its overlap cannot be tested; it is presumably drawn from the same shards.",
+     "evidence": "phaseW/rank/probe_heldout.py:60,74-77; phaseW/rank/probe/base.json records; phaseW/latent_scorer/shards/shard*.pt idx/split (10 files, 14G); phaseW/latent_scorer/train_projector.py:103-105.",
+     "consequence": "The latent-space probe numbers (base 0.499, naive 0.538, ours 0.537) and any future latent_g numbers for trained heads are partly in-sample for P; rgb/rgb_g are unaffected (frozen DINO).",
+     "fix": "Exclude idx with split=='train' (and val/test if P's early stopping used them) from `held`, and exclude the replay set by regenerating replay_2k with an idx field; report latent-space accuracies on the remaining ~230 captions, or add the 'seen by P' flag per record and report both strata.",
+     "file": "phaseW/rank/probe_heldout.py"
+    },
+    {
+     "id": "F5",
+     "severity": "medium",
+     "category": "design",
+     "title": "B1 applies a head fitted on P(z_K) of sharp 4-step rollouts to P(x_hat) of blurry one-step Tweedie estimates at sigma 0.34-0.55; nothing monitors the ranking in that space",
+     "detail": "The head is trained only on _e = P(z_K) (train_pilot_frozen_s4j.py:1396-1402) but the reward that reaches the student uses P(x_hat) of the two least-noisy supervised inputs (1245-1256), whose inputs are at sigma 0.338-0.548 (stu_idx 5-6 of the K=8 grid); x_hat is a one-step clean estimate, which the project's own diagnostics put 17-27 percent off the endpoint. The head's shaping learned on the rollout distribution may not carry over to x_hat, and there is no in-training measure of pairwise accuracy or margin in the x_hat space (rank/acc_* are all on z_K).",
+     "evidence": "phaseW/train_pilot_frozen_s4j.py:1245-1256 vs 1393-1402; K=8 sigmas [..,0.694,0.548,0.338,0.0089].",
+     "consequence": "A B1 null could be a transfer failure between the two input distributions rather than a failure of prompt-aware shaping; a positive is harder to attribute.",
+     "fix": "Cheap monitor: at probe steps compute for the positive caption the shaped and raw cosine of P(x_hat) vs u_ref and P(z_K) vs u_ref and log their correlation; better: also train the head on the positive's P(x_hat) paired with negatives' P(x_hat) at the same state (requires rolling the negatives on the teacher grid, ~3x rollout cost, or reusing the student's rollout states z_k at sigma 0.6 with a one-step Tweedie).",
+     "file": "phaseW/train_pilot_frozen_s4j.py"
+    },
+    {
+     "id": "F6",
+     "severity": "low",
+     "category": "bug",
+     "title": "README claim 'captions without negatives contribute no loss' is false for B2 (alignment on 100 percent of captions) and A wastes grad rollouts on the 39 percent without negatives",
+     "detail": "The alignment term (train_pilot_frozen_s4j.py:1419-1432) is computed for every caption, including the 1,184 without negatives, so B2's transfer channel runs on all captions while the head only learns on 61 percent. In A, _grad_all rollouts run with full 4-step gradient even when _l_rank = _Rs.sum()*0.0 (1390-1394, 1407), which is why A costs 8.3 s/update vs 4.0 for B1. DDP parity is why it is done unconditionally, but the cost could be avoided by sorting captions so every rank sees the same negatives-present flag per micro-step, or by gathering the flag with one all_reduce before the rollout.",
+     "evidence": "phaseW/rank/README.md:19-23; phaseW/train_pilot_frozen_s4j.py:1384-1394,1405-1407,1419-1432; [rank] log negs/caption 1.2-1.5 (3884/3000=1.29).",
+     "consequence": "Documentation/interpretation only for B2 (the align term is a general REPA regulariser on every caption, not a ranking-specific one); ~2x wasted compute in A.",
+     "fix": "Fix the README sentence; for A, all_reduce a 'has negatives' flag (or a per-update sort) and run no-grad rollouts when no rank needs gradient.",
+     "file": "phaseW/rank/README.md"
+    },
+    {
+     "id": "F7",
+     "severity": "low",
+     "category": "eval",
+     "title": "rank_utils.py is untracked, so it is in neither the run's git_diff.patch nor the wandb source artifact; provenance of the ranking code depends on nobody editing it",
+     "detail": "The trainer snapshots `git diff HEAD -- *.py` (tracked files only) and globs 'phaseW/*.py' non-recursively (train_pilot_frozen_s4j.py:776-793), so phaseW/rank/rank_utils.py (git status '??') is captured nowhere. Currently consistent: rank_utils.py mtime 2026-09-16 02:35:21 and the trainer 02:57:04 precede every job start (03:05:31 onward), and the trainer diff in all five run dirs is md5-identical to the working tree.",
+     "evidence": "git ls-files error for phaseW/rank/rank_utils.py; stat output; checkpoints/phaseW/*rank*/git_diff.patch trainer-section md5 42ec10ede589b8183d5fe778223ac3d6 for all runs = current diff.",
+     "consequence": "Any later edit to rank_utils.py silently breaks reproducibility of the running arms.",
+     "fix": "git add phaseW/rank/*.py and add 'phaseW/rank/*.py' to the _pats list; commit before the next launch.",
+     "file": "phaseW/train_pilot_frozen_s4j.py"
+    },
+    {
+     "id": "F8",
+     "severity": "low",
+     "category": "stats",
+     "title": "rank/loss is dominated by log(1+m) and acc_shaped is in-sample and caption-weighted; the RGB monitor (8 captions) is noise",
+     "detail": "ranking_loss = logsumexp(R/kappa) - R_pos/kappa has chance level log(1+m) (0.69/1.10/1.39 for m=1/2/3), so the logged window mean moves with negatives-per-window (B1: 1.05 -> 1.09 -> 1.12 over steps 50-150 while acc rises 0.548 -> 0.560). pairwise_acc averages per caption (a 1-negative caption weighs as much as a 3-negative one), on the head's own training rollouts. acc_rgb uses the last 8 captions (about 10 pairs): B1 and A log identical 0.875 at steps 100 and 150, and B1 swings 0.875 -> 0.50 by 2100.",
+     "evidence": "phaseW/rank/rank_utils.py:85-94; phaseW/train_pilot_frozen_s4j.py:1433-1441,1465-1477; logs/lsf-sd-W-train118k-151302.out and -151316.out [rank] lines.",
+     "consequence": "Training-time ranking metrics overstate progress and are not comparable across windows/arms; the RGB monitor cannot detect anything.",
+     "fix": "Log loss - log(1+m) (or the per-caption softmax probability of the positive), pair-weighted accuracy, and run the RGB check on >=64 buffered rollouts every 500 steps (decode is ~60 ms/image).",
+     "file": "phaseW/rank/rank_utils.py"
+    },
+    {
+     "id": "F9",
+     "severity": "low",
+     "category": "design",
+     "title": "Head and align projector run at constant lr 1e-4 while the student's lr decays to 0; the saved final head is not the one the student last adapted to",
+     "detail": "rank_head_opt and align_opt have no schedule (train_pilot_frozen_s4j.py:890,897) whereas the student is cosine-to-0. Late in training the reward space keeps moving at full speed while the student cannot follow; harmless for the student's weights but the final head (used by the held-out probe's latent_g/rgb_g) diverges from the head that shaped the student, and the step-2000/2500/final weight average is evaluated against one head.",
+     "evidence": "phaseW/train_pilot_frozen_s4j.py:890,897,1457-1464; head drift cos(g(e),e) 0.94->0.80 across 500-2000 in B1 s0.",
+     "consequence": "Probe numbers 'through the trained head' conflate the head's continued drift with the student's state.",
+     "fix": "Tie the head/align lr to the student's schedule (a LambdaLR with the same _lr_mult), and probe with the head saved at the same step as the checkpoint being evaluated.",
+     "file": "phaseW/train_pilot_frozen_s4j.py"
+    },
+    {
+     "id": "F10",
+     "severity": "medium",
+     "category": "suggestion",
+     "title": "Controls and monitors that would make the test decisive at low cost",
+     "detail": "(1) Shuffled-negatives control for B1 (negatives borrowed from another caption; same head dynamics and gain, no prompt information): one flag, no extra compute; it is the direct answer to F2. (2) kappa->inf (or --rank_head_lr 0) arm: recovers ours exactly by construction and doubles as a bit-level regression test of RNG isolation. (3) Log at probe steps the raw and shaped reward gradient norms on the same x_hat and the cosine between them (two autograd.grad calls, already budgeted). (4) Enable --reward_grad_probe_every 500 on the naive/ours controls so the reward share is known in the reference. (5) For B2, --align_step with a mid-trajectory step (F1). (6) Train the head on true-DINO features of decoded rollouts as well (the RGB monitor already decodes them): removes the P-vs-DINO gap from the head's target and lets rgb_g be a fair probe. (7) In the probe, report pair-weighted accuracy, AUC of margins and per-family counts with binomial CIs; 833 pairs give about +-0.034 at 95 percent, so per-family differences of 0.05-0.1 are not resolvable.",
+     "evidence": "phaseW/launch_rank.sh EXTRA table; train_pilot_frozen_s4j.py:1260-1270 (probe scaffolding exists); phaseW/rank/probe_heldout.py:139-150.",
+     "consequence": "Without (1)/(3)/(4) a B1/A result cannot be attributed to prompt-awareness rather than reward strength; without (5) B2 is a weak test.",
+     "fix": "Add flags --rank_shuffle_negs, --align_step, and the probe logging; launch the shuffled-negatives B1 arm with the next seed batch.",
+     "file": "phaseW/launch_rank.sh"
+    }
+   ],
+   "validated": [
+    "Gradient paths match the claims: the head g trains only from _l_head on _e.detach() (train_pilot_frozen_s4j.py:1400-1402); the shaped reward (1256), A's ranking term (1406) and B2's target (1421) all use head_apply(..., False) = torch.func.functional_call with detached parameters (rank_utils.py:39-45), so the student never trains g and g never sees the student's gradient; align.proj is trained only through _l_align inside loss (1431) and its own optimizer (1462-1464); RankHead has no buffers, so functional_call is complete.",
+    "Identity at init and 'lambda_rank = 0 recovers ours': fc2 is zero-initialised (rank_utils.py:32-33), LatentProjector.forward returns F.normalize(...) (phaseW/latent_scorer/train_projector.py:50) and ref_emb_3k.pt entries are unit vectors (norms 1.0000 checked), so g(e)=e at step 0 and the shaped reward equals the raw reward exactly.",
+    "ranking_loss is the correct partial-order softmax cross-entropy (logsumexp(R/kappa) - R[0]/kappa, rank_utils.py:85-88); pairwise_acc is the fraction of negatives the positive outranks; margin = R_pos - mean(R_neg).",
+    "Rollout schedule: rollout_schedule reads the 4-step sigmas/timesteps and restores K=8 (rank_utils.py:48-55); the consistency branch calls rollout_states, which re-sets K every micro-step before pipe.scheduler.timesteps is read (trainer:59-61, 1024, 1075), so no scheduler state leaks. The rollout sigmas [1.0,0.8577,0.6022,0.0089,0.0] are exactly the eval sampler's: exp0/phaseA_generate.py uses euler_cfg_sample (exp0/generate_candidates.py:74-99) with the same scheduler, fp32 step then bf16 cast, and one conditional pass at cfg 1; student_rollout (rank_utils.py:67-82) has the same update. Only difference: eval casts the transformer weights to bf16, training runs fp32 weights under bf16 autocast.",
+    "grad / grad_last handling: steps run under no_grad except the requested ones; the bf16 cast between steps is differentiable so A's chain is intact; the hook is armed only on the last step and disarmed before any backward, so the checkpoint recomputation (which re-fires the forward hook) cannot overwrite _h.",
+    "AlignHook with non-reentrant checkpointing: diffusers 0.32.2 uses torch.utils.checkpoint with use_reentrant=False (transformer_sd3.py:416), JointTransformerBlock returns (encoder_hidden_states, hidden_states) (attention.py:257) so out[-1] is the image-token stream; the captured tensor has a grad_fn (the guard in features() would raise otherwise) and the live [align-probe] lines show finite ||grad align|| 1.2-1.6 on student parameters, so the path into blocks 1-8 is real; in_dim = 24*64 = 1536 matches.",
+    "DDP parity: the rank block condition (1379) is rank-agnostic and rollouts run on every rank every micro-step, including m=1 rollouts for captions without negatives; _l_head.backward() touches no DDP-managed parameter; the rank-0-only probes use torch.autograd.grad (no AccumulateGrad hooks, no collectives); all_reduce_grads for head/align is reached by every rank at the same point after opt.step(); no_grad DDP forwards only toggle the buffer-sync flag (pos_embed is a constant non-persistent buffer). Empirically the 4-GPU smoke passed (phaseW/rank/smoke/results.txt rc=0 for B1/B2/A) and the live runs passed 2200 (B1 s0), 1050 (A s0) and 800 (B2 s1) updates without hangs or 'marked ready twice' errors.",
+    "Head/align optimizers: (_l_head/accum).backward() accumulates over the accum micro-steps, grads are all-reduced (mean over world), clipped at 1.0, stepped once per update and zeroed with set_to_none after the step (1457-1464); align.proj receives grads through loss/accum; neither is inside the student's optimizer or the student's clip (clip_grad_norm_(student_module.parameters()) at 1454); the 2x8 and 4x4 placements give the same effective batch of 16 for the student, the head and the projector.",
+    "Shaped reward: computed on the two least-noisy supervised inputs (reward_states=2, 1245-1246) as <g(P(x_hat)), g(u_ref)> with detached head weights (1256), added as -80*mean (1259, 1272); B2's args.json has rank_shaped_reward=False and rank_lambda=0, B1's has shaped=True/align 0, A's has backprop/1.3/shaped=True, all matching README and launch_rank.sh.",
+    "RNG isolation: rollout_noise uses a private generator keyed by (seed, rank, micro) (rank_utils.py:163-166; no cross-rank or cross-seed collisions for rank<4); head and align init run under manual_seed with CPU and CUDA RNG states saved and restored (trainer:884-898); the rollouts, encode_prompt and the monitors draw no global randomness. Empirical confirmation: the step-0 [reward-probe] values are identical across B1 s0, A s0 and B2 s0 (cd=49.4596, r=0.2724) and B1 vs A share the same four captions per update through step 500 (cd 52.27/58.00/31.04/48.34 vs 52.51/59.31/31.18/48.09).",
+    "Negatives pairing: negatives_3k.json is keyed by the selection cache's idx and all 1,816 source prompts equal the cache prompt for that idx (0 mismatches); 3,884 negatives with the stated 929/210/677 histogram; ref_emb_3k.pt is a dict idx -> unit 768-vector over the 3,000 pool idx; rank_negs[:rank_m] truncation is a no-op (<=3 stored).",
+    "RGB monitor and rank_buf: main-rank only, keeps the last 16 (uses 8) rollouts of captions with negatives, decodes them and ranks with the true DINO scorer raw and through g under no_grad; it never touches training state.",
+    "Head saving: rank_head_step*.pt / rank_head_final.pt store head + align_proj + rank_args (1665-1668, 1679-1682); probe_heldout.py rebuilds RankHead(768) with the default width 1024 = training width.",
+    "Logging windows: rank_stats are printed/logged at gstep % log_every == 0 before the reset at 1640-1645; acc_rgb/acc_rgb_shaped/g_rank/g_align are 'last reading' values by design; train/loss_cd is CD-only (captured at 1271 before the reward is added), so the cross-arm consistency-loss comparison in REVIEW_CONTEXT is valid even though train/loss includes the rank/align/reward terms.",
+    "Smoke calibration reproduces: at weight 1 the rank/CD ratios are 0.068-0.35 and align/CD 0.0019-0.005 (phaseW/rank/smoke/{A,B2}.log), matching the README's numbers; lambda 1.3/60 give 0.09-0.46 and 0.13-0.31 at step 0 in the live runs (subject to F3).",
+    "Code provenance: the trainer diff embedded in all five run dirs is md5-identical to the current working-tree diff, and rank_utils.py / the trainer were last modified at 02:35 / 02:57 on 2026-09-16, before every job start (03:05 onward), so the reviewed code is the code that ran.",
+    "2 GPUs x accum 8 vs 4 x 4 differs only in seed-like ways (DistributedSampler shard assignment, rollout_noise keyed by (rank, micro), rank 0's rbuf/rank_buf recency); n_visits only feeds target_schedule arms, which these are not; effective batch, LR schedule and head/projector batch are identical."
+   ],
+   "summary": "Trainer correctness of the ranking additions is sound: every gradient path does what REVIEW_CONTEXT claims (head trains only on detached rollouts; the student sees the ranking only in A and only through detached head weights; B2's alignment target is stopped; the shaped reward trains the student only), the rollout is the eval sampler's schedule and update, scheduler state is restored, RNG isolation holds (identical step-0 losses across arms and shared caption order B1 vs A through step 500), DDP parity holds by construction and empirically, the head/align optimizers accumulate and all-reduce correctly, and the arms' args.json match the launcher and README. The code that ran is the working tree. The problems are design-level, not bugs. Two are serious: (F1) B2 hooks the DiT at sigma=0.0089, where the input is the finished image and the target is a near-function of that input, so the REPA channel is close to degenerate and its fast-falling align loss (1.0 -> 0.08 in <300 updates) is expected; (F2) in B1/A the head's Jacobian gain (measured 0.88x -> 1.55x on saved heads; live reward/CD gradient share 0.25-0.33 -> 0.6-0.97 by step 1000) makes the shaped reward 2-3x stronger than 'ours' under always-active clipping, so B1-vs-ours confounds prompt-aware direction with reward strength, and the control has no probes to compare against. Medium items: the gradient probe subset never includes any weight matrix (lambda calibration on biases/norms), the held-out probe leaks 61-70 of 300 captions from the projector's pretraining, and the head is fitted on P(z_K) of rollouts but applied to P(x_hat) at sigma 0.34-0.55 with no monitor in that space. Cheapest decisive additions: a shuffled-negatives B1 arm, reward probes on the controls plus a raw-vs-shaped gradient log, and an --align_step at a mid-trajectory sigma for B2."
+  },
+  {
+   "findings": [
+    {
+     "id": "F1",
+     "severity": "high",
+     "category": "design",
+     "title": "B2 aligns the DiT at sigma=0.009 (the last rollout step): an autoencoding regression, not REPA transfer",
+     "detail": "student_rollout keeps grad only through the LAST forward (grad_last) and AlignHook captures block 8 there. The 4-step schedule the trainer logs is [1.0, 0.858, 0.602, 0.009, 0.0] (diffusers' double-shifted sigma_min), so the aligned forward takes z_3 at sigma=0.009, i.e. an essentially clean latent, and its target g(P(z_K)) with z_K = z_3 + 0.009*v is a function of (almost) the same tensor. The term therefore teaches blocks 1-8 to predict the shaped embedding of their own nearly-clean input. The note's L_align aligns h_theta(x_t) at noisy states to the clean image's projected features so that the geometry reaches the steps that decide composition (sigma 1 -> 0.6); none of those steps receives any alignment gradient here.",
+     "evidence": "phaseW/rank/rank_utils.py:69-81 (ctx grad only when `last`), phaseW/train_pilot_frozen_s4j.py:1393-1394,1419-1431; logs/lsf-sd-W-train118k-151399.out '[rank] negatives ... rollout sigmas [1.0, 0.858, 0.602, 0.009, 0.0]'; align loss 0.98 -> 0.0763 by step 350 (151399), 0.06-0.20 at 500 (151328/151336) and ratio at lambda 60 0.12-0.70 of the CD gradient.",
+     "consequence": "B2 as run cannot transfer prompt-awareness into generation; a B2 null (or effect) says nothing about the note's Variant B, and the 'B de-risks A' logic is void.",
+     "file": "phaseW/rank/rank_utils.py:58-82",
+     "fix": "Capture at the FIRST rollout step (input = the shared noise, so block-8 tokens differ only through the prompt: a genuinely prompt-conditioned prediction of the shaped embedding) or at a uniformly drawn step; `grad_last` -> `grad_step=k`, same cost. Optionally align every step (cost of A)."
+    },
+    {
+     "id": "F2",
+     "severity": "high",
+     "category": "eval",
+     "title": "The note's 'ranking realized?' and 'representation probe' evaluations are not yet covered: all reported accuracies are in-sample for the head",
+     "detail": "rank/acc_shaped (0.65-0.82) is computed on the same 1,816 training captions the head is fitted on, 16 visits each. probe_heldout.py supports --head but only identity-head probes exist (probe/jobs.txt: base, hp1_naive_s0, hp1_ours_s0). My CPU check on the saved heads finds NO per-anchor memorisation signature (1-cos(g(u),u) is 0.198/0.195/0.193 on anchors seen by the head, 3k anchors never seen, and 4,000 held-out 118k anchors; B1 step 2000), which is encouraging, but generalisation of the ORDERING and transfer to true DINO (rgb_g) are untested.",
+     "evidence": "phaseW/train_pilot_frozen_s4j.py:1435 (acc on training captions), phaseW/rank/probe/jobs.txt, checkpoints .../151302/rank_head_step{500..2000}.pt exist unused; REVIEW_CONTEXT 'pairwise accuracy in the shaped projector space 0.65 (B1) ... 0.69 (A)'.",
+     "consequence": "Nothing yet shows the shaped space is prompt-aware rather than fitted; the campaign's mechanistic endpoint is missing.",
+     "file": "phaseW/rank/probe_heldout.py:105-109",
+     "fix": "Run probe.lsf now with CKPT=checkpoint_step2000.pt HEAD=rank_head_step2000.pt for B1 s0 (and step1000 for A s0): 1 GPU, ~1 s/caption. Add to the probe: a shuffled-anchor space (F3), per-caption saved embeddings, and a linear probe / AUC of margins on held-out pairs."
+    },
+    {
+     "id": "F3",
+     "severity": "high",
+     "category": "design",
+     "title": "Degenerate solution is real: the head can (and in A does) satisfy the ranking with an anchor-independent 'shared photo direction'",
+     "detail": "Because one u_ref anchors all m prompts and g is applied to both sides, g can raise R for 'positive-typical' generations against ANY photo by adding a shared component to real-photo embeddings and typical generations; negatives are systematically atypical prompts (purple trains, 'far from', 'under a slope'). Test on the replay set (2,000 captions x 4 teacher candidates, true DINO): cosine of a generation to an UNRELATED photo rises under A's step-1000 head from 0.115 (raw) to 0.264, own-photo gap shrinks 0.394 -> 0.347, AUC(own>other) 0.974 -> 0.951, mean-embedding norm 0.37 -> 0.55, PC1 share 0.063 -> 0.100; anchor-anchor mean cosine 0.14 -> 0.30. B1's head does the opposite (cross-cosine 0.11 -> 0.04, whitening) but re-orders the same-prompt candidates that the selection ranked (argmax agreement with raw DINO 1.00 -> 0.74 at step 2000; A: 0.73).",
+     "evidence": "CPU analysis of checkpoints/phaseW/phaseW_CD_dinop_hard_3k-rewRi-s16-rankA-hp1-acc4_s0_151316/rank_head_step1000.pt and .../151302/rank_head_step{500,1000,1500,2000}.pt against phaseW/latent_scorer/replay_2k.pt (e_cand, e_ref) and ref_emb_3k/118k.pt; rank_utils.py:36 (both sides normalised through the same residual MLP), trainer 1400.",
+     "consequence": "In A, 43% of the shaped reward of any generation (0.264/0.611) is anchor-independent vs 23% raw: acc_shaped and the shaped reward partly measure 'looks like a typical positive rollout', not agreement with the photo; the student is then rewarded for typicality. B1's head changes which same-prompt candidate is best, so the reward space and the selection space disagree.",
+     "file": "phaseW/rank/rank_utils.py:27-45",
+     "fix": "(i) Shuffled-anchor control in training logs and in the probe (score rollouts against another caption's g(u_ref); shaped acc must fall to ~0.5); (ii) shuffled-negatives / random-positive control for the head; (iii) remove the shared direction explicitly (centre embeddings with a running mean before g, or use a difference-based reward R_j - mean_k R_k); (iv) apply g to the generation side only, keeping u_ref fixed, which removes the 'move the photo' degree of freedom."
+    },
+    {
+     "id": "F4",
+     "severity": "high",
+     "category": "design",
+     "title": "Variant A's gradient contains a destructive direction: it trains the student to generate edited (CompBench-like) prompts WORSE",
+     "detail": "For the softmax-contrastive loss, dL/dR_j = p_j/kappa > 0 for every negative: theta is pushed to move the rollouts of 'a purple train' / 'three zebras' AWAY from the real photo. Rendering the edit faithfully and rendering garbage both lower R_j, and no term supervises the negatives' quality (CD supervises only the COCO caption). The only guard is an 8-caption raw-DINO monitor every 100 updates (values 0.29-0.96, acknowledged uninformative). Negatives are precisely the attribute/count/relation edits T2I-CompBench and GenEval score.",
+     "evidence": "phaseW/train_pilot_frozen_s4j.py:1405-1416 (backprop through P and 4 steps, loss on all m), rank_utils.py:85-88; A s0 log: rank_loss 1.05 -> 0.72-0.77, margin_shaped +0.007 -> +0.13-0.15 by step 1000 (B1's head-only margin is 0.03-0.06), so the student is moving the rollouts; rank ratio 0.52-0.89 of the CD gradient at step 1000 (151316).",
+     "consequence": "A can degrade exactly the prompt family the benchmarks measure, or exploit P's blind spots on negatives (P never sees edited-prompt generations), while acc_shaped looks excellent.",
+     "file": "phaseW/train_pilot_frozen_s4j.py:1405-1416",
+     "fix": "Log, every 100 updates on >=64 captions (decode 60 ms/img): VQAScore or CLIP of each negative rollout vs its own prompt, DINO(neg rollout, pos rollout), and a fixed image panel to wandb. Ablations: stop-gradient on the negatives' rollouts (push only the positive), or a hinge with margin so satisfied pairs stop contributing."
+    },
+    {
+     "id": "F5",
+     "severity": "high",
+     "category": "design",
+     "title": "B1/A's shaped reward is a 2-4x larger and increasingly CD-opposed gradient than the reference reward: a magnitude confound, not a shape effect",
+     "detail": "lambda=80 was set for a ~20% share at step 0 with g = identity. As the head's residual grows (||fc2.W|| 2.8 -> 6.5, ||g(u)-u|| 0.35 -> 0.62, B1) the cosine's Jacobian through g grows with it. Reward-probe ratios (||grad reward||/||grad CD||): B1 0.25-0.33 at 0, 0.60-0.97 at 1000, 0.40-1.93 at 1500, 0.76-1.58 at 2000 with cos(CD, reward) -0.63..-0.81; A at 1000: 0.92-1.17 plus the rank term 0.52-0.89. The 2x8 'ours' s2 (151361) stays at 0.15-0.48 (500) and 0.23-0.44 (1000). With clip=1 always active, the reward's share of the normalised update is 2-4x the reference's.",
+     "evidence": "logs/lsf-sd-W-train118k-151302.out and -151316.out '[reward-probe]' lines at steps 1000/1500/2000; logs/lsf-sd-W-train118k-151361.out at 500/1000; head norms from rank_head_step*.pt; the reference 145176 has no probe lines.",
+     "consequence": "B1 vs ours differs in reward magnitude and direction, not only in prompt-awareness; any B1 effect (or CD-loss / fidelity regression) cannot be attributed to the ranking.",
+     "file": "phaseW/train_pilot_frozen_s4j.py:1253-1259",
+     "fix": "Normalise the shaped reward's gradient to the raw reward's (rescale lambda by the running ratio of ||grad_shaped||/||grad_raw|| on the probe params), or freeze g after a pretraining stage (F9); add a control 'ours with lambda_reward matched to B1's realised share'."
+    },
+    {
+     "id": "F6",
+     "severity": "high",
+     "category": "stats",
+     "title": "Minimal detectable effect (~0.045-0.09 CompBench) is far above the effects at play, and seed pairing is broken for seeds 1-2",
+     "detail": "n=3 seeds, per-model noise ~0.01-0.02 (averaged checkpoints), sigma_d ~0.014-0.028; a paired t-test with df=2 needs d ~ 3.1 sigma_d for 80% power -> MDE 0.045-0.09, versus ours-naive of +0.0017 on this schedule (+0.015 on the old one). Seeds 1-2 controls (151349/151357/151361/151403) run 2 GPUs x accum 8 while B1/A s1,s2 run 4x4 (and B2 s0 runs 2x8 vs ours s0 4x4): DistributedSampler shards, per-rank micro counters, Delta draws and rollout noise all differ, so only B1 s0 and A s0 share their data order with ours s0 (same target_map_sha256 dbd0d57b...). Prompt-level paired tests compare two specific models, not the treatment.",
+     "evidence": "phaseW/rank_jobs.txt, phaseW/hp1_jobs.txt (acc8 vs acc4 dirs), trainer 746-751 (sampler by world size), 607 (delta_rng per rank), rank_utils.py:163-166 (noise keyed by rank, micro); pairing hashes in logs 151302/151316/145176 (dbd0d57b) vs 145172/151349 (35d2d955, naive uses a different map by design).",
+     "consequence": "CompBench/GenEval2 cannot decide the hypothesis at realistic effect sizes; a null is uninformative and a 'significant' prompt-level result may be seed noise.",
+     "file": "phaseW/launch_rank.sh:26",
+     "fix": "Run s1/s2 controls at 4x4 (or the arms at 2x8) so each arm is data-order-paired with its control; pre-register a mixed model (prompt-paired, seed as random effect) and treat CompBench as secondary; make the held-out ranking transfer (rgb_g on 1,000 captions, per family) the primary endpoint."
+    },
+    {
+     "id": "F7",
+     "severity": "medium",
+     "category": "design",
+     "title": "kappa=0.1 on 0.01-0.05 spreads puts the loss in its linear regime; the note's kappa->inf sanity check is vacuous under Adam",
+     "detail": "Logits differ by 0.1-0.5, so softmax is near-uniform and L ~ log m - (R_1 - mean R_j)/kappa (B1 loss 1.05 -> 0.88 ~ log 2.2). kappa only rescales the head's gradient, which AdamW (scale-invariant) and the clip at 1.0 undo, so the head's trajectory is essentially kappa-independent; for the student's term kappa->inf just equals lambda_rank->0. There is also no hard-pair focus: already-correct pairs keep pushing their margins, which is what inflates the head's residual (F5).",
+     "evidence": "rank_utils.py:85-88; trainer 890 (AdamW lr 1e-4), 1460 (clip 1.0); '[rank] step' loss/margin values in logs 151302/151316; probe margins: latent sd 0.030, 38% of pairs within 0.01.",
+     "consequence": "'kappa -> infinity recovers the baseline' would not hold as stated; the effective objective is a plain unbounded margin.",
+     "file": "phaseW/rank/rank_utils.py:85-88",
+     "fix": "kappa ~ within-caption spread (0.01-0.02) or per-caption standardised rewards; or a hinge with margin. Use shuffled-negatives / shuffled-anchor / identity-head (= ours, exists) as the nulls instead of kappa->inf."
+    },
+    {
+     "id": "F8",
+     "severity": "medium",
+     "category": "design",
+     "title": "Ranking in the latent-projector space discards most of the edit signal before the head sees it",
+     "detail": "P was trained to rank same-prompt teacher candidates (cosine + KL over 4 candidates) and is refreshed on positive-caption predictions plus teacher replay; it never sees an edited-prompt generation. Held-out probe: latent 0.499 (base) / 0.538 (naive) / 0.537 (ours) vs rgb 0.565 / 0.606 / 0.627; latent margin 0.0025-0.0045 vs rgb 0.015-0.022; 21% of latent pairs within 0.005 and 38% within 0.01 (rgb: 9%/17%). In-training acc_raw hovers 0.52-0.60.",
+     "evidence": "phaseW/rank/probe/{base,hp1_naive_s0,hp1_ours_s0}.json summaries; trainer 1505-1528 (refresh set = rbuf positives + replay); README mapping row 'DINO features of a generation'.",
+     "consequence": "The head must manufacture prompt-awareness from a near-chance signal, and P's refresh keeps optimising for a distribution that excludes the negatives, so P-space and RGB-space orderings can diverge unnoticed.",
+     "file": "phaseW/train_pilot_frozen_s4j.py:1505-1528",
+     "fix": "Add the decoded rollouts (positive + negatives, already decoded by the monitor) to the refresh set with their true DINO embeddings, and/or train g on true DINO features of decoded rollouts every k updates (the note's f(x0_hat))."
+    },
+    {
+     "id": "F9",
+     "severity": "medium",
+     "category": "design",
+     "title": "Head trained jointly from step 0 makes B1/A's reward a moving target and departs from the note's staged recipe",
+     "detail": "The note: train g on the partial order, confirm ranking climbs and the space separates, THEN enable transfer. Here g starts at identity and changes every update while the student optimises <g(P(x0_hat)), g(u_ref)>; the shaped reward drifts down (0.43 -> 0.34) while the raw score rises like the reference, i.e. the student chases a space that is being reshaped under it. The final model is a co-adaptation, not 'ours + a prompt-aware space'. Also g is applied in the reward to one-step x0_hat at sigma 0.34-0.69 (K=8 sigmas for states 4..7 minus Delta) although it is fitted only on rollout endpoints.",
+     "evidence": "trainer 1253-1256, 1457-1461; REVIEW_CONTEXT 'shaped reward drifts DOWN'; K=8 sigmas [1.0, 0.948, 0.883, 0.801, 0.694, 0.548, 0.338, 0.009, 0].",
+     "consequence": "Confounds F5 and makes B1's effect hard to interpret as representation transfer.",
+     "file": "phaseW/train_pilot_frozen_s4j.py:1457-1461",
+     "fix": "Pretrain g on no-grad rollouts of the ours checkpoint (0.27 s/caption -> ~8 min per pass over 1,816 captions on 1 GPU), verify it on the held-out probe, freeze it, then run B1/A with the fixed g; keep the joint version as a secondary arm."
+    },
+    {
+     "id": "F10",
+     "severity": "medium",
+     "category": "negatives",
+     "title": "A large share of negatives are weakly contradicted or implausible, violating the O1 validity condition",
+     "detail": "Spatial: 358/541 (66%) are 'far from' ('a street sign far from buildings', 'a frame attached to a wall far from a kitchen'), which a photo rarely contradicts and the model rarely renders; 18 'under/below + surface noun' escape the filter ('riding skis under a snow covered slope', 'under a body of water', 'grazing under a grass covered field'). Verbs: 385/675 standing<->sitting and 121 holding->dropping (a still of dropping looks like holding). Counts: 452/631 are two -> three/four/five, which DINO patch-mean barely resolves. Colour (1,236) is the best-formed family.",
+     "evidence": "phaseW/rank/negatives_3k.json counts; phaseW/rank/build_negatives.py:276-282 (surface check only on the word right after the article/one adjective), PAIRS['spatial'] mapping next to/near -> far from.",
+     "consequence": "Near-tie pairs (17% of rgb pairs within 0.01) are label noise for g and, in A, pressure to make synonymous prompts diverge; per-family conclusions for spatial/verb/count are weak.",
+     "file": "phaseW/rank/build_negatives.py:270-282",
+     "fix": "Drop 'far from' (or use left/right swaps only); extend the surface filter to any SURFACE noun in the object NP; weight or filter pairs by an offline contradiction score (VQAScore of the photo vs the negative caption, computed once); report families separately."
+    },
+    {
+     "id": "F11",
+     "severity": "low",
+     "category": "eval",
+     "title": "Held-out probe overlaps the projector's training captions",
+     "detail": "probe_heldout.py excludes only the 3k pool (by prompt and reference; all 3,000 are present in the 118k cache so the exclusion works). The projector's train/val captions (22,000 + 2,000, phaseW/latent_scorer/manifest.jsonl 'split') and the replay set come from the same 118k cache and are not excluded, so ~21% of the 300 probe captions were P-training captions whose e_ref entered P's KL term. Affects latent/latent_g only; rgb/rgb_g and the students (trained on 3k) are clean.",
+     "evidence": "phaseW/rank/probe_heldout.py:75-77; manifest split counts train 22000 / val 2000 / test 3000.",
+     "consequence": "latent-space probe numbers are mildly optimistic for P.",
+     "file": "phaseW/rank/probe_heldout.py:77",
+     "fix": "Exclude prompts with manifest split in {train, val}; keep the same seeded draw so existing base/naive/ours probes stay comparable after re-running."
+    },
+    {
+     "id": "F12",
+     "severity": "medium",
+     "category": "stats",
+     "title": "Probe size makes per-family and between-model differences unreadable",
+     "detail": "833 pairs over 300 captions: 3d_spatial 27 pairs, shape 79, texture 81, spatial 97 (SE 0.05-0.10 per family). The overall naive-vs-ours rgb difference is +0.023 with a paired per-caption SE of 0.020 (n.s.). Ties count as failures and margins are not reported per family.",
+     "evidence": "phaseW/rank/probe/hp1_ours_s0.json summary n_pairs; paired per-caption computation on hp1_naive_s0/hp1_ours_s0 records.",
+     "consequence": "The endpoint that should carry the verdict (F6) cannot resolve realistic changes.",
+     "file": "phaseW/rank/probe_heldout.py:139-150",
+     "fix": "n=1,000-2,000 captions (~1 s/caption), paired per-caption differences with bootstrap CIs, AUC of margins, and per-family margins."
+    },
+    {
+     "id": "F13",
+     "severity": "medium",
+     "category": "eval",
+     "title": "No effective anti-hacking monitor for the negatives' branch",
+     "detail": "rank/acc_rgb uses rank 0's last 8 captions (~10 pairs, SE ~0.15) every 100 updates; the reward-path hacking monitor (rgb_proj_corr) covers only positive predictions. Nothing measures whether negative rollouts stay faithful images or whether P's ordering on them matches true DINO.",
+     "evidence": "trainer 1437-1440 (rank_buf capped at 16, is_main only), 1465-1477 (rank_buf[-8:]); log values 0.417/0.917/0.458/0.792.",
+     "consequence": "P-space hacking on the negatives (A) or drift between P and RGB orderings goes unnoticed.",
+     "file": "phaseW/train_pilot_frozen_s4j.py:1465-1477",
+     "fix": "Buffer rollouts from all ranks (gather z_K) and decode >=64 captions per reading (~15 s), log acc_rgb, acc_rgb_shaped, RGB-vs-P rank correlation on negatives, and DINO(neg, pos) similarity."
+    },
+    {
+     "id": "F14",
+     "severity": "low",
+     "category": "design",
+     "title": "B1's transfer channel (the reward) is inert on the converged schedule",
+     "detail": "B1 differs from ours only in the reward's metric; on this schedule ours-naive is +0.0017 (1 seed), i.e. the channel B1 relies on currently produces no measurable effect. A perfectly prompt-aware g acting through an inert channel cannot show on CompBench.",
+     "evidence": "REVIEW_CONTEXT 'converged schedule (1 seed): naive 0.4860, ours 0.4877'; launch_rank.sh EXTRA[B1] (only --rank_shaped_reward added).",
+     "consequence": "A B1 null is expected regardless of the hypothesis.",
+     "file": "phaseW/launch_rank.sh:32",
+     "fix": "Confirm the reward channel is live first (the constant-LR schedule where ours-naive = +0.015, p 0.004), or run B1 there; otherwise judge B1 by the representation endpoints."
+    },
+    {
+     "id": "F15",
+     "severity": "low",
+     "category": "suggestion",
+     "title": "Additional metrics and controls that would make the test decisive",
+     "detail": "(1) Shuffled-anchor and shuffled-negatives nulls (cheap, offline on saved embeddings) instead of kappa->inf. (2) Per-family CompBench mapping is direct: color->color, shape->shape, texture->texture, spatial->spatial, 3d_spatial->3D-spatial, count->numeracy; verbs have no CompBench counterpart (use GenEval2 action/relation atoms). (3) VQAScore of the negatives' rollouts vs their own prompt as ground truth of contradiction and as the F4 guard. (4) Kendall tau is n/a for the partial order; use AUC of margins and pos-vs-neg DINO similarity to quantify ties. (5) Train g on true DINO features of decoded rollouts (F8). (6) Hard-negative mining only after F10's filtering, otherwise it mines nonsense. (7) LLM negatives would fix coverage (61%) and the 'far from' problem at modest cost (3k captions, one call each). (8) A gradient-cosine log between the raw and shaped reward gradients w.r.t. x0_hat would show directly how much g changes the reward's direction.",
+     "evidence": "REVIEW_CONTEXT question 4; F3/F4/F7/F10 above.",
+     "consequence": "Without (1) and (3) the two degenerate solutions cannot be excluded; without (2) per-family claims are unsupported.",
+     "file": "phaseW/rank/README.md",
+     "fix": "Implement (1), (3) and (8) before the arms finish; they read only saved embeddings/rollouts."
+    },
+    {
+     "id": "F16",
+     "severity": "low",
+     "category": "design",
+     "title": "Minor deviations that are justified or cosmetic",
+     "detail": "Full 4-step rollouts instead of the one-step surrogate: justified (on-policy, matches the eval sampler, and is the note's 'few-step differentiable sampler' option); the bf16 casts between steps are differentiable. DINOv2-B and the 1024-wide residual head: fine. 'Both sides through g' is not a deviation: the note's eq. (3) is cos(g(f(x_hat)), g(f_bar)). Partial order is the note's recommended start. 'checkpoint_avg_last5.pt' averages 3 checkpoints (2000/2500/final) and carries step 3000 so the EVAL_MIN_STEP gate passes; naming only.",
+     "evidence": "DESIGN_NOTE.tex lines 34-38, 50; rank_utils.py:69-82; phaseW/average_checkpoints.py:43-44; launch_rank.sh:44-45.",
+     "consequence": "None.",
+     "file": "phaseW/rank/README.md",
+     "fix": "Correct REVIEW_CONTEXT's 'both sides through g' from 'deviation' to 'as in the note'; note the 3-member average in the label."
+    }
+   ],
+   "validated": [
+    "Gradient paths are as claimed: the head is trained only by _l_head on detached embeddings (train_pilot_frozen_s4j.py:1400-1402); the student's ranking term in A and the shaped reward use torch.func.functional_call with detached head parameters (rank_utils.py:39-45; trainer 1256, 1406), so the student never trains g and g never receives student gradient; the B2 align target is detached (1421).",
+    "DDP parity: head and align projector are seeded identically and broadcast at init (887-896), their grads are all-reduced (mean), clipped at 1.0 and stepped once per update on every rank (1457-1464); every rank runs the same number of grad-enabled DDP forwards per micro-step (rollouts run even for captions without negatives, 1391-1394); multiple grad forwards before one backward is valid with find_unused_parameters=False and non-reentrant checkpointing (transformer_sd3.py:416 use_reentrant=False); A s0 has run >1,000 updates without a DDP error.",
+    "RNG isolation: head/align init happens under a saved-and-restored global RNG state (884-898); rollout noise comes from a private generator keyed by (seed, rank, micro) (rank_utils.py:163-166); encode_prompt/decoding consume no RNG. The pairing hash target_map_sha256 of B1 s0, A s0 and B2 s0 equals the reference ours s0 (145176: dbd0d57b...), so the 4x4 arms share caption order, Delta draws and selection with ours s0.",
+    "Scheduler state: rollout_schedule restores the K=8 schedule (rank_utils.py:48-55) and rollout_states calls set_timesteps(K) on every visit (trainer 59) before the CD branch reads timesteps (1075); the 4-step sigmas [1.0, 0.858, 0.602, 0.009, 0] are the pipeline's own 4-step schedule used by the eval and the probe.",
+    "The latent projector L2-normalises its output (train_projector.py:50) and u_ref is unit-norm, so both the raw reward and the shaped reward are true cosines; with g = identity (zero-init fc2) and lambda_rank = 0 the trainer is bit-identical in loss to 'ours' by construction.",
+    "Head/align optimizer accumulation is correct: losses are divided by accum per micro-step, grads accumulate over the window, are all-reduced, clipped and stepped once per update, then zeroed (1402, 1460-1464).",
+    "Checkpoint/hook interplay in B2: the forward hook adds no parameters, so student state_dicts are unchanged; rank_head_step*.pt saves the head and align_proj with the rank_/align_ args (1665-1668, 1679-1682); average_checkpoints.py stamps the latest member step so EVAL_MIN_STEP=3000 passes.",
+    "AlignHook reads the right stream: diffusers 0.32.2 JointTransformerBlock.forward returns (encoder_hidden_states, hidden_states), so out[-1] is the image-token stream; block 8 of 24 is not the context_pre_only last block; the hook is registered after the teacher deepcopy so the teacher is unaffected; features() asserts the captured activation carries grad.",
+    "The shaped reward is implemented as specified: <g(P(x0_hat)), g(u_ref)> with g's weights detached on the two least-noisy supervised predictions (1245-1259), replacing the raw cosine only when --rank_shaped_reward is set; args.json of B1/A/B2 match the launcher (B2 has rank_shaped_reward False, align_lambda 60).",
+    "lambda calibration reproduces: the smoke's weight-1 ratios (rank 0.07-0.35, align 0.0036-0.005 of the CD gradient) become 0.09-0.46 and 0.22-0.33 at step 0 in the live runs with 1.3 / 60.",
+    "Probe held-out selection excludes the 3k pool by both prompt text and reference path, and all 3,000 pool prompts/references are found in the 118k cache, so the exclusion is effective; the identity-head spaces latent_g/rgb_g reproduce latent/rgb exactly (probe/*.json), confirming the head path; noise is seeded by caption idx so models are compared paired.",
+    "The saved heads show no per-anchor memorisation: 1-cos(g(u),u) is identical on anchors the head saw (1,816), 3k anchors it never saw (1,184) and 4,000 held-out 118k anchors (0.198/0.195/0.193 at B1 step 2000; 0.326/0.320/0.321 at A step 1000).",
+    "negatives_3k.json matches the README (1,816/3,000 captions, 929/210/677 with 3/2/1 negatives, 3,884 negatives; families color 1,236, verb 675, count 631, spatial 541, shape 382, texture 286, 3d 133) and the rule set in build_negatives.py implements the audited constraints (attributive colour, numeral 'one' with pluralisation, size antonyms, material classes, animate-subject verbs, surface-noun filter for 'on top of').",
+    "Both sides through g and the partial-order loss are faithful to DESIGN_NOTE.tex (eq. 3 and the recommended softmax-contrastive simplification); full differentiable rollouts are one of the two paths the note allows for Variant A."
+   ],
+   "summary": "Section-by-section, the code does what README claims and the plumbing is sound (gradient paths, DDP parity, RNG isolation, scheduler, optimizer accumulation, checkpoints all verified; no code bug found). The problems are in the mapping from the note to the experiment. (1) B2's REPA term hooks the last rollout step at sigma=0.009, so it regresses block-8 features onto the shaped embedding of an essentially identical clean latent: an autoencoding task that reaches none of the composition-deciding steps; a B2 result is uninformative about the note's Variant B (fix: hook the first step). (2) The note's 'ranking realized?' and 'representation probe' are not yet covered: every reported accuracy is in-sample for the head; the trained heads have not been run on the held-out probe although checkpoints exist. (3) The degenerate solution is real and measurable: with a shared anchor and g on both sides, g can raise rewards via a shared 'photo direction'; A's step-1000 head raises the shaped cosine between a generation and an UNRELATED photo from 0.115 to 0.264 and compresses the anchor cloud (mean anchor cosine 0.14 -> 0.30), while B1's head whitens instead but re-orders 26% of same-prompt candidates that the selection ranked; shuffled-anchor and shuffled-negative controls are required. (4) A's loss pushes negatives' rollouts away from the photo with nothing guarding their quality, i.e. it can train the student to generate CompBench-style edited prompts worse; the 8-caption RGB monitor cannot see this. (5) The shaped reward's gradient share grows to 0.8-1.9x the CD gradient with cos(CD, reward) down to -0.8, versus 0.2-0.45 for the raw reward in 'ours', so B1 vs ours is confounded by reward magnitude; freeze g after a pretraining stage or normalise its gradient. (6) Statistically the CompBench plan cannot decide anything: MDE ~0.045-0.09 at 3 seeds versus effects of 0.002-0.015, and seeds 1-2 controls run 2x8 while the arms run 4x4, breaking the data-order pairing that exists only for seed 0. Further: kappa=0.1 puts the loss in a linear regime where kappa->inf is vacuous under Adam; P-space discards most of the edit signal (latent probe ~0.50-0.54 vs rgb 0.57-0.63) and P is never refreshed on edited-prompt generations; 66% of spatial negatives are 'far from', 18 are 'under a slope/water' nonsense, verbs are dominated by standing/sitting and holding/dropping. Path verdict: the head-shaping idea is testable, but as instrumented the campaign will produce numbers that cannot distinguish prompt-awareness from typicality shortcuts, reward-magnitude confounds and seed noise. What would change my mind: a trained head that lifts held-out rgb_g pairwise accuracy above rgb (per family, n>=1,000 captions, paired CIs) while shuffled-anchor accuracy stays at chance, VQAScore of negatives' rollouts not decreasing in A, and B1/A vs ours compared at matched reward-gradient share with data-order-paired seeds."
+  },
+  {
+   "findings": [
+    {
+     "id": "N1",
+     "severity": "high",
+     "category": "design",
+     "title": "The dominant families' O1 labels are at chance in the space the head operates on",
+     "detail": "The ranking label (positive rollout closer to the COCO photo than the negative's rollout) is only usable if the scorer can register the edit. In the probe's raw RGB DINO space, object-colour negatives (277 of 293 colour pairs; colour is 32% of training negatives) order at 0.47 (base), 0.55 (naive), 0.57 (ours); count |delta|=1 (55% of count negatives: 347/631) at 0.51/0.56/0.52; size antonyms 0.56/0.61/0.61; 'far from' 0.63/0.60/0.63. The only strong signals are whole-scene edits: colour on sky/water/grass nouns 0.88/0.81/0.94 (n=16), texture 0.77/0.78/0.74, posture verbs 0.63/0.65/0.73, count |delta|=3 0.85/0.69/0.77. Some object-colour pairs are anti-ordered (base red->green acc 0.22, margin -0.051, n=18; red->blue 0.37): recolouring an object toward the background palette moves a patch-MEAN embedding toward the photo. A single-word local edit barely moves a global cosine (median |pos-neg| 0.03 against a positive score of 0.6), so the label is dominated by everything the caption does not mention.",
+     "evidence": "phaseW/rank/probe/{base,hp1_naive_s0,hp1_ours_s0}.json records, sliced per (family, source, target) and per noun class; phaseW/rank/build_negatives.py summary (families); probe_heldout.py:132-133 (patch-mean cosine).",
+     "consequence": "For roughly half of the negatives the head g is fitted to labels that are noise or anti-correlated in P/DINO space; the shortcut that satisfies them is 'match the photo's global colour/texture statistics', not attribute binding. A positive result on B1/A would not show prompt-awareness without the controls in N15/N16; a null would not refute the hypothesis (label noise).",
+     "fix": "(a) Drop or down-weight families whose raw rgb accuracy is <0.6 on the probe (object colour on small nouns, count +-1, far from, size on rooms/persons); (b) build the label with a region-aware score (max/top-k over DINO patch-pair cosines between generation and photo, or the mean over the patches that changed between positive and negative rollouts) so a local edit is visible; (c) check per negative that the photo contradicts it with VQAScore(photo, negative) < VQAScore(photo, positive) before it enters training (N15).",
+     "file": "phaseW/rank/build_negatives.py"
+    },
+    {
+     "id": "N2",
+     "severity": "high",
+     "category": "design",
+     "title": "COCO captions cannot supply 'compositional rearrangements'; what was built are single-attribute substitutions",
+     "detail": "The design note's validity condition is 'compositional rearrangements of the same objects (attribute swaps, spatial swaps, count changes over the same nouns)'. Every negative in negatives_3k.json changes ONE span to a new value; none swaps attributes between two nouns or reverses a relation's arguments. The 3k pool offers almost no material for real swaps: 53 captions with two distinct attributive colours, 4 with two counts, 13 mentioning left/right, 192 with on top of/under/above/below (argument swap possible). Left/right, the CompBench 2D-spatial staple, appears 0 times among 541 spatial negatives; 66% of spatial negatives are next to/near -> far from (358), a distance relation that a still photo barely contradicts; true shape edits are 17 of 3,884 (0.4%), the 'shape' family being 96% size antonyms (365/382).",
+     "evidence": "negatives_3k.json family/source/target counts; counts of swap-capable captions over phaseN/coco_selection_dinopatch; PAIRS['spatial'] in phaseK/build_counterfactuals.py:39.",
+     "consequence": "The negatives test attribute substitution (which a bag-of-visual-words scorer can solve by histogram matching), not binding or relation structure; a per-family CompBench mapping would have colour and texture covered, shape and 2D-spatial (left/right) essentially uncovered, non-spatial covered only through verbs.",
+     "fix": "Either accept and rename the claim (attribute-substitution-aware, not compositional), or source negatives from prompts that admit swaps: CompBench-style two-attribute prompts with their own anchors (escalation path ii), or synthesise binding negatives on the 53/192 swap-capable captions and weight them up; add argument swaps for 'X on top of Y' -> 'Y on top of X' (192 captions) which keep the global palette fixed and defeat the histogram shortcut.",
+     "file": "phaseW/rank/DESIGN_NOTE.tex"
+    },
+    {
+     "id": "N3",
+     "severity": "medium",
+     "category": "bug",
+     "title": "Surface-noun skip for 'on top of' fires only when the surface noun ends the caption (greedy regex)",
+     "detail": "build_negatives.py:279 matches an optional article, then an OPTIONAL single adjective `(?:[A-Za-z']+[\\s-]+)?`, then the noun. The adjective group is greedy, so whenever a word follows the noun it consumes the noun and the SURFACE test is applied to the next word. Direct test: 'on top of a hill in the day' -> checks 'in'; 'on top of a snow covered slope' -> checks 'covered'; 'on top of a field next to a dog' -> checks 'next' (not skipped), while 'on top of a field' (end of caption) is skipped. 15 of the 114 on top of->under negatives place the subject under a slope/hill/beach/body of water ('A man riding a snowboard under a snow covered slope', 'A ram sitting under a hill in the day', 'A little girl flying a kite under a lush green field').",
+     "evidence": "phaseW/rank/build_negatives.py:276-281; regex test output; 15 matching negatives in negatives_3k.json.",
+     "consequence": "13% of the strongest spatial sub-family are nonsense prompts whose rollouts are arbitrary; the README claim 'not on top of a field -> under' is only true for caption-final nouns.",
+     "fix": "Replace the regex with a window test: `if set(_words(prompt[m.end():])[:4]) & SURFACE: continue` (any of the next 3-4 words a surface noun), and apply the same window to 'under'/'below' -> 'above' edits (truck above a tree, sink above a mirror).",
+     "file": "phaseW/rank/build_negatives.py"
+    },
+    {
+     "id": "N4",
+     "severity": "medium",
+     "category": "negatives",
+     "title": "Verb rule is 'any animate token anywhere before the verb', not 'animate subject'; group/couple/teddy bear leak paraphrases",
+     "detail": "build_negatives.py:264-266 tests `set(_words(prompt[:m.start()])) & ANIMATE`. ANIMATE (line 92) contains 'group', 'couple', 'crowd', 'family' and food/toy-ambiguous animals ('bear', 'chicken', 'turkey', 'fish', 'lamb'). Results: 12 negatives whose only animate token is group/couple over inanimate nouns ('A group of umbrellas is sitting -> standing', 'A couple of white chairs sitting -> standing', 'A group of motorcycles ... sitting -> standing', 'A group of wooden benches sitting -> standing', 'A couple of pieces of luggage sitting -> standing'); 19 teddy/stuffed/toy cases ('A brown teddy bear sitting on a train -> standing'); 120/675 (18%) verb edits have a non-animate nearest content word, of which by inspection roughly a third attach the verb to an object ('A cat laying on luggage sitting on the floor' -> luggage standing). For objects, COCO's 'sitting' means 'located' and 'standing' is a paraphrase: the photo does NOT contradict it.",
+     "evidence": "negatives_3k.json verb rows; ANIMATE set at build_negatives.py:92-106; audit_negatives.py:44-45 uses the same any-token test, so it reports 1 hit (0.03%) and cannot see these.",
+     "consequence": "~3-5% of verb negatives (about 1% of all) are paraphrases that teach the wrong order; small in count but they carry no contradiction and the head cannot satisfy them.",
+     "fix": "Require the head noun of the NP immediately before the verb to be animate: walk back over adjectives/'that is'/'are' to the nearest content word; treat 'group/couple/crowd/family/herd of X' by testing X; drop 'teddy'/'stuffed'/'toy'-preceded animals; blacklist 'plate/bowl/piece of <animal>'.",
+     "file": "phaseW/rank/build_negatives.py"
+    },
+    {
+     "id": "N5",
+     "severity": "medium",
+     "category": "negatives",
+     "title": "Half of the within-caption negative pairs edit the same span; 387 captions have all three negatives on one word",
+     "detail": "The round-robin in negatives_for (build_negatives.py:318-329) takes one edit per family per round, so a caption whose only editable word is a colour gets three colours of that word ('A big airplane flying in the big blue sky' -> green sky, yellow sky, and 'small airplane'). 1,478 of 2,997 within-caption pairs (49%) share (family, span); 387 of 1,139 multi-negative captions have every negative on the same span; only 159 captions cover 3 families and 1,145 cover 1.",
+     "evidence": "negatives_3k.json; counts computed over all captions with >=2 negatives.",
+     "consequence": "With the partial-order softmax (ranking_loss, kappa 0.1) three same-span negatives triple the weight of one contrast instead of adding compositional diversity; the effective number of distinct contrasts is ~2,400 not 3,884, and per-family probe accuracies over pooled pairs weight such captions 3x.",
+     "fix": "Prefer a new span, then a new family, before a second target of the same span; cap same-span negatives at 1 unless nothing else exists, or weight each negative by 1/(number of negatives sharing its span) in the loss.",
+     "file": "phaseW/rank/build_negatives.py"
+    },
+    {
+     "id": "N6",
+     "severity": "medium",
+     "category": "negatives",
+     "title": "About 10% of negatives are nonsense prompts and ~28% are only weakly contradicted (sample of 215)",
+     "detail": "Judged over a stratified sample of 215 (25 per family + 40 random). Nonsense (contradicted, but the rollout is arbitrary): texture 7/27 (leather wall, brick plates, fabric plates, leather shelves, 'clear leather bubble umbrellas', 'stainless glass restroom'), spatial 4/34 (kitchen island above track lighting, sink above a mirror, truck above a tree, bikes far from each other on a bike rack), count 3/36 ('Four elephants..., two are babies the other is the parent' - 20 such enumeration inconsistencies in the file), 3d 2/25 (woman behind a mirror taking her picture), verb 4/33 ('dropping a phone in each of his hands'; holding->dropping is 121 negatives = 18% of verbs), colour 2/30 (yellow water, black slices). Weakly contradicted (a still photo cannot refute them): size on rooms/persons/close-ups (~16/30 shape; 'a close up of a small plane -> big plane'), 'far from' (24/34 spatial), walking->running, holding->dropping, playing with->ignoring, six->five donuts, glass<->plastic (17 texture). Clearly compatible/paraphrase: ~5/215 (cabinets below the counter -> above: kitchens have both; 'red cow' for a brown cow; 'big girl/kid' for a little girl (36 such semantic shifts in the file); 'skier farther behind -> farther in front of him'). Grammar is good: article agreement 0 errors, but 13 'AN orange ...' from _case_like on the article (build_negatives.py:299), 1 'two cellulars phone' (line 208-216: the first word not in ADJ_SKIP is taken as the noun), and awkward 'from in front of'.",
+     "evidence": "Stratified sample printed from negatives_3k.json (seed 2026); counts: holding->dropping 121/675, far from 358/541, glass<->plastic 17/286, big/little on persons 36/382, enumeration inconsistencies 20/631, AN 13, colour compound nouns 23/1236 (orange slices/peels -> black slices, brown bear -> red/blue/green bear, white rice -> blue rice, green beans -> purple beans), 'stainless steel' -> stainless glass/wooden 8/286.",
+     "consequence": "Nonsense negatives produce the largest margins (their rollouts differ from the photo in every patch), so under kappa 0.1 they dominate the head's gradient and teach 'penalise any weird image'; weak negatives consume a full 4-step rollout each (A arm 8.3 s/update) for near-zero margin (probe: far from 0.60-0.63, count +-1 0.51-0.56, weak verbs 0.53-0.67, size 0.56-0.61).",
+     "fix": "Rules: material targets by noun class (furniture: wood/metal/plastic/glass; wall/chimney: brick/stone/wood/concrete; plates/cups: paper/plastic/ceramic/glass; leather/fabric only for wearables/seats); add 'stainless' to the compound-prev set (line 246); per-colour following-noun blacklist (orange: slices/peel/juice/tree; brown: bear; white: rice/wine; green: beans/peppers/tea; black: coffee/pepper); skip count edits when the caption enumerates ('one ... one', 'the other'); drop holding->dropping, playing with/feeding->ignoring, walking<->running; keep size edits only on objects with intrinsic scale (buildings, vehicles, animals, waves) and never on person/kid/cat nouns; under/below->above only with a movable subject; for count keep |delta|>=2; capitalise only the first letter of a replaced article.",
+     "file": "phaseW/rank/build_negatives.py"
+    },
+    {
+     "id": "N7",
+     "severity": "medium",
+     "category": "eval",
+     "title": "Probe 'held-out' captions overlap the projector's training split: 61 of 300",
+     "detail": "probe_heldout.py:75-77 excludes only the 3k pool (by prompt and by reference). The projector P was trained on the 22k 'train' split of phaseW/latent_scorer/shards (train 22,000 / val 2,000 / test 3,000); 61 of the 300 probe captions (20%) are in that train split (their u_ref were P's regression targets). The rgb space is unaffected; 'latent' and 'latent_g' are partly in-sample for P.",
+     "evidence": "phaseW/latent_scorer/shards/shard*.pt 'split'/'prompt' fields vs phaseW/rank/probe/base.json records.",
+     "consequence": "Latent-space probe numbers (e.g. 3d_spatial latent 0.85 for naive s0, n=20) are not clean held-out estimates; comparisons of latent_g across arms are biased toward captions P has fitted.",
+     "fix": "Also exclude prompts whose shard split is train or val (and the replay set phaseW/latent_scorer/replay_2k.pt) when building `held` in probe_heldout.py; the 118k minus 3k minus 24k leaves ~87k captions, enough for n=1000.",
+     "file": "phaseW/rank/probe_heldout.py"
+    },
+    {
+     "id": "N8",
+     "severity": "low",
+     "category": "eval",
+     "title": "Probe selection (--min_negs 2) and pooled-pair scoring shift the family mix and understate uncertainty",
+     "detail": "Replicating the probe's draw: 728 held-out captions scanned to reach 300 with >=2 negatives (266 had none = 37%, consistent with the 39% at 3k; 162 single-negative captions were dropped). Dropping them removes mostly verb/spatial/shape captions: with min_negs=1 the same scan gives verb 202 vs 124, spatial 143 vs 97, shape 105 vs 79. Per-family n is small (3d 27 pairs, texture 81) so a family SE is 0.05-0.10; pairs are pooled so 3-negative captions weigh 3x; strict '>' counts ties (|diff|<1e-3: 1.6% rgb, 3.4-5.6% latent) as failures.",
+     "evidence": "probe_heldout.py:74-86, 141-150; replicated selection with negatives_for on phaseN/coco_selection_118k.",
+     "consequence": "Family-level differences between arms below ~0.1 (e.g. spatial 0.577 vs 0.629) are within noise; the probe mix does not match training (verb 15% vs 17%, texture 10% vs 7%).",
+     "fix": "min_negs 1, n=1000 captions, report per-caption mean accuracy with a bootstrap CI over captions and a paired (same caption, same noise) comparison between arms; report the tie rate separately.",
+     "file": "phaseW/rank/probe_heldout.py"
+    },
+    {
+     "id": "N9",
+     "severity": "low",
+     "category": "eval",
+     "title": "The uncovered 39% of captions is a biased subset (sports/action/food) that never receives ranking pressure",
+     "detail": "Covered (1,816) vs uncovered (1,184) word rates: tennis 1.7% vs 3.1%, baseball 0.8% vs 3.0%, pizza 1.2% vs 3.0%, skateboard 0.9% vs 1.5%, person 2.9% vs 4.9%; conversely giraffe 1.9% vs 0.8%, zebra 1.8% vs 0.6%, dog 4.2% vs 2.1%, cat 4.2% vs 1.5%, bear 2.4% vs 0.5%, bed 2.6% vs 0.9%, kite 1.4% vs 0.3%. Covered captions also have a lower cached selection signal (max dino_cos 0.483 vs 0.510). Mean length is similar (10.7 vs 10.1 words).",
+     "evidence": "phaseN/coco_selection_dinopatch/selection_rank*.jsonl vs negatives_3k.json keys.",
+     "consequence": "Any per-category interpretation of a CompBench/GenEval2 change must remember the ranking term never touched action/sport/food scenes (the non-spatial-style captions); a gain concentrated on animal/vehicle colour categories would be consistent with the histogram shortcut in N1.",
+     "fix": "Report CompBench/GenEval2 deltas split by category and, in training logs, the share of updates whose batch caption had negatives; optionally add a cheap family for the uncovered set (e.g. count insertion 'a man' -> 'two men', which the photo contradicts) to raise coverage.",
+     "file": "phaseW/rank/negatives_3k.json"
+    },
+    {
+     "id": "N10",
+     "severity": "low",
+     "category": "bug",
+     "title": "Author's audit cannot detect the rule failures above because it re-uses the same heuristics",
+     "detail": "audit_negatives.py imports ANIMATE and the same any-token test (line 44-45), so it reports 1 verb hit; its colour check flags 52 'A and B noun' edits that are actually fine (e.g. 'a blue and white plate -> green and white plate') and misses compound nouns; it has no check for surface nouns after 'under', enumeration inconsistencies, or nonsense material/noun pairs.",
+     "evidence": "phaseW/rank/audit_negatives.py:24-48; run output: 52 colour flags (all first-colour-of-pair edits), 0/0/0/1 elsewhere.",
+     "consequence": "The '20% flagged -> fixed' narrative in the README understates the residual defect rate (~10% nonsense, ~1-2% paraphrase, ~28% weak in my sample).",
+     "fix": "Add the checks from N3/N4/N6 and, more usefully, replace heuristic auditing with the VQAScore contradiction test of N15 as the acceptance criterion.",
+     "file": "phaseW/rank/audit_negatives.py"
+    },
+    {
+     "id": "N11",
+     "severity": "low",
+     "category": "stats",
+     "title": "Same generator on the 118k cache is consistent, with two caveats",
+     "detail": "negatives_for is deterministic in the prompt; the 3k prompts are found verbatim in the 118k cache (3000/3000 by prompt and by reference), one caption per photo in both caches (0 shared photos), so the probe's exclusion is sufficient against the 3k pool. Caveats: 1,705 of 113,948 118k prompts carry leading/trailing/double spaces (51 in the 3k), which the rules tolerate; and the family mix is shifted by --min_negs (N8).",
+     "evidence": "Replicated negatives_for over the 118k cache; whitespace counts.",
+     "consequence": "No inconsistency in the rules themselves; the probe's negatives share every defect of the training negatives, so it cannot detect label noise.",
+     "fix": "None needed beyond N7/N8.",
+     "file": "phaseW/rank/probe_heldout.py"
+    },
+    {
+     "id": "N12",
+     "severity": "medium",
+     "category": "suggestion",
+     "title": "Measure contradiction and edit-realisation directly with VQAScore (cheap, decisive)",
+     "detail": "For each of the 3,884 negatives compute VQAScore(photo, positive caption) - VQAScore(photo, negative) with the vendored t2v_metrics: a non-positive gap identifies compatible/paraphrase negatives per family, and the gap size ranks families by how strongly the photo contradicts them. Second, on the probe's rollouts compute VQAScore(negative's generation, negative prompt) vs VQAScore(negative's generation, positive prompt): this measures whether the student even renders the edit (at w=1, 4 steps, prompt adherence is weak), separating 'label unattainable' from 'scorer blind'. Cost: ~7.8k + ~1.7k VQAScore calls, tens of minutes on one GPU.",
+     "evidence": "REVIEW_CONTEXT.md Q4 lists this; probe median |pos-neg| 0.03 and per-pair accuracies show the need.",
+     "consequence": "Turns the 'are the negatives sound' question into a measured per-family table and gives a principled filter for the next negatives file.",
+     "fix": "Run once on the existing negatives_3k.json and the probe JSONs; gate families by mean gap and realisation rate.",
+     "file": "phaseW/rank/negatives_3k.json"
+    },
+    {
+     "id": "N13",
+     "severity": "medium",
+     "category": "suggestion",
+     "title": "Controls that separate 'same-object compositional' from 'any-difference' effects",
+     "detail": "(a) Shuffled negatives: give each caption another caption's negatives (different objects) - if the head/B1/A gains are unchanged the O1 same-object premise did no work; (b) kappa -> infinity (flat) and an argmin arm (train the head/students to rank the positive LAST) bracket the effect; (c) histogram-matched negatives: colour swaps between two nouns (53 captions) and argument swaps of 'on top of' (192 captions) keep the global palette fixed and directly test binding; (d) train the head on true DINO features of decoded rollouts as well as P(z_K) (the rgb_g probe space), since P collapses within-prompt differences (latent median |diff| 0.015 vs rgb 0.03-0.045, tie rate 3-6%).",
+     "evidence": "probe records; swap-capable caption counts.",
+     "consequence": "Without (a)-(c) a positive result cannot be attributed to prompt-awareness rather than a colour/texture-matching direction in DINO space.",
+     "fix": "Each control is one build_negatives variant plus one run per arm; (d) is a flag in the trainer's rank block.",
+     "file": "phaseW/rank/rank_utils.py"
+    },
+    {
+     "id": "N14",
+     "severity": "low",
+     "category": "suggestion",
+     "title": "Family weighting/expectation for signal",
+     "detail": "Given the probe, expected carriers of signal under O1 with a patch-mean scorer: texture (0.74-0.78 raw, 7% of negatives), posture verbs standing/sitting/sleeping/lying (0.63-0.73, 57% of verbs), whole-scene colour (sky/water/grass; 0.88-0.94 but only ~5% of colour edits), on top of/under (0.53-0.67), count |delta|>=2 (0.59-0.85), 3D in front of/behind (0.41 base -> 0.63-0.80 trained; n small). Expected null carriers: object colour on small/accessory nouns (118 of 1,236 colour edits are on frisbee/tie/hat/sign/helmet-type nouns), count +-1, far from, size on rooms/persons, holding->dropping, glass<->plastic.",
+     "evidence": "Per-(family, source, target) accuracies from the probe files; noun-class counts over negatives_3k.json.",
+     "consequence": "A rebalanced negatives file (drop the null carriers, cap same-span repeats) would spend the same rollout budget on contrasts the scorer can actually see and would raise the head's achievable accuracy above the 0.65-0.69 reported on training captions.",
+     "fix": "Rebuild with the N6 rules and a family cap (e.g. colour <= 30%, at most one negative per span), then re-run the probe on the base model to confirm raw rgb accuracy >= 0.65 per retained family before training.",
+     "file": "phaseW/rank/build_negatives.py"
+    }
+   ],
+   "validated": [
+    "Trainer join is correct: negatives_3k.json is keyed by the cache idx and rank_negs.get(int(rec['idx'])) at train_pilot_frozen_s4j.py:1384 matches the caption; all 1,816 idx->prompt pairs agree with phaseN/coco_selection_dinopatch (0 mismatches); rank_m=3 in every run's args.json, so no family-biased truncation.",
+    "No leakage into the 3k pool: 0 negatives equal another 3k caption's positive text (normalised), 0 duplicate captions, 0 photos shared by two captions in either cache; 4 negatives coincide with real 118k captions of other photos, which is harmless under a per-caption anchor.",
+    "Probe exclusion of the 3k pool works: all 3,000 pool prompts and references are present in the 118k cache and are excluded by both keys; one caption per photo in the 118k cache.",
+    "Grammar: article agreement after the edit is correct in all 3,884 negatives (0 'a <vowel>'/'an <consonant>' introduced); no negative equals its own positive; no duplicate negatives within a caption; no double spaces introduced; 'black and white' is never edited (0) and only 2 edits create that phrase.",
+    "The 'one' count rule behaves as documented: 0 pronoun 'one' edits, only 5 'one' edits in the file, all with the noun pluralised (one wrong noun choice, N6).",
+    "Family counts, coverage (1,816/3,000 = 60.5%; 929/210/677 with 3/2/1 negatives) and per-family totals in the README/REVIEW_CONTEXT match the file summary exactly.",
+    "Colour targets never reuse a colour already in the caption and never fall in the source's near-synonym class (checked via the rotation logic and the audit's 'target already in caption' check: 0 hits).",
+    "Size edits are strictly antonyms and shape edits change class (audit: 0 violations); material edits stay material->material and quality edits antonym-only (0 violations); no texture noun edits ('glass of', last word).",
+    "The 3d_spatial family is clean by rule: 103 in front of->behind and 30 behind->in front of, only fired when the opposite relation is absent from the caption; in my 25-item sample every one is contradicted by the photo, two are nonsense (behind a mirror).",
+    "The probe builds negatives with the identical negatives_for(prompt, m=3) used for training, seeds the shared noise by caption idx, and scores against ref_emb_118k by idx; per-family accuracies in REVIEW_CONTEXT (e.g. ours s0 rgb: 3d 0.63, colour 0.59, count 0.57, shape 0.61, spatial 0.63, texture 0.74, verb 0.70) reproduce from the JSON files."
+   ],
+   "summary": "The negatives are well-engineered at the rule level (correct idx join, no leakage, articles fixed, families and counts as documented, 3D-spatial and posture-verb edits clean), but they do not deliver what the O1 anchor needs. Two design-level problems dominate: (1) the families that make up most of the file are exactly the ones a patch-mean DINO cosine cannot order - object-colour edits (32% of negatives) are at chance (0.47-0.57 raw rgb) and sometimes anti-ordered (red->green 0.22), count +-1 (55% of count edits) is at 0.51-0.56, 'far from' (66% of spatial) and size antonyms (96% of 'shape') are weakly contradicted at best - while the strong signals are whole-scene edits (texture 0.75, green sky 0.9, standing/sitting 0.65-0.73); and (2) COCO captions cannot supply 'compositional rearrangements': every negative is a single-attribute substitution, zero left/right edits, 17 true-shape edits, only 53 captions with two colours to swap, so the notion tested is attribute substitution that a colour-histogram direction can satisfy. Quantified defects: one real rule bug (surface-noun skip regex is greedy; 15/114 on-top-of->under negatives put people under slopes/hills), the verb 'animate subject' rule is an any-token test (group/couple/teddy-bear paraphrases), ~10% nonsense and ~28% weakly-contradicted negatives in a 215-item stratified sample, 49% of within-caption negative pairs on the same span (387 captions with all three negatives on one word), 23 colour compound nouns, 8 'stainless glass', 13 'AN orange'. Eval-side: 61/300 probe captions sit in the projector's train split, and --min_negs 2 skews the probe mix away from verb/spatial. The uncovered 39% is sports/action/food captions, so the ranking never touches non-spatial scenes. Decisive next steps: VQAScore contradiction and edit-realisation tables per family, a shuffled-negatives control, histogram-preserving swap negatives on the 53/192 swap-capable captions, and a rebuilt file that drops the null-carrier families and caps same-span repeats."
+  },
+  {
+   "findings": [
+    {
+     "id": "F1",
+     "severity": "high",
+     "category": "design",
+     "title": "B1's shaped reward runs at 2-3x the gradient share of ours' raw reward, so B1-vs-ours confounds geometry with reward strength",
+     "detail": "The head g amplifies within-caption spread (B1 [rank] lines: margin_shaped 0.03-0.06 vs margin_raw 0.004-0.008), so d<g(P x0_hat), g(u_ref)>/dtheta is larger than the raw reward's gradient at the same lambda=80. The reward probe on the same parameter subset shows the realized reward/CD ratio in B1 far above ours at matched steps, and its cosine to the CD gradient turning strongly negative late in training. With clip=1 always active, the reward's share of the fixed-norm update is what matters, and it is not matched. Prior evidence in phaseW/s4_seed_stats.md (exact reward lambda 7.75 -> 31 -> 62: 0.4910 -> 0.4989 -> 0.5034) shows reward weight alone moves CompBench by ~0.01, i.e. more than the effect this campaign is looking for.",
+     "evidence": "/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-W-train118k-151302.out [reward-probe]: step 1000 ratios 0.80/0.97/0.60/0.76 (mean 0.78); step 1500 0.40/1.93/1.36/0.55 with cos -0.23/-0.70/-0.63/-0.35; step 2000 0.87/2.28/0.76/1.58 with cos +0.82/-0.65/-0.81/-0.04; step 2500 up to 3.23. Ours s2 control /lustre/.../logs/lsf-sd-W-train118k-151361.out: step 1000 ratios 0.29/0.27/0.23/0.44/0.20/0.15/0.16/0.38 (mean 0.26); step 1500 mean 0.71. Shaped reward code: /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/phaseW/train_pilot_frozen_s4j.py:1253-1259.",
+     "consequence": "Whatever B1 shows relative to ours (better or worse) is equally explained by 'stronger, more CD-opposed reward' as by 'prompt-aware geometry'; the contrast does not isolate the hypothesis.",
+     "file": "/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/phaseW/train_pilot_frozen_s4j.py",
+     "fix": "Add a share-matched control: ours with lambda set so its realized reward/CD ratio tracks B1's (~lambda 200-240 from the step-1000 numbers), or renormalize B1's shaped-reward gradient to the raw reward's norm per step (scale lambda by ||grad r_raw||/||grad r_shaped|| measured on probe_params every 50 updates). At minimum, log the realized ratio every 50 updates in every arm and report B1's effect alongside its share trajectory."
+    },
+    {
+     "id": "F2",
+     "severity": "high",
+     "category": "design",
+     "title": "A's ranking-gradient share is 2.5-4.5x the 20% it was calibrated to; CD is a minority of A's update by step 1000",
+     "detail": "lambda_rank=1.3 was set from a 6-update smoke with g at identity (rank ratio at weight 1: 0.068-0.35, mean 0.15). As g sharpens (A's margin_shaped 0.006 -> 0.25 by step 1200) the ranking gradient through g and the 4-step chain grows. Together with the shaped reward (F1) the non-consistency terms exceed the CD gradient.",
+     "evidence": "Smoke /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/logs/lsf-sd-W-rank-smoke-151298.out [rank-probe] step 0-4 ratios 0.068/0.35/0.089/0.19/0.10/0.12 at lambda 1. Live /lustre/.../logs/lsf-sd-W-train118k-151316.out step 1000: [rank-probe] ratio 0.89/0.52/0.52 (x lambda 1.3) and [reward-probe] 0.76/1.14/1.17/0.92; [rank] margin_shaped +0.0066 (step 50) -> +0.2480 (step 1200).",
+     "consequence": "A is running in a regime the design did not intend (ranking + reward ~1.3-2x the CD gradient), so a negative result cannot be read as 'ranking backprop does not help' and a positive one is entangled with the reward-share confound.",
+     "file": "/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/phaseW/launch_rank.sh",
+     "fix": "Normalize adaptively: every 100 updates set lambda_rank so the probe ratio returns to the target share (or normalize the ranking loss gradient to a fixed fraction of the CD gradient norm). If compute allows, a lambda_rank ladder (0.3 / 1.3) on one seed shows whether the answer depends on the share. Report the realized share trajectory with any A result."
+    },
+    {
+     "id": "F3",
+     "severity": "high",
+     "category": "stats",
+     "title": "Three seeds cannot detect the effect size in play (MDE 0.010-0.026 CompBench, 3-8 GenEval2 points); seed pairing buys nothing",
+     "detail": "Seed-level SDs of averaged checkpoints in phaseW/s4_seed_stats.md are 0.002-0.010 CompBench and 0.3-1.6 GenEval2 points; seed-paired difference SDs for ours-like contrasts are 0.0021-0.0092. For a paired t-test with n=3 (df=2, alpha 0.05, power 0.8) I computed MDE = 0.0098 / 0.0163 / 0.0261 at sigma_d = 0.003 / 0.005 / 0.008, with 95% CI half-widths 0.0075 / 0.0124 / 0.0199; for GenEval2 sigma_d 1.0 / 1.5 / 2.5 points gives MDE 3.3 / 4.9 / 8.2. The effect of interest is a few thousandths (converged ours-naive = +0.0017; prior GenEval2 +1.0). Pairing does not reduce variance in the existing data: argmax-vs-random paired SD 0.0058 vs unpaired sqrt(0.0032^2+0.0031^2)=0.0045; exact-vs-argmax 0.0062 vs 0.0043 (correlation ~0 or negative).",
+     "evidence": "/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/phaseW/s4_seed_stats.md lines 96-125 (per-seed table) and the seed-paired contrasts table; MDE computed with scipy nct in this review; converged-schedule references /lustre/.../phaseN/eval_W_B2-hp1_3k-hp1-avg_s0_145251/alignment.json (0.4860) and eval_W_CD_dinop_hard-rewRi-s16-hp1_3k-hp1-avg_s0_145253/alignment.json (0.4877).",
+     "consequence": "A null at n=3 is uninformative below ~0.015 CompBench; any p<0.05 on a few-thousandths effect would be a winner's-curse false positive. The plan can only establish an effect >= ~0.02.",
+     "file": "/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/phaseW/rank_jobs.txt",
+     "fix": "Pre-register one primary contrast (arm minus ours, CompBench mean, averaged checkpoint), report the 95% CI rather than p; treat seeds as independent (Welch), not paired. To reach a few thousandths: 5 seeds -> CI +-0.006, 8 seeds -> +-0.004 at sigma_d 0.005; fund them by dropping the redundant raw-checkpoint evals (F7). Use the held-out ranking probe (with F6 fixes) as the mechanism-level primary, which needs far less compute per unit of power."
+    },
+    {
+     "id": "F4",
+     "severity": "medium",
+     "category": "stats",
+     "title": "Prompt-level paired tests: MDE ~0.009 per seed pair, and Wilcoxon disagrees with the t-test on the existing pair",
+     "detail": "On the existing converged seed-0 pair (ours-avg 145253 vs naive-avg 145251) the per-prompt CompBench difference has SD 0.155 (n=2398), SE 0.0032, mean +0.0017, paired t p=0.59 but Wilcoxon p=0.003; per-category swings between these two runs are -0.027 (spatial) and +0.016 (numeracy). GenEval2 per-prompt diff SD 23 points, SE 0.8 (n=800). So a prompt-level test resolves ~0.009 per seed pair, ~0.005 pooling 3 pairs, but only by treating the checkpoint as fixed (no seed variance), and the asymmetric difference distribution makes a rank test 'significant' where the reported mean metric is flat.",
+     "evidence": "Computed in this review from per_prompt rows in /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/phaseN/eval_W_*_3k-hp1*_s0_1452{50,51,52,53}/compbench_scores/*/scores.json and geneval2_scores/*/scores.json (eval seeds are per prompt idx, exp0/phaseA_generate.py:137, so cross-model pairing per prompt is valid).",
+     "consequence": "Choosing the test after seeing the data (t vs Wilcoxon, raw vs avg, pooled vs balanced) can flip the verdict; a prompt-level p-value alone overstates evidence for the method because seed variance is ignored; spatial is the noisiest category (and 31.8% vocabulary-gated), so per-family mapping onto it is underpowered.",
+     "file": "/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/ablations/phaseN_eval_alignment.lsf",
+     "fix": "Pre-specify the paired t / bootstrap on the mean (the reported metric), category-balanced, pooled over seeds with seed as a cluster (cluster-robust SE or mixed model with seed random effect); never Wilcoxon as primary. Pre-register category contrasts mapped to the negative families (color, numeracy, shape, texture, spatial, 3d_spatial) with non_spatial as a built-in negative control, treated as secondary."
+    },
+    {
+     "id": "F5",
+     "severity": "medium",
+     "category": "design",
+     "title": "World-size mix (2x8 vs 4x4) is a seed-like perturbation, not a batch-composition confound, but it breaks the 'seed-paired' premise for B2 s0 and for naive/ours s1-s2",
+     "detail": "I verified that DistributedSampler (seed=args.seed, drop_last) gives rank r positions r + world*j of one global permutation, so update u consumes exactly captions [16u, 16u+16) in both 2x8 and 4x4, with the same mean-of-16 gradient; epochs = 16 in both; LSF STEPS = 3000 in both. What does differ: the Delta draws per caption visit come from a per-rank RNG stream (delta_rng, lines 607/1072), the ranking rollout noise is keyed by (rank, micro) (rank_utils.py:165), rank-0-only side computations see different captions (reward refresh rbuf line 1274/1490, monitors), bf16 reduction order, and GPU type (B1/A s0 and controls on H100, A/B2 s1-s2 on H200). Runs affected: B2 s0 151399 (2x8) vs A/B1/naive/ours s0 (4x4); naive 151349/151357 and ours 151361/151403 (2x8) vs A/B2 s1-s2 (4x4).",
+     "evidence": "/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/phaseW/train_pilot_frozen_s4j.py:746-749 (sampler), 607 and 1072 (delta_rng per rank), 1274 and 1490 (rbuf on rank 0); args.json accum field: 8 for 151349/151357/151361/151399, 4 elsewhere; bjobs placement in this review.",
+     "consequence": "Comparisons involving those runs are unpaired in the Delta stream; since seed pairing shows ~zero correlation anyway (F3) the power loss is small, but the analysis must not claim pairing, and B2's three seeds are heterogeneous in world size.",
+     "file": "/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/phaseW/launch_hp1.sh",
+     "fix": "Analyze as independent runs; record world size per run in the results table; keep world size constant within a seed index for any additional seeds."
+    },
+    {
+     "id": "F6",
+     "severity": "medium",
+     "category": "eval",
+     "title": "Held-out probe: latent columns are not leak-free, and its pair statistics have no clustered uncertainty",
+     "detail": "probe_heldout.py excludes only the 3k pool by prompt and reference (lines 75-77). The projector P was pretrained on ~22k captions of the same 118k cache (train split; the replay set is 2k of them), so roughly 19% of the 300 probe captions (~57) are expected to be P training captions: the 'latent' and 'latent_g' columns are optimistic relative to unseen captions (rgb columns, the student and the head are unaffected). Statistically, 833 pairs are clustered in 300 captions (binomial SE ~0.017 unclustered, ~0.025 clustered); per-family n is 27 (3d_spatial), 79 (shape), 81 (texture). The reported base 0.565 -> naive 0.606 -> ours 0.627 rgb accuracies and the per-family pattern are therefore within 1-2 SE of each other.",
+     "evidence": "/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/phaseW/rank/probe_heldout.py:59-61,75-87; /lustre/.../phaseW/latent_scorer/build_pooled_artifacts.py:51-53,97 (replay from split=train; P trained on the non-3k splits); /lustre/.../phaseW/rank/probe/{base,hp1_naive_s0,hp1_ours_s0}.json summaries (n_pairs 833; 3d_spatial 27).",
+     "consequence": "The probe is the cheapest decisive measurement in the campaign, but as run it cannot separate arms by less than ~0.03-0.05 accuracy and its latent-space numbers carry a mild optimistic bias.",
+     "file": "/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/phaseW/rank/probe_heldout.py",
+     "fix": "Exclude P's train/val idx (D['split'] in the pooled artifact) from the probe pool; report caption-clustered bootstrap CIs and a McNemar/paired test across models on identical (caption, negative, noise) pairs; raise n to >=1000 captions (single GPU, ~30-60 min); run it on the saved rank_head_step*.pt of every arm so head generalization is tracked over training."
+    },
+    {
+     "id": "F7",
+     "severity": "low",
+     "category": "suggestion",
+     "title": "Under cosine-to-zero the averaged checkpoint equals the raw final one; the '-avg' eval duplicates ~1.5 GPU-h per run",
+     "detail": "naive avg vs raw: mean +0.0014, per-prompt SD 0.087; ours avg vs raw: -0.0001, SD 0.073 (vs 0.155 between arms). The last three checkpoints are near-identical because the LR is already ~0.",
+     "evidence": "Computed from /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/phaseN/eval_W_B2-hp1_3k-hp1{,-avg}_s0_1452{50,51} and eval_W_CD_dinop_hard-rewRi-s16-hp1_3k-hp1{,-avg}_s0_1452{52,53}.",
+     "consequence": "Twelve of the pending eval jobs in rank_jobs.txt/hp1_jobs.txt buy almost no information; that budget would fund 2-3 extra seeds' evals.",
+     "file": "/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/phaseW/launch_rank.sh",
+     "fix": "Keep one eval per run (the averaged one, for continuity with the references) and redirect the saved GPU-h to seeds 3-4 of the primary contrast."
+    },
+    {
+     "id": "F8",
+     "severity": "medium",
+     "category": "design",
+     "title": "g is trained on 4-step rollout terminals but applied (B1, A) to Tweedie x0_hat estimates from teacher states; no check that the shaped geometry transfers",
+     "detail": "The ranking loss shapes g on P(z_K) of the student's w=1 rollouts (train line 1393-1400); the shaped reward is applied to P(x0_hat) at the two least-noisy supervised states of the teacher trajectory (lines 1245-1256). These are different input distributions to P (rollout endpoints vs one-step clean estimates from sigma ~0.1-0.3), and P itself is refreshed on x0_hat only.",
+     "evidence": "/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/phaseW/train_pilot_frozen_s4j.py:1245-1256 and 1389-1400; the probe outputs show P-space accuracy is already near chance on rollouts (latent 0.537 vs rgb 0.606 for naive).",
+     "consequence": "B1/A could show no effect simply because g's ordering does not hold on x0_hat, which the current logs cannot distinguish from 'prompt-aware geometry does not help'.",
+     "file": "/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/phaseW/train_pilot_frozen_s4j.py",
+     "fix": "Cheap diagnostic: for captions with negatives, run one extra no-grad student forward at the k7 state with each negative's embedding, take the Tweedie x0_hat, and log the pairwise accuracy of <g(P(.)), g(u_ref)> on x0_hat (raw and shaped). If it sits at chance, the transfer path is broken before the benchmark is consulted."
+    },
+    {
+     "id": "F9",
+     "severity": "medium",
+     "category": "design",
+     "title": "A's only gradient beyond B1 is 'push negative-prompt generations away from the photo'; degrade-the-loser is unmonitored",
+     "detail": "With the softmax partial order the positive receives (1-p_pos)/kappa of the push and the negatives -p_j/kappa; in A the negatives' rollouts carry gradient into the student, so half the ranking pressure can be satisfied by worsening generations of legitimate prompts ('Three friends ...', 'yellow tour bus'), which are exactly the CompBench prompt types. With the negatives detached, A collapses to a softmax-weighted reward, i.e. B1. This project has already seen a preference loss take its margin from the loser.",
+     "evidence": "/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/phaseW/rank/rank_utils.py:85-88; /lustre/.../phaseW/train_pilot_frozen_s4j.py:1405-1416; 151316 log: acc_shaped 0.85-0.89 and loss 0.57 by steps 1150-1300 with no per-side raw score logged (r_pos is the shaped positive only).",
+     "consequence": "A could improve its own ranking metric and the benchmark could stay flat or fall on the negatives' families; the current logging cannot attribute the margin to the winner or the loser.",
+     "file": "/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/phaseW/train_pilot_frozen_s4j.py",
+     "fix": "Log mean raw projector score of positives and of negatives separately (R_raw[0] and R_raw[1:]) and their true-DINO counterparts in the monitor; run the held-out probe on A's existing checkpoint_step1000/1500 + rank_head (if latent_g accuracy far exceeds rgb_g on A's own rollouts it is hacking P; if negatives' rgb positive_score falls it is degrading losers); add a control arm with the negatives' embeddings detached."
+    },
+    {
+     "id": "F10",
+     "severity": "low",
+     "category": "design",
+     "title": "The kappa -> infinity sanity arm is redundant with 'ours' by construction; the informative controls are shuffled negatives and a share-matched reward",
+     "detail": "With fc2 zero-initialised and a flat softmax the head's gradient is zero; AdamW weight decay keeps fc2 at zero, so g stays the identity and lambda_rank=0 gives ours exactly. A shuffled-negatives arm (negatives borrowed from other captions, same rollout compute) tests whether the structured text order matters at all; F1's share-matched ours tests whether the reward strength is the driver.",
+     "evidence": "/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/phaseW/rank/rank_utils.py:27-36 (zero-init fc2); train line 890 (AdamW wd 0.01).",
+     "consequence": "Compute spent on kappa -> inf would reproduce ours; without a shuffled-negatives control a positive B1/A result cannot be attributed to the ranking content.",
+     "file": "/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/phaseW/rank/DESIGN_NOTE.tex",
+     "fix": "Skip kappa -> inf; add shuffled negatives (one seed each for B1 and A) and the share-matched ours (F1)."
+    },
+    {
+     "id": "F11",
+     "severity": "low",
+     "category": "design",
+     "title": "Head and align optimizers run at constant lr 1e-4 while the student's cosine LR decays to 0",
+     "detail": "rank_head_opt/align_opt have no schedule (lines 890, 897, 1460-1464). In B1 the reward target keeps moving at full speed after the student can no longer follow, and the saved rank_head_final is not co-converged with the student; the observed 'shaped reward drifts down while raw rises' is partly this.",
+     "evidence": "/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/phaseW/train_pilot_frozen_s4j.py:890,897,1455-1464.",
+     "consequence": "Small for the student (its LR is ~0 late), but the final head used by the probe reflects the last few hundred updates of a moving target rather than the geometry the student was trained against.",
+     "file": "/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/phaseW/train_pilot_frozen_s4j.py",
+     "fix": "Tie the head/align LR to the student's multiplier, or freeze g over the last 20% of updates; probe both rank_head_step2000 and rank_head_final."
+    },
+    {
+     "id": "F12",
+     "severity": "low",
+     "category": "design",
+     "title": "B2's alignment acts at a single near-clean state (last rollout step, sigma 0.009 -> 0) and its loss saturates by step 500",
+     "detail": "grad_last=True keeps the graph only through the final rollout forward, so the DiT block-8 features are aligned at one input state that is never a supervised consistency state (k4..k7 of the 8-step teacher schedule). The target is the student's own generation's shaped embedding, an easy self-consistency target: align loss falls to 0.06-0.16 by step 500 and the remaining gradient share (0.16-0.66) is lambda=60 amplifying a near-zero loss.",
+     "evidence": "/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/phaseW/rank/rank_utils.py:58-82; 151399 log [rank] align 0.245 (step 50) -> 0.064 (step 500); [align-probe] step 500 ratios 0.27/0.38/0.46/0.23/0.66/0.16/0.54/0.51.",
+     "consequence": "B2 is a weaker test of 'representation transfer' than the note describes (REPA aligns across training timesteps); a null on B2 says little about the transfer idea.",
+     "file": "/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/phaseW/rank/rank_utils.py",
+     "fix": "If B2 is kept, align at the supervised states too (hook the CD forward at k6/k7 and target sg[g(P(x0_hat))]), and report the align-loss floor with the result."
+    },
+    {
+     "id": "F13",
+     "severity": "medium",
+     "category": "stats",
+     "title": "No pre-registered primary; >=24 implicit tests plus interim wandb reads",
+     "detail": "3 arms x 2 references x 2 metrics x {raw, avg} = 24 headline tests, plus 8 categories each, plus the probe's 4 spaces x 7 families; early numbers are already being compared on wandb.",
+     "evidence": "/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/phaseW/rank/REVIEW_CONTEXT.md 'Early numbers' section; launchers emit two eval labels per run.",
+     "consequence": "At alpha 0.05 more than one 'significant' contrast is expected under the null; a post-hoc choice of the best-looking one is not evidence.",
+     "file": "/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/phaseW/rank/README.md",
+     "fix": "Write down now: primary = averaged-checkpoint CompBench mean, arm minus ours, Welch over seeds, Holm across the three arms; everything else descriptive."
+    },
+    {
+     "id": "F14",
+     "severity": "low",
+     "category": "negatives",
+     "title": "Verb negatives (17%) and some colour edits are weak O1 negatives; count maps to a noisy category",
+     "detail": "Sample: 'People walking down a path -> running', 'standing -> sitting', 'big blue sky -> big green sky', 'lush green field -> yellow field'. Verb pairs are often indistinguishable in a still; implausible colour edits may be rendered as the original by the student, giving a pair whose two rollouts are near-identical (uninformative rather than harmful). Families: color 1236, verb 675, count 631, spatial 541, shape 382, texture 286, 3d_spatial 133 (3,884 negatives, 1,816 captions).",
+     "evidence": "/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/phaseW/rank/negatives_3k.json sampled in this review; keying to the cache verified (0 mismatches).",
+     "consequence": "~20-25% of pairs carry little ranking signal; per-family conclusions on verb and 3d_spatial (133) will be underpowered.",
+     "file": "/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/phaseW/rank/build_negatives.py",
+     "fix": "Weight or drop verb pairs, prefer colour targets plausible for the noun, and use the probe's per-family accuracy of the base model as a filter (families where raw DINO already orders pairs at chance on the base model contribute noise)."
+    },
+    {
+     "id": "F15",
+     "severity": "low",
+     "category": "eval",
+     "title": "Two arms are still unbalanced in the queue",
+     "detail": "B1 s1/s2 (151341, 151345) and ours s1 (151403) are PEND for 4-GPU slots while everything else runs; if they do not start, B1 has one seed and ours two.",
+     "evidence": "bjobs in this review: 151341/151345/151403 PEND; running: 151302, 151316, 151324, 151328, 151332, 151336, 151349, 151357, 151361, 151399.",
+     "consequence": "The B1 contrast (the cheapest and cleanest arm) would end single-seed.",
+     "file": "/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/phaseW/rank_jobs.txt",
+     "fix": "Widen placement for those three (2x8 on any 80 GB pair, per the stuck-jobs rule) rather than waiting on the reservation."
+    }
+   ],
+   "validated": [
+    "args.json diff over the 12 live runs: every training hyperparameter identical (num_steps 3000, warmup 150, lr 1e-5 cosine, window 0.5,0.9 -> score_idxs [4,5,6,7], K 8, N 4, cfg 7, student_cfg 0, huber_c 0, delta 1-3, assign_seed constant, reward lambda 80 / refresh 100 / 16 steps / replay / ref_emb_3k, dino_pool mean) except the intended arm flags (rank_mode, rank_lambda 1.3 only in A, rank_shaped_reward in B1/A, align_lambda 60 only in B2), accum (8 for 151349/151357/151361/151399), and reward_grad_probe_every (0 for 145172/145176 and the naive controls, 500 elsewhere).",
+    "target_map_sha256 identical within variant across seeds and world sizes (CD_dinop_hard dbd0d57b... in 145176, 151302, 151316, 151324, 151328, 151332, 151336, 151361, 151399; B2 35d2d955... in 145172, 151349, 151357): all arms train on the same caption->candidate map as the references.",
+    "Trainer version: the 09-13 references ran the wandb-snapshotted trainer (wandb/run-20260913_061218-2swko08h/files/code/phaseW/train_pilot_frozen_s4j.py); diffing it against the current file with rank/align lines removed leaves only the probe parameter subset, logging accumulators (_wl_sum etc.), samples_seen accounting, a distance-from-init log, and the inert shaped-reward else-branch, so the non-rank numerics are unchanged.",
+    "DistributedSampler equivalence: with seed=args.seed and drop_last, update u consumes the same 16 captions in 2x8 and 4x4 (rank r takes global positions r + world*j), the gradient is the mean of 16 in both, both run 16 epochs, and the LSF STEPS formula gives 3000 for both; n_visits (line 805, ignores accum: 4 vs 2) is only consumed by target_schedule arms and is inert here.",
+    "RNG isolation: the head and align inits reseed the global RNG but are wrapped by get/set_rng_state (lines 884-898); rollout noise uses a private generator keyed by (seed, rank, micro) (rank_utils.py:163-166); the ungenerated torch.rand/randn calls at lines 1332/1341/1353 sit in the flow-matching (B5) branch that is not executed; Delta draws use the private delta_rng; rollout_schedule is called once at init and every teacher rollout re-sets K=8 (line 59), so the ranking rollouts do not perturb the consistency branch's timesteps.",
+    "Gradient paths: the shaped reward (line 1256) and A's ranking term (1406) use functional_call with detached head params, so nothing in the student's loss trains g; the head's loss (1400-1402) uses detached embeddings, so it never trains the student; B2's alignment target is detached (1421); rank_lambda=0 in B1/B2 keeps _grad_all False so no ranking gradient reaches the student there; head/align grads are all-reduced and averaged, clipped to 1, and stepped identically on every rank after identical seeded init + broadcast.",
+    "The reward/rank/align gradient probes are torch.autograd.grad on rank 0 only (no AccumulateGrad hooks, no collectives, no parameter writes), so reward_grad_probe_every 500 vs 0 (ours s0 vs the arms and ours s2) is inert.",
+    "Eval chain: EVAL_CFG=1.0 matches the references' alignment.json (cfg 1.0) and student_cfg 0; EVAL_MIN_STEP=3000 is satisfied (145172 checkpoint_final step 3000; checkpoint_avg_last5 carries max step 3000 from 2000/2500/final); STEPS=2000:2500:final maps to files that exist at save_every 500; eval roots include the job id so labels cannot collide; the eval generator seeds per prompt idx (exp0/phaseA_generate.py:137) so prompt-level pairing across models is valid; the hp1 references already passed this exact chain (145250-145253).",
+    "negatives_3k.json is keyed by the training cache's idx with matching prompts (0/1816 mismatches), families color 1236 / verb 675 / count 631 / spatial 541 / shape 382 / texture 286 / 3d_spatial 133; sampled edits are same-object rearrangements consistent with the O1 anchor.",
+    "Live logs 151302 (B1 s0, step 2750) and 151316 (A s0, step 1300): no errors or warnings beyond a wandb symlink notice; losses, probes and rank metrics finite; memory 74.4 GB; checkpoints and rank_head_step*.pt saved every 500; B1 acc_shaped 0.55-0.74 with acc_raw 0.44-0.70; A acc_shaped rising to 0.85-0.89; the only anomaly is the gradient-share drift reported in F1/F2. The 8-caption RGB monitor is confirmed uninformative (acc_rgb 0.29-0.92 between adjacent readings).",
+    "Raw ~ averaged under the cosine schedule confirmed at the prompt level (per-prompt SD 0.07-0.09 within run vs 0.155 between arms; mean difference <= 0.0014).",
+    "Held-out probe fairness across models: same 300 captions, same idx-seeded noise, same negatives, g applied to both sides of the cosine exactly as in training; the base/naive/ours ordering (rgb 0.565/0.606/0.627) is internally consistent."
+   ],
+   "summary": "The experiment as run is faithful in its mechanics: the flags, caption->candidate map, RNG isolation, gradient paths, DDP handling and eval chain all check out, the non-rank trainer numerics are unchanged since the seed-0 references, and I could find no bug in the code paths this campaign exercises. Its problem is that the contrasts are not weight-matched and the statistics are underpowered for the effect size in play. (1) B1's shaped reward runs at 2-3x the realized reward/CD gradient share of ours at matched steps (probe ratios ~0.78 vs ~0.26 at step 1000, rising to 1-3 with strongly negative cosines late), and A's ranking term sits at 0.5-0.9 of the CD gradient instead of the calibrated 0.2 because the 6-update smoke was taken with g at identity and g sharpens 10-40x; so arm-vs-ours conflates prompt-aware geometry with reward strength, which on its own is known to move CompBench by ~0.01. (2) With seed SDs of 0.002-0.010 and no usable seed correlation, n=3 gives an MDE of 0.010-0.026 CompBench and 3-8 GenEval2 points against a few-thousandths target; prompt-level paired tests reach ~0.009 per seed pair (0.005 pooled) but ignore seed variance, and the existing seed-0 pair already shows a Wilcoxon/t disagreement that invites test-shopping. (3) The 2x8/4x4 mix is not a batch-composition confound (same 16 captions per update, verified) but it is a seed-like perturbation of the Delta stream, so the plan should analyze runs as independent. What would make the test decisive: a share-matched ours control (or per-step renormalization of the shaped/ranking gradients) and a shuffled-negatives arm; a pre-registered single primary contrast with 5-8 seeds funded by dropping the redundant raw-checkpoint evals; and the held-out ranking probe, made leak-free (exclude P's training captions), clustered by caption and scaled to >=1000 captions, run on every saved rank_head and on A's existing step-1000/1500 checkpoints to see whether A is improving positives, degrading negatives, or hacking P. If the probe shows the trained head generalizes and the share-matched control does not reproduce B1's result, the path is sound; if the head's held-out accuracy stays near identity, the benchmark runs cannot answer the question regardless of seeds."
+  },
+  {
+   "findings": [
+    {
+     "id": "E1",
+     "severity": "high",
+     "category": "bug",
+     "title": "Held-out probe leaks the projector's pretraining captions and the replay set",
+     "detail": "probe_heldout.py excludes only the 3k pool (lines 75-77: seen_p/seen_r from --exclude phaseN/coco_selection_dinopatch). The projector P was pretrained on 24,000 captions of the same 118k cache (make_manifests.py lines 22-33: 22k train / 2k val, split recorded in phaseW/latent_scorer/manifest.jsonl), and the replay set used at every refresh is 2,000 of those train captions. Matching the probe's idx against manifest.jsonl: 61 of the 300 probe captions are P's TRAIN captions and 9 its VAL captions (70/300 = 23%, same caption AND same photo, since the 118k cache has exactly one caption per photo); matching replay_2k.pt's e_ref against ref_emb_118k.pt (best cosine >= 0.99986 for all 2,000) shows 9 probe captions are also in the replay set, i.e. their teacher candidates and photo embeddings are re-fit into P every 100 updates of every 'ours'/rank run. Empirically the identity-head numbers are not inflated by it (latent acc on the seen subset vs unseen: naive 0.539/0.537, ours 0.529/0.539, B1 latent_g 0.560/0.592), but the rgb accuracies of all three students are ~0.05 higher on the seen subset (0.644/0.681/0.649 vs 0.595/0.611/0.601, n=191 vs 642), so the subset is not exchangeable with the rest.",
+     "evidence": "/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/phaseW/rank/probe_heldout.py:75-77; /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/phaseW/latent_scorer/make_manifests.py:22-33; computed overlap: probe idx in manifest split -> {train: 61, val: 9}; probe idx in replay set -> 9; e.g. all 70 also match by prompt text and by reference path.",
+     "consequence": "'latent' / 'latent_g' accuracies are partly measured on data P was fit on; once the trained heads are probed the claim 'the shaped space generalises to unseen captions' is contaminated for 23% of pairs, and any P-fidelity comparison (latent vs rgb) is optimistic on that subset. It also breaks the README's 'caption and photo both unseen' statement.",
+     "file": "phaseW/rank/probe_heldout.py",
+     "fix": "Add a manifest exclusion: load phaseW/latent_scorer/manifest.jsonl and drop every idx/prompt/reference with split in {train, val} (86,948 clean held-out captions remain, ~32.6k of them with >= 2 negatives, so N is not a constraint). Re-run the three existing probes (113 s of GPU each per the logs) so all rows share the clean draw."
+    },
+    {
+     "id": "E2",
+     "severity": "high",
+     "category": "eval",
+     "title": "The probe evaluates the head in the PRETRAINED projector's space, but the head was trained on the REFRESHED projector, which is never saved",
+     "detail": "The trainer refreshes P every 100 updates for 16 steps on decoded recent predictions plus replay (train_pilot_frozen_s4j.py:1505-1528) and the ranking head g is trained on that live P's outputs (line 1396 `_e = proj(_zK)`, line 1400 head loss on `_e.detach()`). The checkpoint writers at lines 1661-1686 save the student, `rank_head` (+ `align_proj`) and the EMA model only; `proj.state_dict()` is never written. probe_heldout.py loads `--proj phaseW/latent_scorer/projector/projector.pt` (line 56, 102-104), i.e. the pretrained P. So the probe's `latent` and `latent_g` rows for a trained run apply g to a space it was not fit to; the docstring's claim that `latent_g` is 'what the ranking loss optimised' (line 16) is false for every rank arm.",
+     "evidence": "/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/phaseW/train_pilot_frozen_s4j.py:1396,1400,1505-1528,1661-1686 (no proj save); /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/phaseW/rank/probe_heldout.py:56,102-104; B1_s0_final.json: latent_g 0.585 vs in-training rank/acc_shaped 0.65 (REVIEW_CONTEXT line 73) \u2014 the gap conflates held-out generalisation with the P mismatch.",
+     "consequence": "The trained-head probe cannot answer 'did the ranking loss shape the space it optimised, and does that survive on unseen captions'. Any latent_g number reported for B1/B2/A is a hybrid of two projectors.",
+     "file": "phaseW/train_pilot_frozen_s4j.py",
+     "fix": "Save {'model': proj.state_dict()} next to rank_head_*.pt (~40 MB; the trainer already keeps proj on rank 0), add PROJ to probe.lsf and pass it as --proj. Until then, report only rgb / rgb_g for trained heads and label latent/latent_g as 'pretrained P'."
+    },
+    {
+     "id": "E3",
+     "severity": "high",
+     "category": "design",
+     "title": "The latent projector carries almost no prompt-edit information, so the head is being trained on a near-chance signal",
+     "detail": "Across the three identity-head probes the projector space orders the positive above a negative at 0.499 (base), 0.538 (naive), 0.537 (ours) \u2014 chance to +0.04 \u2014 while true DINO on the same decoded rollouts gives 0.565 / 0.606 / 0.627. Per pair, the rgb and latent margins correlate at Pearson 0.24-0.33 (Spearman 0.22-0.26), sign agreement 0.57, and within-caption Spearman over the m prompts is 0.14-0.17. That is expected: P was trained to preserve the ranking over 4 NOISE candidates of the SAME prompt (train_projector.py:150-151, KL over candidates; refresh line 1521 idem), never over prompt edits, and it is out of distribution on 4-step w=1 rollouts (positive cosine to u_ref 0.41 in P vs 0.61 in rgb). The first trained-head probe confirms the consequence: B1 latent_g 0.585 (up from 0.533) but rgb_g 0.607 vs rgb 0.612 \u2014 the head does not improve the true-feature ordering at all (B1 vs ours rgb_g: 114/130 discordant, p=0.34), and B1's own generations rank worse in rgb than ours (0.612 vs 0.627, n.s.).",
+     "evidence": "probe JSONs: per-pair margin correlation rgb vs latent (base +0.327, naive +0.242, ours +0.235), sign agreement 0.576/0.569/0.569; /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/phaseW/latent_scorer/train_projector.py:150-151; /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/phaseW/train_pilot_frozen_s4j.py:1521; B1_s0_final.json summary rgb 0.612 / latent 0.533 / latent_g 0.585 / rgb_g 0.607.",
+     "consequence": "The implementation's ranking loss shapes g on P(z_K), whose ordering of positive vs negative is ~55/45 at best; whatever g learns is a reweighting of noise plus the small prompt component, and rgb_g shows none of it reaches true DINO features. This is the most likely reason a B1/B2/A CompBench effect would be null, and it is not a test of the design note's hypothesis (which is stated on f(x0_hat) = DINO of pixels).",
+     "file": "phaseW/rank/rank_utils.py",
+     "fix": "Train and probe g on true DINO features of the decoded rollouts (the probe already decodes; decode is ~61 ms/image per the measured cost, so m<=4 decodes add ~0.25 s to B1's 4.0 s/update). Add a P-fidelity metric to the probe: within-caption Spearman(P, rgb) over the m prompts and the sign agreement of margins, reported per family \u2014 it should exceed ~0.5 before P is used as the ranking input."
+    },
+    {
+     "id": "E4",
+     "severity": "medium",
+     "category": "eval",
+     "title": "The 'base' probe row is a floor, not a premise test: SD3.5-M sampled at 4 Euler steps, guidance 1",
+     "detail": "probe.lsf runs `--ckpt base` with STEPS=4 and the probe's student_rollout has no CFG path (one conditional pass, rank_utils.py:76-80). The undistilled base at 4 unguided steps produces near-garbage: its positive rgb score is 0.360 vs 0.607-0.612 for the students. Its pairwise accuracy (rgb 0.565, latent 0.499) therefore says nothing about whether raw DINO orders the positive first on realistic images (the design note's premise) nor where the teacher sits.",
+     "evidence": "/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/phaseW/rank/probe.lsf:29 (STEPS default 4); /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/phaseW/rank/rank_utils.py:58-82; base.json summary positive_score rgb 0.360 (naive 0.607, ours 0.612).",
+     "consequence": "The 'base 0.565 -> student 0.606-0.627' progression cannot be read as 'distillation makes DINO more prompt-aware'; the comparison is confounded by image quality. The premise test and the teacher reference are missing.",
+     "file": "phaseW/rank/probe.lsf",
+     "fix": "Add a CFG path to the probe (neg_emb + cfg as in phaseW/latent_scorer/gen_latents.py rollout, lines 25-40) and run the teacher at 8 steps w=7 (the training-time teacher) and the base at 28 steps w=7 as the two reference rows; ~2-6 min each for 300 captions."
+    },
+    {
+     "id": "E5",
+     "severity": "medium",
+     "category": "stats",
+     "title": "833 pairs on 300 captions cannot resolve the effects being chased; every naive-vs-ours and per-family contrast is non-significant",
+     "detail": "Binomial SE at n=833 is 0.017; the caption-clustered SE (300 captions, ~2.8 correlated pairs each) is 0.021. Paired on identical captions and noise: rgb naive 0.606 vs ours 0.627, discordant 114/97, McNemar p=0.27 (the margin difference is +0.004, Wilcoxon p=0.025, caption-level paired t p=0.031); latent 0.538 vs 0.537, 114/115, p=1.0; base vs naive rgb 198/164, p=0.083. Per family n=27 (3d_spatial) to 293 (colour), SE 0.03-0.10; all seven per-family deltas are n.s. (colour +0.031 p=0.33, spatial +0.052 p=0.47, verb +0.048 p=0.36, count -0.015, texture -0.037, 3d_spatial +0.074 on 4/2 discordant). With ~25% discordant pairs, SE(diff) = 0.5/sqrt(n): the MDE at 80% power is 0.048 for 833 pairs; detecting 0.03 needs ~2,200 pairs (~800 captions), 0.02 needs ~4,900 pairs (~1,800 captions).",
+     "evidence": "Computed from phaseW/rank/probe/{hp1_naive_s0,hp1_ours_s0,base}.json (identical idx and negatives lists across files, asserted); probe_heldout.py:141-150 pools pairs without clustering; timing from logs/lsf-sd-W-rank-probe-151429.out: 300 captions in ~113 s on one GPU.",
+     "consequence": "The per-family table in REVIEW_CONTEXT (lines 83-84) is noise at this N, and the headline 'ours 0.627 > naive 0.606' is not established at p<0.05 on accuracy. A B1/B2/A vs ours difference of the size seen (B1 rgb -0.014) is undetectable.",
+     "file": "phaseW/rank/probe_heldout.py",
+     "fix": "Raise --n to 1,500-2,000 clean captions (~10-13 min per model), add --noise_seeds 2-4 per caption to average the shared-noise draw, compute accuracy per caption then a caption-level bootstrap CI, and report McNemar/sign p per family plus a family macro-average. Store per-pair records (already done) so future arms are compared paired."
+    },
+    {
+     "id": "E6",
+     "severity": "medium",
+     "category": "eval",
+     "title": "The B1 probe used the raw final checkpoint while the naive/ours references used the 3-checkpoint average",
+     "detail": "logs/lsf-sd-W-rank-probe-151529.out and B1_s0_final.json: ckpt = .../rankB1-hp1-acc4_s0_151302/checkpoint_final.pt (step 3000); the references (151429/151430) loaded checkpoint_avg_last5.pt (average of 2000/2500/final, average_ckpts.lsf via launch_rank.sh:44). Per-checkpoint weight noise is +-0.02 on CompBench, the same order as the differences being read (B1 rgb 0.612 vs ours 0.627).",
+     "evidence": "/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/phaseW/rank/probe/B1_s0_final.json ckpt field; /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/phaseW/rank/probe/hp1_ours_s0.json ckpt field; /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/phaseW/launch_rank.sh:44-45.",
+     "consequence": "B1-vs-ours probe rows are not like-for-like; a -0.014 rgb gap is within checkpoint noise.",
+     "file": "phaseW/rank/probe.lsf",
+     "fix": "Probe the averaged student (checkpoint_avg_last5.pt, produced by the chain's AV job) with rank_head_final.pt (the head has no averaging; it is the final head in every case), and label files by checkpoint type."
+    },
+    {
+     "id": "E7",
+     "severity": "medium",
+     "category": "design",
+     "title": "The reward and the ranking head operate on different inputs of P: one-step x0_hat predictions vs 4-step rollouts",
+     "detail": "The anchor reward (B1's shaped reward included) is computed on P(x0_hat) of the two least-noisy supervised states (train_pilot_frozen_s4j.py:1245-1258), while g is trained on P(z_K) of full 4-step w=1 rollouts (lines 1389-1400) and the probe scores 4-step rollouts. P's positive cosine on rollouts is 0.41 (probe) vs ~0.45 on x0_hat (reward/proj_score in the audit), and P is refreshed only on x0_hat + teacher replay, never on rollouts. So B1 applies a head fit on rollout embeddings to x0_hat embeddings, and the probe's `latent` row is not the reward's operating point.",
+     "evidence": "/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/phaseW/train_pilot_frozen_s4j.py:1245-1258 (reward on x_hat[_order]), 1389-1400 (rank on rollouts), 1505-1528 (refresh on rbuf x0_hat + replay); REVIEW_CONTEXT lines 75-76 (shaped reward drifts down while raw rises).",
+     "consequence": "The observed B1 behaviour (shaped reward 0.43 -> 0.34 while the raw projector score rises) is consistent with g reshaping a rollout-space that the reward states never visit; the 'transfer' path in B1 is not the one the head was trained for.",
+     "file": "phaseW/train_pilot_frozen_s4j.py",
+     "fix": "Either compute the shaped reward on rollout embeddings too (one extra rollout is already paid in the rank block), or add the reward states' x0_hat to the head's training set; in the probe, add a `latent_x0hat` row (P of the one-step prediction from the K=6/7 states of the same z0 chain) so the reward space is probed directly."
+    },
+    {
+     "id": "E8",
+     "severity": "low",
+     "category": "stats",
+     "title": "Per-family accuracies ignore clustering and the family mix is dominated by colour; 3d_spatial has 27 pairs",
+     "detail": "Each caption contributes up to 3 pairs of the same or different families (233 captions with 3 negatives, 67 with 2), and the 'all' accuracy weights families by their frequency: colour 293/833 (35%), count 132, verb 124, spatial 97, texture 81, shape 79, 3d_spatial 27. The summary (probe_heldout.py:141-150) pools pairs, so the 3d_spatial row (SE ~0.10) is uninformative and the 'all' row mostly measures colour edits. The >= 2 negatives filter also selects attribute-rich captions (in a 5k clean sample 39% of captions have 0 negatives, 23% have 1).",
+     "evidence": "/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/phaseW/rank/probe_heldout.py:141-150; family pair counts computed from hp1_naive_s0.json; clean-pool negatives distribution computed with negatives_for over 5,000 held-out captions: {0: 1971, 1: 1154, 2: 356, 3: 1519}.",
+     "consequence": "Family-level conclusions (e.g. 'texture 0.74, verb 0.70') carry +-0.05-0.10 error bars and the 'all' number cannot be compared across probes with different family mixes.",
+     "file": "phaseW/rank/probe_heldout.py",
+     "fix": "Report per-family accuracy with caption-clustered bootstrap CIs, a macro-average over families, and cap pairs per family per caption at 1 when computing the headline; consider sampling the probe stratified by family (the clean pool has ~32k captions with >= 2 negatives, so 300+ per family is available for every family but 3d_spatial)."
+    },
+    {
+     "id": "E9",
+     "severity": "low",
+     "category": "stats",
+     "title": "Three seeds on CompBench cannot resolve the size of effect at stake; state the MDE and use per-prompt rows + more images per prompt",
+     "detail": "A seed-paired t-test with n=3 has df=2 (t_crit 4.30); MDE at 80% power is ~3.1 x sd of the seed-paired difference. The converged-schedule ours-naive gap is +0.0017 (0.4860 vs 0.4877); the constant-LR 3-seed result (+0.0149, p=0.004) implies a seed-paired sd of ~0.002 on averaged models, which would give an MDE of ~0.006, but the documented +-0.02 per-checkpoint swing means sd_d can be 0.005-0.01 for raw finals (MDE 0.015-0.03). The eval generates ONE image per prompt (phaseA_generate.py --n_seeds default 1, seed = --seed + idx shared across models), 2,398 CompBench prompts (val split, 300/category, spatial 298) and 800 GenEval2 prompts; per-prompt scores are saved (compbench_eval.py:367 'per_prompt', geneval2_eval.py:173), so prompt-level paired Wilcoxon/t are available and are the higher-powered test at fixed weights.",
+     "evidence": "/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/exp0/phaseA_generate.py:48-53,137; /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/phaseC/compbench_eval.py:354-368; /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/ablations/phaseN_eval_alignment.lsf:80-83; REVIEW_CONTEXT lines 21-22, 102-104.",
+     "consequence": "A null result for B1/B2/A vs ours at 3 seeds is uninformative unless the MDE is reported; a positive result must survive both the seed-paired test (weights as random) and the prompt-paired test (prompts as random).",
+     "file": "ablations/phaseN_eval_alignment.lsf",
+     "fix": "Always evaluate the averaged checkpoint; pass --n_seeds 4 to phaseA_generate for the final comparison (4x generation time, scoring unchanged in count of prompts if per-prompt scores are averaged first); report the seed-paired difference with its sd and the implied MDE, and the prompt-level paired test on per_prompt rows restricted to the mapped categories."
+    },
+    {
+     "id": "E10",
+     "severity": "medium",
+     "category": "suggestion",
+     "title": "Metrics the final comparison should report, and how CompBench categories map onto negative families",
+     "detail": "(1) Generation-level: rgb pairwise accuracy of each student's own rollouts on clean held-out captions (naive / ours / B1 / B2 / A), paired McNemar per family \u2014 this is P-free and is the direct test of 'prompt-awareness transferred into the generator'; current values naive 0.606, ours 0.627, B1 0.612. (2) Head transfer: rgb_g - rgb per family (does g re-order true DINO features toward the text order); B1 shows -0.005 overall, verb +0.032, count +0.038, texture -0.062, 3d -0.074. (3) Space-shaping: latent_g - latent with the REFRESHED P (E2). (4) Ordering beyond pairs: Kendall tau is only meaningful with a graded target; obtain one by scoring every negative's generation with VQAScore against the POSITIVE caption (t2v_metrics is vendored) \u2014 that also gives a ground truth of contradiction per negative and flags null edits; then report tau between each space's scores and VQAScore over the m prompts, and pooled AUC of margins. (5) Calibration: accuracy in margin deciles and the margin sd \u2014 the head inflates the margin sd 0.032 -> 0.090 (latent) and 0.061 -> 0.093 (rgb) without changing accuracy, so accuracy-at-fixed-quantile is the honest view. (6) CompBench mapping for per-category deltas from per_prompt rows: color -> color, numeracy -> count, spatial -> spatial, 3d_spatial -> 3d_spatial, texture -> texture, shape -> shape, non_spatial -> verb (CompBench non-spatial prompts are actions/interactions, the verb family), complex -> unmapped. Present probe per-family deltas and the mapped CompBench per-category deltas side by side with CIs. (7) Cheap nulls inside the probe: score each rollout against a SHUFFLED u_ref (another caption's photo) \u2014 accuracy must fall to 0.5 \u2014 and against the teacher's 8-step w=7 generation of the positive as a second anchor.",
+     "evidence": "B1_s0_final.json per-family rows; margin sds computed from hp1_naive_s0/hp1_ours_s0/B1_s0_final; alignment.json per-category keys in phaseN/eval_W_CD_dinop_hard-rewRi-s16-hp1_3k-hp1-avg_s0_145253/alignment.json (3d_spatial, color, complex, non_spatial, numeracy, shape, spatial, texture).",
+     "consequence": "Without (1)-(3) separated, a CompBench change cannot be attributed to the head vs the reward vs noise; without (6) the per-family probe cannot be cross-checked against the benchmark it is meant to predict.",
+     "fix": "Extend probe_heldout.py with --noise_seeds, --shuffle_ref, --vqa (t2v_metrics VQAScore of each generation against the positive caption), per-family clustered CIs and a macro average; add a small script that joins per_prompt rows of two evals by prompt text (idx is per-job) and reports paired deltas per mapped category."
+    },
+    {
+     "id": "E11",
+     "severity": "low",
+     "category": "eval",
+     "title": "In-training RGB ranking monitor decodes only the last 8 captions",
+     "detail": "train_pilot_frozen_s4j.py:1471 iterates rank_buf[-8:] for rank/acc_rgb and rank/acc_rgb_shaped every 100 updates, giving values of 0.29-0.96 (REVIEW_CONTEXT line 78); the reward monitor next to it uses rbuf[-32:] (line 1490).",
+     "evidence": "/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/phaseW/train_pilot_frozen_s4j.py:1471,1490.",
+     "consequence": "The only in-training true-feature check of the head is too noisy to notice the rgb_g - rgb null that the probe shows; it cannot serve as an early-stop or sanity signal.",
+     "file": "phaseW/train_pilot_frozen_s4j.py",
+     "fix": "Use rank_buf[-32:] (24 more decodes per 100 updates, ~1.5 s) and log the caption-averaged accuracy; better, run the held-out probe on rank_head_step*.pt from the chain instead of relying on the monitor."
+    }
+   ],
+   "validated": [
+    "3k-pool exclusion is correct: probe_heldout.py:75-77 excludes by caption text and by reference photo; 0 of the 300 probe captions/photos are in phaseN/coco_selection_dinopatch, and the 118k cache has exactly one caption per photo (113,948 distinct references), so caption-level exclusion equals photo-level exclusion.",
+    "Reference embeddings are indexed correctly: ref_emb_118k.pt is a {cache idx -> fp16 unit vector} dict built by build_ref_emb.py with the offline scorer's preprocessing (512x512 bicubic squash, HF processor resize 256 / crop 224, CLS dropped, patch mean, L2-norm); probe_heldout.py:126 indexes it by the same idx, and OnlineScorer.embed (train_pilot_frozen_s4j.py:102-107) applies identical preprocessing to the decoded rollouts, so the rgb space equals the offline scorer.",
+    "Pairing is exact: z0 = randn(1,...) seeded by the caption idx and expanded over the m prompts (probe_heldout.py:123-124), so every model sees the same noise; the three probe JSONs have identical idx lists and identical negatives (asserted), and negatives_for is deterministic (no RNG in build_negatives.py:303-329), so the probe's negatives follow exactly the training rules.",
+    "The probe's sampler matches the eval generator at cfg 1: student_rollout (rank_utils.py:58-82) and euler_cfg_sample (exp0/generate_candidates.py:69-99) both call scheduler.set_timesteps(4), use z <- z + (sigma_{k+1} - sigma_k) v with one conditional pass (use_cfg = cfg > 1.0 is False), differing only in the final bf16 cast; rollout_schedule restores the 8-step schedule afterwards.",
+    "Pairwise accuracy and margin are computed as claimed (probe_heldout.py:141-150: strict positive > negative per pair, per family via the negative's family tag; margin = positive - mean(negatives)); the summary numbers reproduce from the stored per-caption records, and the REVIEW_CONTEXT per-family table for ours s0 matches the JSON.",
+    "The head is applied consistently: the probe applies g to both the generation embedding and u_ref (probe_heldout.py:133) exactly as the trainer does (train_pilot_frozen_s4j.py:1400, 1256), loads the 'head' key the trainer saves (lines 1666, 1680), and an absent head is the identity (RankHead's zero-init last layer), so latent == latent_g and rgb == rgb_g in the identity probes (verified to 1e-6).",
+    "Eval chain settings for the 3k runs are right: launch_rank.sh:43-45 and launch_hp1.sh:31-33 pass EVAL_CFG=1.0 (guidance-distilled students; the LSF's default 7.0 would be wrong for these) and EVAL_MIN_STEP=3000 (the LSF's default 6000 would reject every 3k checkpoint); average_checkpoints.py:45 stamps the averaged file with the max member step so the step guard passes; the ledgers show train -> eval-final, train -> average -> eval-avg dependencies for every arm.",
+    "The alignment eval is what it claims: phaseN_eval_alignment.lsf generates at 4 steps, 1 image per prompt with seed = --seed + idx shared across models (phaseA_generate.py:137), 2,398 CompBench val-split prompts (300 per category, spatial 298) and 800 GenEval2 prompts; compbench collect uses --routing_split val, matching the pool's split=val (pool manifest configuration); per-prompt rows are saved (compbench_eval.py:367, geneval2_eval.py:173) so prompt-level paired tests are feasible; the pool manifest hashes are re-verified before generation.",
+    "early_audit.py windows are sane: window_mean averages (step-100, step] per key, filters 'killed-moved' runs, and does not pass keys= to scan_history (which would drop rows lacking rank/* keys on the reference runs).",
+    "The replay set is drawn from the projector's train split only (all 2,000 replay e_ref vectors match ref_emb_118k entries whose manifest split is 'train'), so the replay never touches the 3k pool; the projector's test split is exactly the 3k pool (manifest.jsonl: 22,000 train / 2,000 val / 3,000 test), consistent with the README's claim that P never saw the training captions."
+   ],
+   "summary": "The evaluation machinery is mostly sound (3k exclusion, pairing by idx-seeded noise, DINO preprocessing, eval CFG/min-step, averaged checkpoints, per-prompt rows) but the held-out probe has three problems that undermine what it can conclude. (1) It leaks: 70/300 probe captions (23%) are the projector's own train/val captions and 9 are in the replay set that P is re-fit on every 100 updates; a clean pool of 86,948 captions exists, so the fix is one filter. (2) The trainer never saves the refreshed projector, so the probe's latent/latent_g rows for trained heads apply g to the pretrained P, not the space g was trained on. (3) Most importantly, the projector space itself is near chance at ordering positive vs edited prompts (0.50-0.54 vs 0.57-0.63 for true DINO; per-pair margin correlation 0.24-0.33, sign agreement 0.57), and the first trained-head probe shows the head raises latent_g to 0.585 while rgb_g equals rgb (0.607 vs 0.612) \u2014 the shaping never reaches true features. Statistically, 833 pairs give an MDE of ~0.05 on paired accuracy; naive vs ours rgb (+0.020, McNemar p=0.27) and every per-family delta are non-significant, and the B1 probe compared a raw final checkpoint against averaged references. The base row (4 steps, w=1, positive score 0.36) is a floor, not a premise test. Recommended: filter the manifest, save P, probe on 1,500-2,000 clean captions with 2-4 noises and clustered CIs, add teacher/base-CFG reference rows, a shuffled-reference null and VQAScore-graded negatives, train/probe the head on true DINO features, and cross-check per-family probe deltas against per-category CompBench deltas (color->color, numeracy->count, spatial->spatial, 3d_spatial->3d_spatial, texture->texture, shape->shape, non_spatial->verb) from per_prompt rows with the seed-paired MDE stated."
+  },
+  {
+   "summary": "Read-only review of phaseW/rank (B1/B2/A on top of \"ours\"). Code: the gradient paths, RNG isolation, DDP handling, scheduler restore, checkpoint/hook interplay and the probe's held-out selection are correct (validated list below). The problems are in what the arms can actually test. (1) Both B arms train the head g on the latent projector's space, where the held-out pos>neg signal is at chance (probe latent 0.499/0.538/0.537 vs true DINO 0.565/0.606/0.627), so the 0.65-0.74 training accuracy must be caption memorisation or a rule-vocabulary shortcut; the trained heads have not been probed held-out, and when they are, the probe will apply g on the PRE-TRAINED projector while g was fit on the refreshed one (never saved). (2) The trainable head silently re-scales the shaped reward: the reward-gradient share tuned to ~0.3 at step 0 rises to 0.8-2.9 by steps 1000-2000 in B1 and A with cos(CD,reward) of -0.6 to -0.8 (logs 151302/151316), while B2's raw reward stays at 0.2-0.5; with clip=1 always active this changes B1/A's update direction independently of prompt-awareness. (3) B2's alignment target is g(P(z_K)) of the student's own output, read at sigma=0.009 (the last of the 4-step rollout), so the projector fits it in 250 updates and no ranking information reaches the student; B2 is 'ours + a self-alignment regulariser at sigma~0'. (4) A solves the ranking on training captions by step ~1500 (rank_loss 0.000, margin 0.38, acc 0.95) with an unbounded push-away on the negatives' generations and no monitor of their quality. (5) B1 s0 raw-final CompBench is 0.4868 vs ours-raw 0.4880 (-0.0011 +- 0.0025 per-prompt paired, p=0.65) and naive-raw 0.4848 (+0.0020 +- 0.0032): no effect at seed 0; the same-run avg-vs-raw checkpoint noise on this schedule is only +-0.0015, and ours-vs-naive itself is +0.0017 to +0.0031 (n.s. by t; the Wilcoxon p<0.01 comes from near-zero-variance categories). Negatives: 41% of 3-negative captions have three edits of the same span (near-duplicate images), 14% of targets are weak contradictions ('far from', 'dropping'), the 'shape' family is 86% size antonyms while CompBench shape is geometry, and the spatial family is 87% 'far from'/'under' while CompBench spatial is 71% left/right/top/bottom. DINO's own invariances (colour jitter/grayscale, horizontal flip, patch-mean pooling) cap the colour and left/right signal at chance (probe colour 0.49-0.59, count 0.57), so no head can recover it. Verdict: the O1 anchor logic is sound where DINO already carries a signal (texture 0.74-0.78, verb 0.65-0.70), but as implemented the campaign cannot separate 'head learned composition' from 'head memorised/shortcut' nor 'student improved' from 'reward moved'. Decisive next steps, cheapest first: an offline head study on cached rollouts (P vs true-DINO features, shuffled labels, anchor-swap null, family-held-out) plus the trained-head/A-student held-out probes with n>=1000 and a VQAScore ceiling on the negatives (all <1 GPU-h); then, only if the head shows held-out signal, frozen-head B1 with a reward-scale guard, B2 aligned at a noisy state to g(u_ref), and COCO-annotation-verified count/spatial negatives. Falsifier: trained-head held-out rgb_g/latent_g <= raw + 0.02 (or equal to the anchor-swap null), and B1/A/B2 <= ours + 0.01 on the family-matched CompBench categories over 3 seeds.",
+   "validated": [
+    "Gradient paths are as claimed: the head's loss uses _e.detach() (train_pilot_frozen_s4j.py:1400-1402) so only g trains; Variant A's ranking term and the shaped reward use head_apply(..., False), which substitutes detached parameters via torch.func.functional_call (rank_utils.py:39-45), so the student's gradient reaches P and the rollout chain but never g (train_pilot_frozen_s4j.py:1256, 1406); B2's target is g(P(z_K)).detach() (line 1421) and the hook's feature path carries grad to student blocks 1-8 and align.proj.",
+    "DDP handling: rollouts run on every rank on every micro-step (rank_every=1), captions without negatives roll out the positive alone with a zero loss so forward counts match (lines 1391-1394, 1401, 1407); head and align.proj gradients are all-reduced and averaged then clipped before their optimizer steps (lines 1460-1464); identical init via torch.manual_seed(seed+424242)+broadcast (887-889, 893-896). Multiple DDP forwards before one backward are legal with find_unused_parameters=False (AccumulateGrad fires once per param); runs are alive past step 1500 with 74.4 GB.",
+    "RNG isolation: rollout noise comes from a private generator keyed by (seed, rank, micro) (rank_utils.py:163-166); the head/align inits save and restore the global CPU+CUDA RNG (lines 884, 898); target_map_sha256 is identical (dbd0d57b...) in 151302, 151316, 151399, 151328 and the control 145176, so caption order and candidate selection are matched across all arms at the same seed.",
+    "Scheduler state: rollout_schedule sets 4 steps then restores K=8 (rank_utils.py:48-55) and rollout_states re-sets K on every call (train_pilot_frozen_s4j.py:59), so the CD branch always reads the 8-step schedule; the rollout sigmas [1.0, 0.858, 0.602, 0.009, 0.0] are the pipeline's own 4-step schedule that the eval also uses.",
+    "Checkpoint/hook interplay in B2: rank_head_step*.pt saves head + align_proj + rank args (lines 1666-1668, 1680-1682); the AlignHook only stores while armed so log_student_samples and checkpoint saves are unaffected; features() refuses a no-grad capture (rank_utils.py:134-135) and diffusers 0.32.2 uses non-reentrant checkpointing, so the captured block-8 output is differentiable (confirmed by the runs not raising).",
+    "Reference embeddings: ref_emb_3k.pt and ref_emb_118k.pt are dicts keyed by caption idx (3000 and 113948 entries), so ref_emb[int(idx)] in the trainer (line 1247, 1397) and the probe (probe_heldout.py:126) is a correct join; all 3000 pool captions appear in the 118k cache with identical prompt and reference; the 118k cache has exactly one caption per photo, so excluding by reference path is exact.",
+    "Probe held-out selection: excludes the 3k pool by prompt and by photo, uses the same negatives_for() rules and m=3, seeds the shared noise by caption idx so the three probe runs score identical idx sets (verified) and can be compared paired; identity head gives rgb_g == rgb and latent_g == latent exactly (base 0.565/0.499), as it should.",
+    "Run arguments: every rank arm shares the control's hyperparameters (cosine, lr 1e-5, warm-up 150, window 0.5,0.9 -> K={4..7}, accum 4, refresh 100/16, lambda 80) and differs only in rank_*/align_* flags and reward_grad_probe_every=500 (a rank-0 autograd.grad diagnostic that does not touch the update); the smoke-based lambda calibration reproduces at step 0 (rank ratio at w=1 0.09-0.46 -> x1.3; align 0.0036-0.005 -> x60 = 0.13-0.33; reward 0.25-0.33).",
+    "The claimed B2 alignment saturation is real: align_loss 0.98 -> 0.245 at step 50 -> 0.08 by 250 -> 0.05-0.07 thereafter (151399, 151328); the claimed shaped-space training accuracy is real: B1 acc_shaped 0.55 -> 0.74 by step 2000 with acc_raw flat at 0.50-0.60 (151302).",
+    "CompBench eval chain: per-prompt scores are stored (per_prompt list, 300 per category, 2398 total), so prompt-paired tests are possible; average_checkpoints.py averages student checkpoints only (the head is not averaged, which is correct); checkpoint noise on the converged schedule is small: ours avg-vs-raw -0.0001 +- 0.0015, naive +0.0014 +- 0.0018, so the +-0.02 figure from the constant-LR schedule no longer applies.",
+    "Negatives builder: nouns are preserved in every edit (same-object rearrangements as the O1 condition requires), article agreement and plural handling are correct in the 30 sampled captions, and no paraphrase/noun/nonsense edits of the audited kind appeared in the sample."
+   ],
+   "findings": [
+    {
+     "id": "F1",
+     "severity": "high",
+     "category": "design",
+     "title": "The head is trained on the projector space, where the held-out pos>neg signal is at chance; its 0.65-0.74 training accuracy is unexplained without a held-out probe",
+     "detail": "Both B arms and A fit g on P(z_K) (train_pilot_frozen_s4j.py:1396-1400). The probe shows P-space pairwise accuracy of 0.499 (base), 0.538 (naive), 0.537 (ours) on 300 unseen captions, with per-family values at or below chance (count 0.42-0.48, spatial 0.46 for the students, colour 0.48-0.56), while true DINO on the same rollouts is 0.565/0.606/0.627. The head sees only the 768-d embedding and u_ref, never the prompt, so on a channel whose ordering information is nil on unseen captions it can only reach 0.65-0.74 on the 1,816 training captions (each visited 16 times) by memorising caption-specific directions or by learning that images with rule-vocabulary content (red/brown/blue, three/four/five, 'far from') are negatives. The latter shortcut transfers to the held-out probe because the probe uses the same rules.",
+     "evidence": "phaseW/rank/probe/{base,hp1_naive_s0,hp1_ours_s0}.json summaries (latent 0.499/0.538/0.537; rgb 0.565/0.606/0.627); logs/lsf-sd-W-train118k-151302.out '[rank] step 2000 acc_shaped=0.742 acc_raw=0.555'; negatives_3k.json target vocabulary (red 224, brown 212, blue 193; three 235, four 203, five 127; 'far from' 358 of 541 spatial).",
+     "consequence": "Any shaped-space accuracy gain can be memorisation or a vocabulary prior rather than prompt-awareness; nothing in the current plan distinguishes them.",
+     "fix": "P0, <1 GPU-h total: (a) run probe_heldout.py with --head for B1/A/B2 rank_head_final.pt (10 min each) and report latent_g, rgb_g per family; (b) anchor-swap null: re-run the probe saving e_lat/e_rgb per generation and score each caption's pos/neg against a permuted caption's u_ref; if the trained head still orders pos>neg at the same rate it learned an anchor-independent content prior; (c) offline head study on cached rollouts of the ours student (1,816 captions x 4 prompts x 2 noises, ~15 min on 1 GPU): train heads on P vs true-DINO features, with true vs shuffled positives, and family-held-out (train on 6 families, test on the 7th), then probe held-out. This answers 'can any head learn composition from these features' without touching the student.",
+     "file": "phaseW/train_pilot_frozen_s4j.py:1396-1401; phaseW/rank/probe_heldout.py:132-133"
+    },
+    {
+     "id": "F2",
+     "severity": "high",
+     "category": "bug",
+     "title": "The refreshed projector is never saved, so the planned probe of the trained heads applies g to the wrong P",
+     "detail": "P is refreshed every 100 updates for 16 steps (lines 1505-1528; 30 refreshes per run) and broadcast, but only rank_head_*.pt (head, align_proj) and checkpoint_*.pt (student) are written (lines 1663-1668, 1677-1682); no proj.state_dict() is saved anywhere (grep confirms). The head g was fit on P_t(z_K) with the drifting projector, while probe_heldout.py loads phaseW/latent_scorer/projector/projector.pt (line 56, 104), i.e. P_0.",
+     "evidence": "grep -n 'proj.state_dict' phaseW/train_pilot_frozen_s4j.py returns nothing; probe_heldout.py:56 default --proj is the pretrained file; checkpoints/phaseW/phaseW_CD_dinop_hard_3k-rewRi-s16-rankB1-hp1-acc4_s0_151302/ contains only checkpoint_*.pt and rank_head_*.pt.",
+     "consequence": "A chance-level latent_g for a trained head cannot be attributed to memorisation vs the P mismatch; rgb_g is P-free but g was never trained on DINO's output distribution, so it is a transfer test rather than the quantity the loss optimised.",
+     "fix": "Save proj.state_dict() next to rank_head_*.pt (10.7M params, trivial) and give the probe a --proj pointing at it; for the three running seeds, the drift can be bounded post hoc by refitting P on the same schedule from the logged refresh losses, but the honest path is to re-probe with the saved P on any re-run. Until then, treat latent_g of trained heads as uninterpretable and rely on rgb_g plus the offline head study of F1.",
+     "file": "phaseW/train_pilot_frozen_s4j.py:1663-1682; phaseW/rank/probe_heldout.py:56,104"
+    },
+    {
+     "id": "F3",
+     "severity": "high",
+     "category": "bug",
+     "title": "The trainable head inflates the shaped reward's gradient 3-8x and turns it against the CD gradient, so B1 and A no longer run at the calibrated 20-30% reward share",
+     "detail": "lambda=80 was tuned in the raw space (share 0.25-0.33 at step 0). With g applied to both sides and renormalised, enlarging the pos-neg margin amplifies directions roughly orthogonal to u_ref, which makes cos(g(P(x_hat)), g(u_ref)) far more sensitive to x_hat. The reward-probe lines in B1 show ratio 0.13-0.23 at step 500, 0.60-0.97 at 1000, 0.40-1.93 at 1500 and 0.76-2.28 at 2000, with cos(CD,reward) of -0.70/-0.63 at 1500 and -0.65/-0.81 at 2000; A shows 0.76-1.17 at 1000 and up to 2.90 at 1500. B2, whose reward stays raw, sits at 0.15-0.54 throughout. Because the pre-clip norm is 120-180 and clip=1 is always active, a reward term of comparable norm and negative cosine dominates the direction of every update. The same mechanism explains the shaped reward drifting down (0.43 -> 0.34) while the raw projector score rises: the head shrinks all cosines to widen a margin, and the student chases a target that keeps moving away.",
+     "evidence": "logs/lsf-sd-W-train118k-151302.out lines '[reward-probe] step 1500 ... ratio=1.9316 cos(CD,reward)=-0.6959' and 'step 2000 ... ratio=2.2808 cos=-0.6519'; 151316 'step 1500 ... ratio=2.9034'; 151399/151328 reward-probe ratios 0.15-0.55 at 500-1500.",
+     "consequence": "Any B1/A difference from ours (including B1 s0's -0.001) is confounded with an uncontrolled, growing, anti-distillation reward push that has nothing to do with prompt-awareness; fidelity (not measured in the eval chain) is at risk.",
+     "fix": "For any re-run: (a) apply g only to the anchor side, r = <P(x_hat), g(u_ref)>, so the student's reward gradient keeps P's scale while g still reweights the space; or (b) hold the share fixed by scaling lambda with a running estimate of ||grad reward||/||grad CD|| from the existing probe (already computed every 500 updates; make it every 50); or (c) bound the head (residual scale 0.1 or spectral norm on fc2). Also log reward/grad_ratio and reward/grad_cos as primary health metrics and add a fidelity number (CMMD/FID on the qual subset) to the eval chain for B1/A.",
+     "file": "phaseW/train_pilot_frozen_s4j.py:1253-1259; phaseW/rank/rank_utils.py:27-36"
+    },
+    {
+     "id": "F4",
+     "severity": "high",
+     "category": "design",
+     "title": "B2's alignment is self-referential and read at sigma=0.009, so it cannot transmit the ranking to the student",
+     "detail": "The align target is sg[g(P(z_K))] where z_K is the student's own output of the same forward (line 1421), and the hooked forward is the LAST rollout step (grad_last, rank_utils.py:71-79), whose input sigma is 0.009 on the 4-step schedule ([1.0, 0.858, 0.602, 0.009, 0.0]). Block-8 tokens at sigma=0.009 are a deterministic function of an essentially clean latent, and P(z_K) is another function of nearly the same latent, so align.proj (2048-wide MLP, lr 1e-4) simply learns P\u2218(block-8 embedding)^-1: 0.98 -> 0.08 in 250 updates, then flat. Neither u_ref nor the pos/neg distinction enters the alignment loss; the only 'prompt-aware' content is g's geometry, which per F1 is unverified. REPA's gain comes from aligning NOISY-state features to an EXTERNAL semantic target (the real image); both ingredients are absent.",
+     "evidence": "train_pilot_frozen_s4j.py:1419-1422; rank_utils.py:58-82 (grad_last only on k == n-1); logs 151399 '[rank] step 250 ... align=0.0845', 151328 'step 250 align=0.0748'; '[rank] negatives ... rollout sigmas [1.0, 0.858, 0.602, 0.009, 0.0]'.",
+     "consequence": "B2 is 'ours plus a self-alignment regulariser at sigma~0'; a null result says nothing about representation transfer, and a positive result could not be attributed to prompt-awareness.",
+     "fix": "If B2 is re-run: align at a noisy rollout step (sigma 0.858 or 0.602; add a grad_step argument) and use an external target: g(u_ref) for the positive prompt's forward (REPA-proper with the real photo), and, to carry the text order without differentiable sampling, a ranking loss on <proj(h_j), g(u_ref)> over the m prompts' noisy-state features. Cost unchanged (~4 s/update, 13 GPU-h per seed). Alternatively drop B2 and spend the budget on F9/F10.",
+     "file": "phaseW/train_pilot_frozen_s4j.py:1419-1432; phaseW/rank/rank_utils.py:58-82"
+    },
+    {
+     "id": "F5",
+     "severity": "medium",
+     "category": "design",
+     "title": "Variant A solves the training ranking by step ~1500 with an unbounded push-away on the negatives' generations and no monitor of their quality",
+     "detail": "By step 1500 the rank-probe reports rank_loss=0.0000, ||grad rank||=0.011-0.021, acc=1.00, and the training window shows acc_shaped 0.954 with margin_shaped +0.38 (raw margin only +0.04, acc_raw 0.77). The loss -log softmax(R/kappa)[0] pushes each negative's rollout away from g(u_ref) with no lower bound except CD on the positive caption; the negatives' prompts are never supervised by CD, so the cheapest solution is to make rule-vocabulary prompts ('a purple bus', 'three men', 'far from') produce images unlike photos. CompBench prompts are exactly that vocabulary. The only in-training image check decodes 8 captions (acc_rgb 0.29-0.96, uninformative) and never scores negatives' images against their own prompts.",
+     "evidence": "logs/lsf-sd-W-train118k-151316.out: '[rank-probe] step 1500 ||grad rank||=0.0110 ... rank_loss=0.0000 acc=1.00'; '[rank] step 1550 loss=0.3045 acc_shaped=0.954 acc_raw=0.774 margin_shaped=+0.3825 margin_raw=+0.0411'.",
+     "consequence": "Half of A's schedule runs with an inactive ranking term (it is B1 plus a saturated head), and a CompBench drop in colour/numeracy for A would be the degenerate solution rather than evidence against the hypothesis; a gain could come from the positive-side push alone (which is the reward, already in ours).",
+     "fix": "Cheap monitors first (no extra training): every 100 updates decode 32 captions' rollouts and log CLIP/VQAScore of each NEGATIVE generation against its OWN negative prompt and against the positive prompt, plus the positive's true-DINO score. Then: an argmin arm (sign-flipped ranking, 27 GPU-h/seed) only if A shows a gain, to test direction-specificity; a kappa anneal or margin loss to avoid saturation is second-order until F1 shows the ranking generalises.",
+     "file": "phaseW/train_pilot_frozen_s4j.py:1405-1416, 1465-1477"
+    },
+    {
+     "id": "F6",
+     "severity": "high",
+     "category": "stats",
+     "title": "B1 s0 shows no effect, the baseline 'ours' effect has vanished on this schedule, and the pooled Wilcoxon p-values are misleading",
+     "detail": "Per-prompt paired CompBench (2,398 prompts): B1-raw 0.4868 vs ours-raw 0.4880 = -0.0011 +- 0.0025 (t=-0.46, p=0.65); vs naive-raw +0.0020 +- 0.0032. Ours-vs-naive on the converged schedule is +0.0017 (avg) / +0.0031 (raw), t 0.5-1.0. The Wilcoxon signed-rank p-values (0.003, 0.0006, 0.004) are driven by categories with near-zero variance and tiny consistent shifts (non_spatial +0.0006 +- 0.0007, complex +0.005 +- 0.004), not by compositional categories (spatial -0.027 +- 0.015, numeracy +0.016 +- 0.012). Same-seed per-prompt SE is ~0.003; checkpoint noise (avg vs raw) is ~0.0015; between-seed variance on this schedule is unknown until seeds 1-2 finish, and the 2 GPU x accum 8 controls (151349, 151357, 151361, 151403) and B2 s0 (151399) use a different DistributedSampler split, different micro counters (hence different rollout noise) and different delta_rng streams than the 4x4 arms, so 'seed-paired' comparisons involving them are unpaired in data order.",
+     "evidence": "Computed from phaseN/eval_W_*_{145250,145251,145252,145253,151303}/compbench_scores/*/scores.json per_prompt lists; train_pilot_frozen_s4j.py:607 (delta_rng = seed + rank*1009), 746-751 (sampler by world), rank_utils.py:165 (noise by rank, micro).",
+     "consequence": "With 3 seeds and an unpaired-in-order control set, the minimal detectable effect on the CompBench mean is roughly 0.01-0.015; B1's true effect at seed 0 is within +-0.005 of ours. A pooled Wilcoxon 'significant' result would be reported for shifts of 0.001 in categories the mechanism cannot touch.",
+     "fix": "Pre-register the primary endpoint as the family-matched categories (color, texture, 3d_spatial, numeracy) with per-category paired t and a category-clustered test on the pooled mean; report effect sizes with per-prompt SEs; state the MDE once the s1/s2 controls land; do not label 2x8-vs-4x4 contrasts as seed-paired. GenEval2 stays as the evaluator-disjoint check.",
+     "file": "phaseW/rank_jobs.txt; phaseW/hp1_jobs.txt; phaseW/rank/early_audit.py"
+    },
+    {
+     "id": "F7",
+     "severity": "medium",
+     "category": "negatives",
+     "title": "Negatives: 41% of three-negative captions edit the same span three times, 14% of targets are weak contradictions, and the shape/spatial families do not match CompBench's vocabulary",
+     "detail": "Of 929 captions with 3 negatives, 380 (40.9%) have all three from the same span (two -> three/four/five; blue -> green/yellow/purple), which are near-duplicate images and give the softmax ~1.5 effective negatives while over-weighting count edits. 536 targets (13.8%) are in a weak-contradiction set ('far from' 358, 'dropping' 121, 'ignoring', 'looking away from', 'resting'): a T2I model largely ignores 'far from', so the generation does not differ and the label is noise for the head. The 'shape' family is 86% size antonyms (large->small 142, small->big 100, little->big 36; only ~30 true shapes) while CompBench shape is geometry (spherical, rectangular, teardrop, pyramidal...). The spatial family is 66% 'next to/near -> far from' and 21% 'on top of -> under', with ~1% left/right, while CompBench spatial is 71% left/right/top/bottom (55/55/52/51 of 298) and 31.8% of those prompts are gated to zero by the evaluator's vocabulary. Count sources are 'two' in 452 of 631 cases; CompBench numeracy uses one (127) as often as four (163). Colour, texture and 3d_spatial map well.",
+     "evidence": "negatives_3k.json analysis: same-span triplets 380/929; top edits 'next to -> far from' 257, 'standing -> sitting' 223, 'two -> three' 207; phaseFP/eval_pool_101203/compbench_prompts.json relation counts.",
+     "consequence": "The families with the most negatives (colour 32%, verb 17%, count 16%) are the ones where DINO's signal is weakest or the contradiction is weakest, and the CompBench categories most likely to move (shape, spatial) are not what the negatives train.",
+     "fix": "CPU-only, P1: cap one negative per span; drop size antonyms and 'far from'/'dropping' targets unless a VQAScore ceiling (F8) shows their generations differ; build count and left/right/top/bottom negatives from COCO instances annotations (boxes and per-category counts exist for every 3k photo), which guarantees the photo contradicts the negative and closes the spatial/numeracy vocabulary gap; LLM-written negatives are only useful with a VLM check against the photo (one-off, ~1 GPU-h).",
+     "file": "phaseW/rank/build_negatives.py:194-226 (count), 227-239 (shape), 270-282 (spatial); phaseW/rank/negatives_3k.json"
+    },
+    {
+     "id": "F8",
+     "severity": "high",
+     "category": "suggestion",
+     "title": "Measure the ceiling first: VQAScore of positive vs negative generations tells you whether the images differ at all, and by family",
+     "detail": "Raw DINO orders pos>neg at only 0.57-0.63 held-out. Two explanations: DINO cannot see the difference, or the 4-step w=1 student ignores the edited word so the images are the same. Scoring each held-out generation with VQAScore against the positive caption (and the negative against its own prompt) separates them: if VQAScore(neg-gen | c+) ~ VQAScore(pos-gen | c+) for a family, no anchor-based ranking can carry signal for that family and it should be dropped from training. Base-model within-caption rgb range is 0.13 vs 0.085 for the students, i.e. the distilled students already make the prompts' generations MORE similar to each other.",
+     "evidence": "probe JSONs: within-caption rgb range mean 0.1316 (base) vs 0.0854/0.0866 (naive/ours); per-family rgb (ours): colour 0.59, count 0.57, shape 0.61, spatial 0.63, 3d 0.63, verb 0.70, texture 0.74.",
+     "consequence": "Without the ceiling, a null head result cannot be attributed to the representation vs the generator, and the O1 escalation path in the design note cannot be triggered rationally.",
+     "fix": "P0, ~10 min on 1 GPU for 1,200 generations (t2v_metrics is vendored): add VQAScore columns to probe_heldout.py records; report per family the fraction of pairs where the negative's image actually contradicts c+ (VQAScore drop > 0.1). Use that fraction to weight or filter families in the next negatives file.",
+     "file": "phaseW/rank/probe_heldout.py:119-137"
+    },
+    {
+     "id": "F9",
+     "severity": "high",
+     "category": "suggestion",
+     "title": "Controls that separate 'evaluator moved' from 'student improved': frozen head, shuffled-label head, and a bigger probe; kappa->inf is redundant with ours",
+     "detail": "kappa -> infinity or lambda_rank = 0 with an identity head is bit-for-bit 'ours' (the no-grad rollouts do not touch the student or the RNG), so it needs no run. The informative nulls are: (i) B1 with the head trained on PERMUTED positives (the positive designated at random among the m prompts): same moving-reward dynamics and F3 gradient inflation, zero compositional information; if it matches B1, B1's effect is the artifact; (ii) B1 with a head trained offline (F1c) then FROZEN (or frozen after 500 updates): a stationary shaped reward whose lambda can be calibrated once; (iii) the A student probed with the identity head: if A's rollouts rank held-out pos>neg in RAW DINO above ours' 0.627, the student itself became prompt-discriminative regardless of the head. The probe at n=300 has SE ~0.02 (paired ours-naive rgb +0.023 +- 0.020, t=1.2), too coarse for the +-0.02 differences at stake.",
+     "evidence": "train_pilot_frozen_s4j.py:1379-1443 (rollouts never enter the student's graph in head mode); probe paired delta computed from probe/hp1_{naive,ours}_s0.json records.",
+     "consequence": "Without (i)-(iii) a positive B1/A result cannot be attributed, and without a larger probe the representation claim cannot be resolved.",
+     "fix": "Priority order and cost on 4xH100: probe n=1,000-1,500 with trained heads and the A student, 40 min on 1 GPU (P0); shuffled-label B1, 13 GPU-h/seed (P1, run only if B1 or A beats ours by > 0.01 at 3 seeds); frozen-head B1, 13 GPU-h/seed (P1, the cleanest version of the idea); argmin A, 27 GPU-h/seed (P2).",
+     "file": "phaseW/launch_rank.sh; phaseW/rank/probe.lsf"
+    },
+    {
+     "id": "F10",
+     "severity": "medium",
+     "category": "suggestion",
+     "title": "Train the head on true DINO features (decode is cheap) or on features that retain colour and layout; DINO's invariances cap colour and left/right at chance",
+     "detail": "DINOv2 is trained with colour jitter, random grayscale (p=0.2) and horizontal flips, and the scorer mean-pools patches, so colour, mirror and layout information is largely removed before any head sees it; a head cannot recover it. This matches the probe (colour 0.49-0.59, count 0.57, spatial 0.58-0.63) and the repo's earlier within-prompt result for DINO. Training the head on P makes it worse still (P at chance). The repo already established that VAE decode costs ~61 ms and that the exact decode+DINO reward beats the projector reward at 3k and 118k.",
+     "evidence": "probe per-family rgb/latent tables; memory notes 'decode is cheap' and 'exact reward beats argmax'; OnlineScorer patch-mean (train_pilot_frozen_s4j.py:103-107).",
+     "consequence": "For the two CompBench categories that matter most to the paper (colour, spatial), the design has a structural ceiling independent of the ranking loss.",
+     "fix": "P1: in the offline head study (F1c) compare heads on (a) P(z_K), (b) DINO patch-mean of decoded z_K, (c) DINO patch tokens with a small attention head (keeps layout/count), (d) SigLIP/CLIP image embeddings as the anchor space (colour-sensitive by construction). If only (c)/(d) show held-out signal, the honest framing is that prompt-awareness comes from the feature choice, not from bending DINO. For a training arm, pair the head with --reward_mode rgb (exact decode+DINO reward, ~1.3x cost) so the head and the reward live in the same space; cost ~17 GPU-h/seed for a B1-style run.",
+     "file": "phaseW/train_pilot_frozen_s4j.py:86-107, 128-135"
+    },
+    {
+     "id": "F11",
+     "severity": "low",
+     "category": "eval",
+     "title": "Probe captions overlap the projector's pretraining split and the probe requires >=2 negatives",
+     "detail": "61 of the 300 probe captions are in P's train split and 9 in its val split (manifest.jsonl); the exclusion covers only the 3k pool. This does not leak into the head (trained on the 3k test split only) and is paired across models, but the 'P at chance held-out' statement is slightly optimistic for P (it is at chance even partly in-sample, which strengthens F1). The --min_negs 2 filter biases the probe toward captions with more editable spans than training (>=1).",
+     "evidence": "phaseW/latent_scorer/manifest.jsonl split field; probe_heldout.py:75-86.",
+     "consequence": "Absolute P numbers are not strictly held-out; comparisons between models remain valid.",
+     "fix": "Add the projector's train/val idx to the exclusion set (one line) and report the probe with min_negs 1 as well.",
+     "file": "phaseW/rank/probe_heldout.py:75-86"
+    },
+    {
+     "id": "F12",
+     "severity": "low",
+     "category": "eval",
+     "title": "In-training true-DINO monitors are too small to be informative, and rank/* metrics are rank-0's shard only",
+     "detail": "The RGB monitor decodes the last 8 buffered captions (acc_rgb swings 0.29-0.96) and the reward hacking monitor uses 32 predictions; rank_stats accumulate per rank but only rank 0's are logged (1/4 of the data). Decode is ~61 ms/image, so 64 captions x 4 prompts every 200 updates costs ~20 s.",
+     "evidence": "train_pilot_frozen_s4j.py:1437-1440 (rank_buf capped at 16), 1471 (rank_buf[-8:]), 1478 (is_main logging of local rank_stats).",
+     "consequence": "The one fixed evaluator available during training (true DINO) cannot be read, so 'student improved' cannot be tracked in-run.",
+     "fix": "Raise rank_buf to 64 and monitor all of it every 200 updates; all-reduce the rank_stats sums before logging.",
+     "file": "phaseW/train_pilot_frozen_s4j.py:1437-1485"
+    }
+   ]
+  }
+ ],
+ "verdicts": [
+  {
+   "refuted": false,
+   "confidence": 0.9,
+   "reason": "Every cited fact reproduces. (1) Hook placement: phaseW/rank/rank_utils.py:70-79 sets `last = k == n-1`, enables grad only when `grad or (grad_last and last)`, and calls `hook.arm()` only on that last forward; the trainer passes `grad_last=(align is not None), hook=align` (train_pilot_frozen_s4j.py:1393-1394). There is no flag to arm it elsewhere (only --align_lambda/--align_layer/--align_lr exist, lines 571-573). (2) Sigmas: loading the SD3.5-medium FlowMatchEuler scheduler from the run's HF cache (shift 3.0) with set_timesteps(4) gives sigmas [1.0, 0.8577, 0.6022, 0.0089, 0.0], timesteps [1000, 857.69, 602.15, 8.93]; the run log logs/lsf-sd-W-train118k-151399.out line 9 prints the same `rollout sigmas [1.0, 0.858, 0.602, 0.009, 0.0]`. So the hooked forward's input is z_3 at sigma=0.0089 (timestep 8.93), and the last Euler step is z_K = z_3 + (0-0.0089)*v (rank_utils.py:80), i.e. delta-sigma = -0.00893. (3) Target: line 1421 `_tgt = head_apply(rank_head, _e.detach(), False).detach()` with `_e = proj(_zK)` (line 1396), so the target is a fixed (P frozen w.r.t. this loss, g detached) function of z_K \u2248 z_3 \u2014 essentially the same tensor the hooked block just consumed. (4) Consistency branch never visits that noise level: `[window] score_idxs=[4,5,6,7] Kw=4` (log line 5), `stu_idx = [kt - deltas[kt]]` with delta in [1,3] (lines 1072-1073, args delta_min=1/delta_max=3), so student inputs are K=8 indices 1..6 = sigmas [0.9475, 0.8828, 0.8008, 0.6938, 0.548, 0.338]; index 7 (0.0089) is never reached, and lambda_real=0, reward states are picked from those same inputs. (5) Log evidence: align_loss 0.98-1.03 at step 0, 0.245 at 50, 0.132 at 100, 0.0777 at 300 (cos 0.92 within 300 updates), ||grad align|| 1.12-1.58 on probe params at step 0 \u2014 matches the claim's 'live but weak, trivially fittable' reading; the align.proj (8.9M params, lr 1e-4, separately clipped) is far freer to fit than the student (lr 1e-5, global clip 1 on a 120-180 norm). The only caveat, which the claim already concedes, is that the align gradient is non-zero and lands on weights shared across timesteps, so the term is not literally inert \u2014 but the design note's Variant B aligns h_theta(x_t) at noisy t to features the input does not contain, and B2 implements only the sigma\u22480 endpoint of that, so the design-gap conclusion (a B2 null does not test representation transfer) stands."
+  },
+  {
+   "refuted": false,
+   "confidence": 0.75,
+   "reason": "Facts verified: rank_utils.py:70-79 arms the hook and keeps grad only on the last rollout step; recomputing FlowMatchEulerDiscreteScheduler(shift=3) gives 4-step sigmas [1.0,0.8577,0.6022,0.0089,0.0], timesteps [1000,857.7,602.2,8.93] (matches log line 9), so the hooked forward's input is z_3 at sigma 0.0089 (essentially the finished image) and the target sg[g(P(z_K))] with z_K = z_3 - 0.0089*v (train_pilot_frozen_s4j.py:1393-1396,1421; rank_utils.py:80) is a near-deterministic function of that input. The CD branch never feeds the student at index 7: score_idxs=[4,5,6,7], stu_idx = kt - delta, delta in [1,3] (lines 1072-1073), so student inputs are sigma 0.338..0.948 and the reward uses the least-noisy of those (line 1245). The log supports the 'fittable by the projector alone' part: align loss falls 0.98 -> 0.245 by step 50 inside LR warmup (student lr <= 3.3e-6) while the 9M-param projector trains at 1e-4 from random init. This is a genuine, uncontrolled design gap: the design note's Variant B aligns h_theta(x_t) at noisy t; the implementation aligns at t~0.009, no arm aligns elsewhere, and the known-deviations list (REVIEW_CONTEXT.md:86-94) does not acknowledge it. It is material because B2-vs-ours is a headline contrast and Q2 of the review asks what each contrast isolates: a B2 null could not be read as 'representation transfer of the shaped space does not help', which changes the campaign's Variant-B conclusion and the B-then-A escalation logic. Caveat: 'nearly degenerate / live but weak' overstates \u2014 the align gradient into the student is 13-33% of the CD gradient at step 0 and 16-66% at step 500 (comparable to or larger than the reward's 0.09-0.51), grows as the projector converges, and flows into shared blocks 1-8 used at every timestep, so B2 is a clean-image DINO-distillation arm rather than a no-op; the delta-sigma argument only covers that step's direct velocity, not the weight path. Cheap fix: arm the hook on the penultimate forward (sigma 0.602) with grad on that forward only, or on a random step."
+  },
+  {
+   "refuted": false,
+   "confidence": 0.85,
+   "reason": "Confirmed in code, data and logs. (1) Code: train_pilot_frozen_s4j.py:1253-1259 computes the B1/A reward as -80*<g(P(x_hat)),g(u_ref)> with g detached (rank_utils.py:39-45); it is added to the loss at 1272 with no per-term renormalisation, and the only normalisation is the single global clip_grad_norm_(student,1.0) at 1454, so the reward's SHARE of the update direction is what matters; the head's only shrinkage is AdamW wd=0.01 (line 890), which does not bound it. (2) Heads: loading rank_head_step{500,1000,1500,2000,2500,final}.pt of B1 s0 (151302) and evaluating on the replay candidates' DINO embeddings reproduces the drift: cos(g(e),e) 0.945/0.877/0.844/0.799/0.768/0.782, |W_fc2| 2.78/4.46/5.61/6.50/7.26/7.86, median reward-gradient gain vs the raw reward 1.06/1.38/1.69/1.91/2.15/2.43 (q90 up to 3.6); A s0 at 1000: cos 0.713, gain 1.53 (claim: 0.72/1.49). Mean shaped cosine on the same pairs falls 0.517->0.441 while raw stays 0.510, so reward/r_mean is a different quantity in B1/A. (3) Logs: median reward/CD share from [reward-probe] lines: B1 s0 0.30/0.17/0.78/0.96/1.22/1.06 at steps 0/500/1000/1500/2000/2500, A s0 1.03 at 1000, A s1 0.52, A s2 0.86; unshaped-reward runs: ours s2 (151361) 0.30/0.30/0.25/0.63/0.50/0.64, B2 s1 0.34/0.54/0.65 and B2 s2 0.26/0.48/0.42 at 1000/1500/2000. Shaped arms carry ~3x the share at step 1000 and ~2x afterwards, so B1/A vs ours does mix reward strength with the head's direction change (cos between shaped and raw reward gradients drops to 0.54 by step 2000). One correction: the control's share is NOT unmeasured - only seed 0 (145176) has reward_grad_probe_every=0; launch_hp1.sh:19 sets it to 500 and ours s2 (151361) has probes through step 2500. Those measurements strengthen the confound, and they show the control's own share drifting up 2x (0.30->0.63), so the head's Jacobian gain (1.4x at 1000) explains only part of the 3x gap; student/projector co-drift and n=4 probe noise make up the rest. The design gap stands regardless of the split; the user's own max-pool audit precedent (share 22%->2%) treats an unmatched reward share as disqualifying, so a share-matched control (lower lambda for B1, or a gradient-normalised/rescaled shaped reward) is needed before attributing any B1/A-vs-ours difference to prompt-awareness."
+  },
+  {
+   "refuted": true,
+   "confidence": 0.7,
+   "reason": "Facts verified but not material. Code (train_pilot_frozen_s4j.py:1253-1259, rank_utils.py:39-45) does route the student gradient through g's Jacobian with fixed lambda=80; the saved B1 s0 heads give gradient gain 0.90/1.20/1.45/1.64/1.86 at steps 500-2500 on replay embeddings, and the live probes put B1's reward/CD ratio at 0.78 (1000) to 1.5 (2500) vs 0.27-0.53 (1000) and 0.43-0.72 (2000-2500) in the plain-reward runs. But (1) the claim's premise that the control's share is unmeasured is wrong: ours s1/s2 (151403, 151361) and all B2 arms carry reward_grad_probe_every=500, and their plain reward also drifts 0.3 -> 0.5-0.7 without any head. (2) With clip=1 always active the reward's dose is its unit-update share integrated over the cosine LR (warmup 300, to 0 at 3000): B1 s0 0.58 vs 0.33-0.41 for ours s2 and B2 s0/s1/s2, i.e. ~1.5x, not 2-3x, because the gain arrives at >=1500 when LR <= 50% and at step 500 B1 is below the controls (0.17 vs 0.26-0.38). (3) The repo's own dose-response (branch118k_manifest.md:42, S4j exact reward: lambda x2 -> +0.006, x4 -> +0.0105 CompBench, grad ratio 0.14->0.88) bounds a 1.5x dose of the projector reward, which is itself a null vs argmax at lambda=80, at <= +0.003: below the +-0.02 single-seed noise and the 3-seed MDE (~0.01), so it cannot flip any detectable B1/A-vs-ours contrast. (4) The reported RGB monitor (B1 0.600/0.597/0.614 vs ours 0.598/0.599/0.616 at 500/1000/1500) shows no extra true-DINO drive, so no amplified proxy hacking either. (5) The extra magnitude is J_Delta^T g(u), the same learned residual that carries the shaping; probe accuracies and 'head learned composition' are gain-invariant; reward/r_mean being the shaped cosine (line 1273) is already read that way in REVIEW_CONTEXT. Residual risk: an untested non-linear response of the projector reward at share ~0.9; suggest logging the shaped/plain gradient-norm ratio and, only if B1 wins by >0.01, one lambda-matched (~120) plain-reward control."
+  },
+  {
+   "refuted": true,
+   "confidence": 0.95,
+   "reason": "The claim's role list is an off-by-one artefact of indexing the checkpoint state_dict instead of parameters(). probe_params (phaseW/train_pilot_frozen_s4j.py:671) enumerates student_module.parameters(), which yields 908 tensors and no buffers; the state_dict has 909 keys because key 0 is the pos_embed.pos_embed buffer (1,147456,1536), shifting every parameter by one. The claim's '228-tensor subset' = ceil(909/4) is the tell. Verified on a synthetic module that named_parameters() order == state_dict order minus buffers. Reproduced on checkpoints/phaseW/phaseW_CD_dinop_hard_3k-rewRi-s16-rankB1-hp1-acc4_s0_151302/checkpoint_step500.pt: state-dict-order stride reproduces the claim's list exactly (26 roles: ff.net.0.proj.bias, norm1.linear.bias, to_k.bias, add_k_proj.bias, add_q_proj.bias, to_add_out.bias, attn.norm_k.weight ..., 0 weight matrices, 9.2% of numel); the TRUE parameters()-order stride gives 227 tensors of which 197 are ndim>=2, 146 are attention/adaLN weight matrices (norm1.linear.weight x7, norm1_context.linear.weight x17, attn.to_q/to_v/add_v_proj/to_out.0.weight x17, attn.to_k/add_k_proj/add_q_proj/to_add_out.weight x7, all attn2 weights, ff.net.2 and ff_context.net.2 weights x17, ff.net.0.proj.weight x7), 49.96% of all parameters (1120.8M of 2243.2M) and ZERO biases \u2014 because weights and biases alternate in every block and blocks start at index 0 or 2 mod 4, the stride only ever hits even positions (weights and RMSNorm scales). The lambda calibration (launch_rank.sh:19-23; smoke log 151298 rank ratios 0.068-0.35, align 0.0014-0.005) therefore rests on a subset dominated by the very weight matrices the claim says are never probed. The secondary point (per-caption probe vs the 16-caption mean update) is only a mild caveat: per-caption subset ||grad CD|| is 194-453 (B1 log steps 500-1500) versus accumulated pre-clip g=130-290 from the stderr progress bar (1.4e2 @500, 1.3e2 @1000, 1.6e2 @1500), well short of the 4x shrink pure noise would give, so the gradient is a signal/noise mix, and the identical per-caption rule set the reward's lambda=80 used by every arm; it does not support the 'biases and norm scales only' headline or its consequence."
+  },
+  {
+   "refuted": true,
+   "confidence": 0.9,
+   "reason": "The claim's premise is inverted: its role count was taken from the checkpoint state_dict, whose first key `pos_embed.pos_embed` is a register_buffer (diffusers 0.32.2 embeddings.py:513, persistent because pos_embed_max_size=384) and is absent from `student_module.parameters()`, which is what probe_params (train_pilot_frozen_s4j.py:671) enumerates. Dropping it shifts every index by one and flips the stride-4 parity: on the 908 real parameters (all requires_grad=True; only VAE/text encoders/teacher/DINO/proj are frozen), i%4==0 selects 227 tensors containing 196 2-D weight matrices (norm1.linear 13824x1536 adaLN, to_q/to_k/to_v/to_out, add_{q,k,v}_proj, to_add_out, attn2.*, ff.net.0.proj/ff.net.2, ff_context.*, alternating by block parity since dual blocks are 42 = 2 mod 4), 1120.8M of 2243.2M params (50%; total matches SD3.5-M's 2.24B, confirming pos_embed is a buffer). It is the biases and RMSNorm scales that are never probed, the opposite of the claim. Empirical cross-check: HEAD's reward probe used all parameters (git show HEAD lines 1181-1183) and job 145035 measured a full-parameter reward/CD ratio of 0.07-0.43 (mean ~0.22); the subset probe on the same term gives 0.25-0.33 at step 0 in 151302/151316 and 0.09-0.51 in 151399, the same distribution. The secondary per-caption-vs-mean-update point is real but not material: pre-clip norms (151316 .err: 130-310) versus per-caption subset norms of 200-500 on half the params put the mean between the signal and noise limits; the same per-caption rule set the reward's lambda=80, the calibration was explicitly loose (0.07-0.35 -> 0.09-0.46 after x1.3), and the contrast that matters is arm vs ours at lambda=0. In-training probes show both terms verifiably driving (rank ratios 0.52-0.89 at step 1000 in A with training pairwise accuracy reaching 0.82; align ratios 0.15-1.14 in B2), so no arm is under-driven and no conclusion changes."
+  },
+  {
+   "refuted": false,
+   "confidence": 0.85,
+   "reason": "The defect is real and reproduces exactly: phaseW/rank/probe_heldout.py:60,74-77 exclude only the 3k pool (by prompt and reference), and 70 of the 300 probe captions (61 train, 9 val; identical idx set in all six probe/*.json files) are in phaseW/latent_scorer/manifest.jsonl and the 10 shards (27,000 records, 22,000 train) that train_projector.py:103-105 trained P on and selected its epoch with. The 23% overlap is exactly the base rate (24,000 of 110,948 probe-eligible captions), and the 3k-pool exclusion itself is complete (0 idx/prompt/reference overlaps). Two corrections lower the severity from medium to low: (1) the replay set IS testable - matching replay_2k.pt e_ref rows to the shards (min cos 0.99986) shows all 2,000 are train-split captions and 9 overlap the probe - but it is moot, because the replay set only enters the in-training refresh (s4j:1516-1522), the refreshed P is never saved (torch.save at 1663-1684 write model/head/ema only), and the probe loads the pretrained projector.pt for every arm; (2) the leak is arm-invariant and empirically undetectable: in-sample vs out-of-sample latent pairwise accuracy is base 0.518/0.494, naive 0.539/0.537, ours 0.529/0.539, B1-final 0.497/0.544, B1 latent_g 0.560/0.592, and latent-vs-RGB agreement is lower in-sample (base 0.524/0.592, naive 0.476/0.597), so absolute latent numbers carry no visible in-sample inflation and paired arm contrasts are unaffected. The finding stands as a provenance/hygiene issue with a trivial fix (add manifest train/val idx to the probe's exclusion; 86,948 eligible captions remain), not as a threat to the reported conclusions."
+  },
+  {
+   "refuted": true,
+   "confidence": 0.88,
+   "reason": "The facts are correct but not material. VERIFIED: probe_heldout.py:60,75-77 excludes only the 3k pool; P's 24k pretraining draw (make_manifests.py:22-33) comes from the same 118k-minus-3k pool, so overlap is expected at 21.6% (~65/300). Intersecting probe/base.json idx with phaseW/latent_scorer/manifest.jsonl (the shards' record list): 61 train + 9 val = 70/300, matching by idx, prompt AND photo. replay_2k.pt (no idx) was identified by matching its e_ref to ref_emb_118k.pt: 2,000 distinct captions, all from the train split (cos 1.0000), and 9/300 probe photos are in it. NOT MATERIAL: (1) the probe loads the PRETRAINED projector.pt for every arm (probe_heldout.py:56 default; probe.lsf never passes --proj; the trainer saves only rank_head/align_proj at train_pilot_frozen_s4j.py:1666,1680, never the refreshed P), so the replay set used in-run cannot reach the probe's P, and P is one common frozen component in a paired comparison of base/naive/ours/B1 on the same 300 captions \u2014 an in-sample term cancels in every arm-vs-arm contrast. (2) P's pretraining loss (train_projector.py:149-152: cosine to the candidate's own DINO embedding + within-caption KL over 8-step CFG-7 teacher candidates of the positive caption) carries no positive-vs-negative signal; the probe scores 4-step w=1 student rollouts of never-seen negatives, so the only possible leak is embedding fidelity on 70 photos. (3) Direct test on the probe records: latent-space pairwise accuracy in-sample (191 pairs) minus out-of-sample (642 pairs) = base +0.025, naive +0.002, ours -0.010, B1 -0.046 (final) / -0.056 (avg); latent_g B1 -0.032; SE ~0.036 \u2014 no inflation, trained arms are if anything lower on leaked captions. (4) Restricting to the 230 P-out-of-sample captions reproduces every conclusion: latent base 0.494 / naive 0.537 / ours 0.539 / B1 0.544; latent_g B1 0.592 vs rgb_g 0.595 vs rgb 0.601 (head lifts the projector space, does not transfer to true features); rgb base 0.584 / naive 0.595 / ours 0.611 / B1 0.601. CompBench/GenEval2 contrasts and the rgb/rgb_g spaces are untouched. Suggestion (zero cost): add the manifest's train/val idx to the probe's exclusion, or report the 230-caption subset, so the 'held-out' label is literally true for P; nothing in the campaign's conclusions depends on it."
+  },
+  {
+   "refuted": false,
+   "confidence": 0.7,
+   "reason": "NOT REFUTED: the mechanism the claim describes is in the code and nothing measures the ranking in the space the reward acts on. The claim's sigma/state bookkeeping is wrong, but wrong in the direction that STRENGTHENS the concern.\n\nVERIFIED IN CODE\n1. Head trained only on P(z_K) of student rollouts: phaseW/train_pilot_frozen_s4j.py:1393-1402 (`_zK = student_rollout(...)`, `_e = proj(_zK)`, `_Rh = head_apply(rank_head, _e.detach(), True)`, `_l_head.backward()`); rollout schedule is a full 4-step w=1 denoise, sigmas [1.0, 0.858, 0.602, 0.009, 0.0] (logs/lsf-sd-W-train118k-151302.out line 9). No other path trains `rank_head` (grep: only line 1400 builds a head-training graph; 1457-1461 step it).\n2. Shaped reward applied to P(x_hat): lines 1245-1256, `_xr = x_hat[_order]` (two least-noisy student inputs), `_ehat = proj(_xr)`, `<head_apply(g,_ehat,False), head_apply(g,_eref,False)>`. The detached-weights functional_call is correct (trains the student only); RankHead has no BN/dropout and L2-normalises (phaseW/rank/rank_utils.py:27-36), so the reward is a true cosine in g-space. Validated.\n3. No monitor in the x_hat space: rank/acc_shaped, acc_raw, margin_* are computed from `_Rh`/`_R_raw` built on `_e = P(z_K)` (1433-1436); the RGB monitor decodes `rank_buf`, which holds `_zK` (1438, 1465-1477); the held-out probe scores only `student_rollout` endpoints (phaseW/rank/probe_heldout.py:115-133, spaces rgb/latent/latent_g/rgb_g all on zK). The reward monitor (1486-1504) decodes `rbuf` = x_hat of the least-noisy state for the POSITIVE caption only and logs raw-P vs true-DINO score correlation: no negatives, not through g. So the claim's 'rank/acc_* are all on z_K' is exactly right.\n\nCORRECTIONS TO THE CLAIM'S SPECIFICS (they cut against the claim's wording, not its substance)\n- The reward states are NOT 'stu_idx 5-6, sigma 0.338-0.548'. args.json has delta_min=1, delta_max=3 and `stu_idx = kt - delta` (lines 1072-1073) with score_idxs [4,5,6,7] (log line 5). Enumerating the 81 delta combinations: least-noisy state idx 6 (sigma .338) 33%, idx 5 (.548) 44%, idx 4 (.694) 22%; the reward PAIR is (4,5) 26%, (4,6) 15%, (4,4) 15%, (5,6) only 11%, and idx 3 (sigma .801) enters 22% of pairs. So the reward inputs span sigma .338-.801, and the student never sees idx 7.\n- The '17-27% off the endpoint' figure (memory diagnostic, job 128691: k=6 0.7%, k=5 9.9%, k=4 17.1%, k=3 27.3%) therefore does NOT describe sigma .338-.548 (0.7-9.9%) but does describe idx 4/3, which are present in ~63%/22% of reward pairs. The claim mislabels the states but the x_hat inputs are, on average, blurrier than it says.\n- A second distribution difference the claim omits: `z_stu = z_sel[ks]` (line 1151) are states of the TEACHER's CFG-7 selected trajectory from the cache, whereas the head's rollouts are the student's own w=1 sampling path; x_hat differs from z_K in provenance as well as sharpness.\n- Context: P itself was pretrained on teacher endpoints (train_projector.py docstring) and is refreshed on rbuf x_hat + replay teacher endpoints (1505-1524), never on the student's w=1 rollouts, so P's own calibration on the head's training inputs is only checked by the 8-caption acc_rgb monitor the context already calls uninformative.\n\nEVIDENCE ON WHETHER THE SHAPING TRANSFERS (neutral, does not refute)\nB1 s0 wandb summary at step 3000 (wandb/run-20260916_030618-6s8s92j7): rank/r_pos_shaped 0.302 (shaped positive cosine, z_K space), reward/r_mean 0.395 (shaped reward, x_hat space), reward/proj_score 0.474 (raw P on x_hat), rgb_score 0.608, rgb_proj_corr 0.416; reference ours s0 (run iy7x6bgp, job 145176): r_mean 0.463, proj_score 0.483, rgb_score 0.612, corr 0.463. Raw-P quantities on x_hat match the reference and g depresses the cosine in BOTH spaces, consistent with a global shrink rather than an obvious transfer failure; but this says nothing about whether the ORDERING over negatives carries to x_hat, which is what the claim asks for. Additionally the reward-probe lines in the 151302 log show ||grad reward|| rising from 30-60 (step 500) to 150-770 (steps 1000-2000) with cos(CD,reward) down to -0.8 and ratio up to 2.3, so the shaped reward becomes as large as the CD gradient and anti-aligned; this makes any B1 outcome harder to attribute, as the claim's consequence says. A CPU check of the trained heads on the replay set's teacher endpoints was started but did not finish in time; no result is claimed from it.\n\nWHY NOT REFUTED\nThe code does not handle this and the claim does not rest on a misreading of the mechanism: g is fitted on one input distribution and the student is optimised through g on another, with no pairwise-accuracy or margin logged there and no negatives ever formed there. Severity 'medium/design' is fair: it is an attribution risk for a B1 null, not a bug. Cheap fix (suggestion): at the reward states run the student once per negative on the same z_stu/t_in (the negatives' embeddings are already encoded at line 1387), form x_hat_neg = z_stu - sigma*v(z_stu, c_neg), and log pairwise accuracy/margin of <g(P(x_hat_j)), g(u_ref)> raw vs shaped (m extra student forwards per reward state, no decode); optionally add those x_hat pairs to the head's training set."
+  }
+ ]
+}

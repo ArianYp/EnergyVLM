@@ -233,6 +233,16 @@ and averaged checkpoints now agree, naive CD alone rises above every constant-LR
 contrast shrinks to +0.002 at 3k and +0.007 at 118k (single seed), and both 118k students stay below
 their 3k counterparts trained for sixteen passes.
 
+### Prompt-aware ranking (`docs/rank/`, 2026-09-16)
+
+A follow-up campaign tested whether a fixed text ranking over each caption and structured negatives
+(`data/build_negatives.py`) can make the projector's DINO space prompt-aware and transfer that into
+the student (`train/distill.py --rank_*`, `train/rank_utils.py`, `eval/rank_probe.py`). The
+representation half holds modestly (a trained head orders positive over negative on unseen captions,
++5-9 points in projector space, photo-dependent); no transfer path improved the paper's arm on
+CompBench or GenEval2, two hurt, and the shaped scorer used for candidate selection was worse than
+raw DINO against the VQAScore oracle. Tables, mechanism and the review in `docs/rank/README.md`.
+
 ### The technical report (`docs/`)
 
 Paired against the random-selection student on identical prompts. The 3k rows are three training

@@ -259,6 +259,37 @@ def main() -> None:
     ap.add_argument("--reward_grad_probe", type=int, default=0, help="print ||grad CD|| and ||grad reward|| separately for the first N updates (for setting lambda)")
     ap.add_argument("--reward_grad_probe_every", type=int, default=0, help="log ||grad CD||, ||grad reward||, their ratio and cosine every N updates")
     ap.add_argument("--reward_legacy_rng", action="store_true", help="do NOT restore the global RNG after loading the reward machinery (reproduces the first reward runs)")
+    # --- prompt-aware ranking on the projector space (train/rank_utils.py, docs/rank/): a head g on the
+    # --- 768-d DINO space trained so the student's generation of a caption outranks its generations of
+    # --- structured negatives (data/build_negatives.py) against the caption's photograph
+    ap.add_argument("--rank_negatives", default=None, help="data/build_negatives.py output; enables the ranking machinery")
+    ap.add_argument("--rank_input", default="rollout", choices=["rollout", "xhat"],
+                    help="rollout: the student's --rank_steps-step samples of the prompts from one noise (rounds 1-2); xhat: the one-step clean "
+                         "estimates at the reward states, positive vs negatives from the SAME teacher state (round 3)")
+    ap.add_argument("--rank_mode", default="head", choices=["head", "backprop"],
+                    help="head: the ranking loss trains only g (Variant B); backprop: it also reaches the student (Variant A, weight --rank_lambda / --rank_share)")
+    ap.add_argument("--rank_lambda", type=float, default=0.0)
+    ap.add_argument("--rank_kappa", type=float, default=0.1)
+    ap.add_argument("--rank_m", type=int, default=3, help="max negatives per caption")
+    ap.add_argument("--rank_steps", type=int, default=4, help="student rollout steps at guidance 1 (rollout mode)")
+    ap.add_argument("--rank_every", type=int, default=1, help="ranking term every N captions")
+    ap.add_argument("--rank_head_lr", type=float, default=1e-4)
+    ap.add_argument("--rank_head_width", type=int, default=1024)
+    ap.add_argument("--rank_shaped_reward", action="store_true", help="anchor reward as <g(P(x0_hat)), g(u_ref)> instead of <P(x0_hat), u_ref>")
+    ap.add_argument("--rank_monitor_every", type=int, default=100, help="decode recent rollouts and log the true-DINO pairwise accuracy (raw and through g)")
+    ap.add_argument("--rank_head_freeze_step", type=int, default=0,
+                    help="0 = head trains throughout and the transfer terms act from update 0; N > 0 = staged recipe: plain reward + head "
+                         "training for N updates, then the head is frozen and the transfer terms switch on with weights calibrated once")
+    ap.add_argument("--rank_shaped_match_norm", action="store_true", help="at the switch, scale the shaped reward so its gradient norm equals the plain reward's")
+    ap.add_argument("--rank_share", type=float, default=0.0, help="> 0: at the switch, set lambda_rank so the ranking gradient is this share of the consistency gradient")
+    ap.add_argument("--align_share", type=float, default=0.0, help="> 0: at the switch, set lambda_align likewise")
+    ap.add_argument("--rank_negatives_shuffle", action="store_true", help="NULL CONTROL: every caption gets another caption's negatives (fixed rotation)")
+    ap.add_argument("--rank_theta_side", default="both", choices=["both", "positive"],
+                    help="backprop mode: whether the ranking gradient reaches the student through the negatives' rollouts too, or through the positive only")
+    ap.add_argument("--align_lambda", type=float, default=0.0, help="REPA-style alignment of one DiT block's image tokens (rollout mode) to sg[g(P(z_K))]")
+    ap.add_argument("--align_layer", type=int, default=8, help="1-based DiT block the alignment hook reads")
+    ap.add_argument("--align_lr", type=float, default=1e-4)
+    ap.add_argument("--align_step", type=int, default=-1, help="which rollout forward the alignment hook reads: -1 = last (sigma ~0.009), 1 = the sigma-0.86 step")
     ap.add_argument("--dino_id", default="facebook/dinov2-base")
     ap.add_argument("--K", type=int, default=8, help="teacher steps")
     ap.add_argument("--cfg", type=float, default=7.0, help="teacher guidance")
@@ -338,6 +369,13 @@ def main() -> None:
             return 0.5 * (1.0 + math.cos(math.pi * min(1.0, (s - w) / T)))
         return 1.0
     sched = torch.optim.lr_scheduler.LambdaLR(opt, _lr_mult)
+    # a fixed quarter of the parameter tensors for the ranking / alignment gradient probes and the
+    # switch calibration (two full extra gradient sets do not fit next to the graph on an 80 GB GPU)
+    probe_params = [p for i, p in enumerate(student_module.parameters()) if p.requires_grad and i % 4 == 0]
+
+    def _gnorm(t):
+        gs = torch.autograd.grad(t, probe_params, retain_graph=True, allow_unused=True)
+        return float(torch.sqrt(sum((g.float() ** 2).sum() for g in gs if g is not None)))
 
     lat_c = student_module.config.in_channels
     h_lat = args.height // pipe.vae_scale_factor
@@ -446,6 +484,47 @@ def main() -> None:
             torch.random.set_rng_state(_rng_cpu); torch.cuda.set_rng_state_all(_rng_cuda)
             if is_main:
                 print("[reward] global RNG state restored after loading the reward machinery: caption order matches the reward-free run", flush=True)
+    # PROMPT-AWARE RANKING (docs/rank/): head g on the projector's DINO space, trained so the student's
+    # generation of the caption outranks its generations of structured negatives against the photo
+    rank_head = align = None
+    if args.rank_negatives is not None:
+        assert reward_load and proj is not None, "the ranking arms sit on the projector reward arm (--reward_mode proj)"
+        assert scorer is not None or args.rank_monitor_every == 0, "the RGB monitor of the ranking needs the scorer (reward refresh or monitor on)"
+        assert args.rank_input == "rollout" or (args.align_lambda == 0 and args.align_share == 0), "the alignment term needs rollouts"
+        assert args.rank_input == "rollout" or reward_on, "--rank_input xhat ranks the reward states: the reward must be on"
+        from train.rank_utils import (RankHead, head_apply, rollout_schedule, student_rollout, rank_rows, rows_loss, rows_acc,
+                                      rows_margin, AlignHook, all_reduce_grads, broadcast_params, rollout_noise)
+        _rng_cpu2 = torch.random.get_rng_state(); _rng_cuda2 = torch.cuda.get_rng_state_all()
+        rank_negs = {int(k): [n["prompt"] for n in v["negatives"]][:args.rank_m]
+                     for k, v in json.load(open(args.rank_negatives))["negatives"].items()}
+        if args.rank_negatives_shuffle:
+            _ks = sorted(rank_negs); rank_negs = {k: rank_negs[_ks[(i + 1) % len(_ks)]] for i, k in enumerate(_ks)}
+        rank_frozen = False
+        rank_calibrated = args.rank_head_freeze_step == 0
+        rank_scale = {"shaped": 1.0, "rank": args.rank_lambda, "align": args.align_lambda}
+        _cal_n_cd = float("nan")
+        torch.manual_seed(args.seed + 424242)                     # identical head init on every rank
+        rank_head = RankHead(768, args.rank_head_width).to(device)
+        broadcast_params(rank_head, world)
+        rank_head_opt = torch.optim.AdamW(rank_head.parameters(), lr=args.rank_head_lr, weight_decay=0.01)
+        rank_sig, rank_ts = rollout_schedule(pipe.scheduler, args.rank_steps, K, device)
+        if args.align_lambda > 0 or args.align_share > 0:
+            torch.manual_seed(args.seed + 434343)
+            align = AlignHook(student_module, args.align_layer,
+                              in_dim=student_module.config.num_attention_heads * student_module.config.attention_head_dim, device=device)
+            broadcast_params(align.proj, world)
+            align_opt = torch.optim.AdamW(align.proj.parameters(), lr=args.align_lr, weight_decay=0.01)
+        torch.random.set_rng_state(_rng_cpu2); torch.cuda.set_rng_state_all(_rng_cuda2)
+        rank_stats = {"loss": 0.0, "n": 0, "acc": 0.0, "acc_raw": 0.0, "margin": 0.0, "margin_raw": 0.0, "r_pos": 0.0, "nneg": 0.0,
+                      "n_cap": 0, "align": 0.0, "n_align": 0, "acc_rgb": float("nan"), "acc_rgb_shaped": float("nan"),
+                      "g_rank": float("nan"), "g_align": float("nan"), "t": 0.0}
+        rank_buf = []
+        if is_main:
+            print(f"[rank] negatives for {len(rank_negs)} captions (max {args.rank_m}){' SHUFFLED (null control)' if args.rank_negatives_shuffle else ''} | "
+                  f"input={args.rank_input} mode={args.rank_mode} lambda={args.rank_lambda} share={args.rank_share} theta_side={args.rank_theta_side} "
+                  f"kappa={args.rank_kappa} shaped_reward={args.rank_shaped_reward} match_norm={args.rank_shaped_match_norm} "
+                  f"freeze_step={args.rank_head_freeze_step} align_lambda={args.align_lambda} align_share={args.align_share} "
+                  f"layer={args.align_layer} align_step={args.align_step} | rollout sigmas {[round(float(s), 3) for s in rank_sig]}", flush=True)
 
     sample_prompts = None
     if is_main and args.wandb_project and args.sample_prompts and args.sample_every > 0:
@@ -558,7 +637,22 @@ def main() -> None:
                 else:
                     with torch.autocast("cuda", torch.bfloat16):
                         _ehat = proj(_xr).float()
-                    _r = (_ehat * _eref[None]).sum(-1)
+                    _r_raw = (_ehat * _eref[None]).sum(-1)
+                    _use_shaped = rank_head is not None and args.rank_shaped_reward and (args.rank_head_freeze_step == 0 or rank_frozen)
+                    if _use_shaped:
+                        # the reward in the ranking-shaped space, both sides through g with its weights
+                        # detached (the reward trains the student, never the head)
+                        _r_sh = (head_apply(rank_head, _ehat, False) * head_apply(rank_head, _eref[None], False)).sum(-1)
+                        if not rank_calibrated and is_main:
+                            _cal_n_cd = _gnorm(loss)
+                            if args.rank_shaped_match_norm:
+                                _n_raw = _gnorm(-args.reward_lambda * _r_raw.mean()); _n_sh = _gnorm(-args.reward_lambda * _r_sh.mean())
+                                rank_scale["shaped"] = _n_raw / max(_n_sh, 1e-9)
+                        _r = rank_scale["shaped"] * _r_sh
+                    else:
+                        if rank_head is not None and not rank_calibrated and is_main and math.isnan(_cal_n_cd):
+                            _cal_n_cd = _gnorm(loss)
+                        _r = _r_raw
                 _lr = -args.reward_lambda * _r.mean()
                 if is_main and (gstep < args.reward_grad_probe or (args.reward_grad_probe_every and gstep % args.reward_grad_probe_every == 0)):
                     _ps = [p for p in student_module.parameters() if p.requires_grad]
@@ -577,6 +671,104 @@ def main() -> None:
                 rbuf.append((_xr.detach()[:1].clone(), int(rec["idx"])))
                 if len(rbuf) > 64:
                     rbuf.pop(0)
+            if rank_head is not None and micro % args.rank_every == 0:
+                # PROMPT-AWARE RANKING TERM (see train/rank_utils.py and docs/rank/README.md)
+                _t0 = time.time()
+                _negs = rank_negs.get(int(rec["idx"]), [])
+                _prompts = [rec["prompt"]] + _negs
+                with torch.no_grad():
+                    _emb_all, _, _pool_all, _ = pipe.encode_prompt(prompt=_prompts, prompt_2=_prompts, prompt_3=_prompts,
+                                                                 do_classifier_free_guidance=False, device=device, num_images_per_prompt=1)
+                _transfer_on = args.rank_head_freeze_step == 0 or rank_frozen
+                _grad_all = args.rank_mode == "backprop" and (args.rank_lambda > 0 or args.rank_share > 0) and _transfer_on
+                _align_on = align is not None and _transfer_on and args.rank_input == "rollout"
+                _uref = ref_emb[int(rec["idx"])].to(device).float()[None]
+                if args.rank_input == "rollout":
+                    _z0 = rollout_noise(args.seed, rank, micro, (1, lat_c, h_lat, h_lat), device).expand(len(_prompts), -1, -1, -1).contiguous()
+                    # every rank rolls out on every ranking micro-step (DDP needs the same number of forwards with grad on every rank)
+                    _zK = student_rollout(student_ddp, _z0, _emb_all, _pool_all, rank_sig, rank_ts, grad=_grad_all,
+                                          grad_last=_align_on, hook=(align if _align_on else None), hook_step=args.align_step)
+                    with torch.autocast("cuda", torch.bfloat16):
+                        _e = proj(_zK).float()
+                    _e_pos, _e_negs = _e[:1], (_e[1:, None, :] if len(_negs) else None)
+                    _bufz = _zK.detach()
+                else:
+                    # RANK ON THE REWARD'S INPUTS: the positive's clean estimates at the reward states are
+                    # `_xr` / `_ehat` (grad -> student through the consistency forward); the negatives'
+                    # estimates come from the same states with only the text swapped, one no-grad forward
+                    # through the bare module (a DDP forward here would deadlock ranks without negatives)
+                    _S = len(_order)
+                    _z_all = torch.cat([states[s].float() for s in stu_idx], 0)          # the student inputs of every supervised state
+                    if len(_negs):
+                        _emb_n, _pool_n = _emb_all[1:], _pool_all[1:]
+                        _z_in = _z_all[_order].to(torch.bfloat16).repeat(len(_negs), 1, 1, 1)
+                        _t_n = t_in[_order].repeat(len(_negs))
+                        with torch.no_grad(), torch.autocast("cuda", torch.bfloat16):
+                            _v_n = student_module(hidden_states=_z_in, timestep=_t_n,
+                                                  encoder_hidden_states=_emb_n.repeat_interleave(_S, 0),
+                                                  pooled_projections=_pool_n.repeat_interleave(_S, 0), return_dict=False)[0]
+                        _x_neg = (_z_all[_order].repeat(len(_negs), 1, 1, 1) - sig_stu[_order].repeat(len(_negs), 1, 1, 1) * _v_n.float())
+                        with torch.no_grad(), torch.autocast("cuda", torch.bfloat16):
+                            _e_negs = proj(_x_neg).float().view(len(_negs), _S, -1)
+                        _bufz = torch.cat([_xr[:1].detach(), _x_neg.view(len(_negs), _S, *_x_neg.shape[1:])[:, 0]], 0)
+                    else:
+                        _e_negs = None; _bufz = _xr[:1].detach()
+                    _e_pos = _ehat
+                    _e = torch.cat([_e_pos] + ([_e_negs.transpose(0, 1).reshape(-1, _e_pos.shape[-1])] if _e_negs is not None else []), 0)
+                _R_raw = rank_rows(None, _e_pos.detach(), (_e_negs.detach() if _e_negs is not None else None), _uref, False)
+                _Rh = rank_rows(rank_head, _e_pos.detach(), (_e_negs.detach() if _e_negs is not None else None), _uref, True)
+                _l_head = rows_loss(_Rh, args.rank_kappa)
+                if not rank_frozen:
+                    (_l_head / args.accum).backward()
+                _cal_now = rank_frozen and not rank_calibrated and is_main and len(_negs) > 0
+                if _grad_all:
+                    _negs_th = None if _e_negs is None else (_e_negs if (args.rank_theta_side == "both" and args.rank_input == "rollout") else _e_negs.detach())
+                    _Rs = rank_rows(rank_head, _e_pos, _negs_th, _uref, False)
+                    _l_rank = rows_loss(_Rs, args.rank_kappa)
+                    if _cal_now and args.rank_share > 0:
+                        rank_scale["rank"] = args.rank_share * _cal_n_cd / max(_gnorm(_l_rank), 1e-9)
+                    if is_main and args.reward_grad_probe_every and gstep % args.reward_grad_probe_every == 0 and len(_negs):
+                        rank_stats["g_rank"] = _gnorm(_l_rank)
+                        print(f"[rank-probe] step {gstep} ||grad rank||={rank_stats['g_rank']:.4f} (x lambda {rank_scale['rank']:.3f}) "
+                              f"||grad CD||={reward_stats['g_cd']:.2f} ratio={rank_scale['rank'] * rank_stats['g_rank'] / max(reward_stats['g_cd'], 1e-9):.4f} "
+                              f"rank_loss={float(_l_rank):.4f} acc={rows_acc(_Rs.detach()):.2f}", flush=True)
+                    loss = loss + rank_scale["rank"] * _l_rank
+                if _align_on:
+                    _f = align.features()
+                    _tgt = head_apply(rank_head, _e.detach(), False).detach()
+                    _l_align = (1.0 - (_f * _tgt).sum(-1)).mean()
+                    if _cal_now and args.align_share > 0:
+                        rank_scale["align"] = args.align_share * _cal_n_cd / max(_gnorm(_l_align), 1e-9)
+                    if is_main and args.reward_grad_probe_every and gstep % args.reward_grad_probe_every == 0:
+                        rank_stats["g_align"] = _gnorm(_l_align)
+                        print(f"[align-probe] step {gstep} ||grad align||={rank_stats['g_align']:.4f} (x lambda {rank_scale['align']:.3f}) "
+                              f"||grad CD||={reward_stats['g_cd']:.2f} ratio={rank_scale['align'] * rank_stats['g_align'] / max(reward_stats['g_cd'], 1e-9):.4f} "
+                              f"align_loss={float(_l_align):.4f}", flush=True)
+                    loss = loss + rank_scale["align"] * _l_align
+                    rank_stats["align"] += float(_l_align); rank_stats["n_align"] += 1
+                if rank_frozen and not rank_calibrated:
+                    # every rank takes rank 0's calibration (a collective on every rank, every micro-step
+                    # until rank 0 has seen a caption with negatives)
+                    _t = torch.tensor([1.0 if _cal_now else 0.0, rank_scale["shaped"], rank_scale["rank"], rank_scale["align"]], device=device)
+                    if world > 1:
+                        import torch.distributed as dist
+                        dist.broadcast(_t, src=0)
+                    if float(_t[0]) > 0:
+                        rank_scale = {"shaped": float(_t[1]), "rank": float(_t[2]), "align": float(_t[3])}; rank_calibrated = True
+                        if is_main:
+                            print(f"[rank] switch calibrated at update {gstep}: shaped_scale={rank_scale['shaped']:.3f} lambda_rank={rank_scale['rank']:.3f} "
+                                  f"lambda_align={rank_scale['align']:.3f} (||grad CD|| {_cal_n_cd:.2f} on the probe subset)", flush=True)
+                if len(_negs):
+                    rank_stats["loss"] += float(_l_head); rank_stats["n"] += 1
+                    rank_stats["acc"] += rows_acc(_Rh.detach()); rank_stats["acc_raw"] += rows_acc(_R_raw)
+                    rank_stats["margin"] += rows_margin(_Rh.detach()); rank_stats["margin_raw"] += rows_margin(_R_raw)
+                    if is_main:
+                        rank_buf.append((_bufz.to(torch.bfloat16), int(rec["idx"])))
+                        if len(rank_buf) > 16:
+                            rank_buf.pop(0)
+                rank_stats["r_pos"] += float(_Rh[:, 0].mean()); rank_stats["nneg"] += len(_negs); rank_stats["n_cap"] += 1
+                rank_stats["t"] += time.time() - _t0
+                del _emb_all, _pool_all, _e, _e_pos, _e_negs, _bufz
             (loss / args.accum).backward()
         _wl_sum += float(loss.detach()); _wl_n += 1
         _wk_sum = per_k.detach().float().clone() if _wk_sum is None else _wk_sum + per_k.detach().float()
@@ -590,6 +782,39 @@ def main() -> None:
         sched.step()
         gstep += 1
         pbar.update(1)
+        if rank_head is not None:
+            # the head (and the alignment projector) step with the student: gradients averaged over the
+            # ranks so every rank keeps an identical copy; frozen after --rank_head_freeze_step
+            if not rank_frozen:
+                all_reduce_grads(rank_head, world); torch.nn.utils.clip_grad_norm_(rank_head.parameters(), 1.0)
+                rank_head_opt.step(); rank_head_opt.zero_grad(set_to_none=True)
+            if align is not None and (args.rank_head_freeze_step == 0 or rank_frozen):
+                all_reduce_grads(align.proj, world); torch.nn.utils.clip_grad_norm_(align.proj.parameters(), 1.0)
+                align_opt.step(); align_opt.zero_grad(set_to_none=True)
+            if args.rank_head_freeze_step and gstep == args.rank_head_freeze_step and not rank_frozen:
+                rank_frozen = True
+                for _p in rank_head.parameters():
+                    _p.requires_grad_(False)
+                if is_main:
+                    print(f"[rank] head frozen at update {gstep} (staged recipe); the transfer terms switch on and are calibrated on the next captions", flush=True)
+            if is_main and rank_buf and args.rank_monitor_every and gstep % args.rank_monitor_every == 0:
+                # TRUE-DINO CHECK: decode recent rollouts and rank them with the offline scorer, raw and through g
+                with torch.no_grad():
+                    _a, _ah, _nb = 0.0, 0.0, 0
+                    for _zk, _i in rank_buf[-8:]:
+                        _et = scorer.embed_latents(pipe.vae, _zk)
+                        _ur = ref_emb[_i].to(device).float()[None]
+                        _a += rows_acc(rank_rows(None, _et[:1], _et[1:, None, :] if len(_et) > 1 else None, _ur, False))
+                        _ah += rows_acc(rank_rows(rank_head, _et[:1], _et[1:, None, :] if len(_et) > 1 else None, _ur, False)); _nb += 1
+                    rank_stats["acc_rgb"] = _a / max(_nb, 1); rank_stats["acc_rgb_shaped"] = _ah / max(_nb, 1)
+            if is_main and gstep % args.log_every == 0 and rank_stats["n"]:
+                _n = rank_stats["n"]
+                print(f"[rank] step {gstep} loss={rank_stats['loss'] / _n:.4f} acc_shaped={rank_stats['acc'] / _n:.3f} acc_raw={rank_stats['acc_raw'] / _n:.3f} "
+                      f"margin_shaped={rank_stats['margin'] / _n:+.4f} margin_raw={rank_stats['margin_raw'] / _n:+.4f} "
+                      f"acc_rgb={rank_stats['acc_rgb']:.3f} acc_rgb_shaped={rank_stats['acc_rgb_shaped']:.3f} "
+                      f"negs/caption={rank_stats['nneg'] / max(rank_stats['n_cap'], 1):.2f} "
+                      f"align={rank_stats['align'] / max(rank_stats['n_align'], 1):.4f} t_rank/caption={rank_stats['t'] / max(rank_stats['n_cap'], 1):.2f}s "
+                      f"mem={torch.cuda.max_memory_allocated() / 2 ** 30:.1f}GB", flush=True)
         if reward_on and is_main and rbuf and ((args.reward_refresh_every and gstep % args.reward_refresh_every == 0)
                                                 or (args.reward_monitor_every and gstep % args.reward_monitor_every == 0)):
             # HACKING MONITOR: decode the recent predictions and score them with the offline RGB
@@ -673,6 +898,17 @@ def main() -> None:
                                     "reward/grad_ratio": reward_stats["g_r"] / reward_stats["g_cd"] if reward_stats["g_cd"] == reward_stats["g_cd"] else float("nan"),
                                     "reward/grad_cos": reward_stats["g_cos"]})
                     reward_stats["r"] = 0.0; reward_stats["n"] = 0
+                if rank_head is not None:
+                    _n = max(rank_stats["n"], 1); _nc = max(rank_stats["n_cap"], 1)
+                    payload.update({"rank/loss": rank_stats["loss"] / _n, "rank/acc_shaped": rank_stats["acc"] / _n, "rank/acc_raw": rank_stats["acc_raw"] / _n,
+                                    "rank/margin_shaped": rank_stats["margin"] / _n, "rank/margin_raw": rank_stats["margin_raw"] / _n,
+                                    "rank/r_pos_shaped": rank_stats["r_pos"] / _nc, "rank/negatives_per_caption": rank_stats["nneg"] / _nc,
+                                    "rank/acc_rgb": rank_stats["acc_rgb"], "rank/acc_rgb_shaped": rank_stats["acc_rgb_shaped"],
+                                    "rank/grad_norm_rank": rank_stats["g_rank"], "rank/grad_norm_align": rank_stats["g_align"],
+                                    "rank/seconds_per_caption": rank_stats["t"] / _nc, "rank/head_frozen": float(rank_frozen),
+                                    "rank/shaped_scale": rank_scale["shaped"], "rank/lambda_rank": rank_scale["rank"], "rank/lambda_align": rank_scale["align"]})
+                    if rank_stats["n_align"]:
+                        payload["rank/align_loss"] = rank_stats["align"] / rank_stats["n_align"]
                 try:
                     wandb.log(payload, step=gstep)
                 except Exception as e:      # a dead wandb service must not take a 13-hour run down
@@ -683,6 +919,10 @@ def main() -> None:
                         traceback.print_exc()
         if gstep % args.log_every == 0:   # every rank: start a fresh logging window
             _wl_sum, _wl_n, _wk_sum, _wcd_sum, _wcd_n = 0.0, 0, None, 0.0, 0
+            if rank_head is not None:
+                for _k in ("loss", "acc", "acc_raw", "margin", "margin_raw", "r_pos", "nneg", "align", "t"):
+                    rank_stats[_k] = 0.0
+                rank_stats["n"] = rank_stats["n_cap"] = rank_stats["n_align"] = 0
         if (is_main and sample_prompts and args.sample_every > 0 and gstep % args.sample_every == 0):
             if gstep == args.sample_every:          # once: the guided 28-step teacher as reference
                 log_samples(teacher, pipe, sample_prompts, 28, args.cfg, args.height, device, gstep,
@@ -693,11 +933,21 @@ def main() -> None:
             if is_main:
                 torch.save({"model": student_module.state_dict(), "step": gstep, "selector": args.selector},
                            Path(args.output_dir) / f"checkpoint_step{gstep}.pt")
+                if rank_head is not None:
+                    torch.save({"head": rank_head.state_dict(), "align_proj": (align.proj.state_dict() if align is not None else None),
+                                "proj": proj.state_dict(), "step": gstep,
+                                "rank_args": {k: v for k, v in vars(args).items() if k.startswith(("rank_", "align_"))}},
+                               Path(args.output_dir) / f"rank_head_step{gstep}.pt")
             barrier()
 
     if is_main:
         torch.save({"model": student_module.state_dict(), "step": gstep, "selector": args.selector},
                    Path(args.output_dir) / "checkpoint_final.pt")
+        if rank_head is not None:
+            torch.save({"head": rank_head.state_dict(), "align_proj": (align.proj.state_dict() if align is not None else None),
+                        "proj": proj.state_dict(), "step": gstep,          # the REFRESHED projector the head was trained on
+                        "rank_args": {k: v for k, v in vars(args).items() if k.startswith(("rank_", "align_"))}},
+                       Path(args.output_dir) / "rank_head_final.pt")
         if args.wandb_project:
             import wandb
             try:

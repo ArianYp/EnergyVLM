@@ -1,0 +1,21 @@
+{
+ "captions": 3000,
+ "argmax_changed_frac": 0.3856666666666667,
+ "oracle_agreement": {
+  "raw_dino": 0.35633333333333334,
+  "shaped": 0.311
+ },
+ "mean_vqa_of_selected": {
+  "random": 0.8428650883845985,
+  "raw_dino": 0.8823363368138671,
+  "shaped": 0.8668104852003355,
+  "oracle": 0.9333934319540859
+ },
+ "regret": {
+  "raw_dino": 0.051057095140218736,
+  "shaped": 0.06658294675375025
+ },
+ "cached_vs_recomputed_maxdiff": 0.0019083172082901,
+ "head": "phaseW/rank/select/head_dino.pt",
+ "source_cache": "phaseN/coco_selection_dinopatch"
+}

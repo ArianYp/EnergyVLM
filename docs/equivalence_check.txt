@@ -142,3 +142,26 @@ info: 2-GPU vs 1-GPU release run (different data order, expected to differ): 4/9
 EQUIV_R6_RESULT PASS (control 0.0e+00; pairs cos 0.0e+00 / refresh 0.0e+00 / ddp 0.0e+00; sanities 2.4e-05 / 6.8e-07)
 # Verdict: cosine schedule, argmax + projector reward refreshed for 16 steps, and the same refresh on 2 GPUs (rank-0 refresh + broadcast)
 # are bit-exact (909/909 tensors, control 0.0); cosine vs constant and refreshed vs frozen differ as they must.
+
+# Round 7 (job 152559, 2026-09-16T20:11:34+01:00): release trainer with the ported prompt-aware ranking machinery (docs/rank/) vs
+# phaseW/train_pilot_frozen_s4j.py (working tree). 6 updates, deterministic kernels.
+orig trainer sha f774b291; release trainer sha 87313342; release commit 6e59021 (working tree)
+orig_roll rc=0 89s losses: 58.6 1.7520 52.2 64.2 65.7 64.9 1.5985 72.5  | switch calibrated at update 3: shaped_scale=1.013 lambda_rank=0.000 lambda_align=0.000 (||
+orig_xhat_a rc=0 65s losses: 58.6 1.3901 52.2 63.6 72.1 64.8 1.3890 78.9  | switch calibrated at update 3: shaped_scale=1.011 lambda_rank=4.503 lambda_align=0.000 (||
+orig_xhat_b rc=0 64s losses: 58.6 1.3901 52.2 63.6 72.1 64.8 1.3890 78.9  | switch calibrated at update 3: shaped_scale=1.011 lambda_rank=4.503 lambda_align=0.000 (||
+orig_ddp rc=0 86s losses: 48.3 1.3868 56 56.7 33.1 1.3889 94.1 79.4  | switch calibrated at update 2: shaped_scale=0.992 lambda_rank=12.826 lambda_align=0.000 (|
+new_roll rc=0 67s losses: 58.6 1.7520 52.2 64.2 65.7 64.9 1.5985 72.5  | switch calibrated at update 3: shaped_scale=1.013 lambda_rank=0.000 lambda_align=0.000 (||
+new_xhat rc=0 64s losses: 58.6 1.3901 52.2 63.6 72.1 64.8 1.3890 78.9  | switch calibrated at update 3: shaped_scale=1.011 lambda_rank=4.503 lambda_align=0.000 (||
+new_ddp rc=0 85s losses: 48.3 1.3868 56 56.7 33.1 1.3889 94.1 79.4  | switch calibrated at update 2: shaped_scale=0.992 lambda_rank=12.826 lambda_align=0.000 (|
+control: orig vs orig (xhat, Ax-style)                            : 909/909 tensors identical, max|diff|=0.000e+00
+orig vs release: rollout ranking, head frozen at 2, shaped reward (B1f-style): 909/909 tensors identical, max|diff|=0.000e+00
+orig vs release: xhat ranking, positive-only backprop (Ax-style)  : 909/909 tensors identical, max|diff|=0.000e+00
+orig vs release: the xhat pair on 2 GPUs                          : 909/909 tensors identical, max|diff|=0.000e+00
+orig vs release: the HEAD (rollout pair)                          : 4/4 tensors identical, max|diff|=0.000e+00
+orig vs release: the HEAD (xhat pair)                             : 4/4 tensors identical, max|diff|=0.000e+00
+sanity: rollout vs xhat arms (must differ)                        : 4/909 tensors identical, max|diff|=4.936e-07
+EQUIV_R7_RESULT PASS (control 0.0e+00; pairs roll 0.0e+00 / xhat 0.0e+00 / ddp 0.0e+00; heads 0.0e+00 / 0.0e+00; sanity 4.9e-07)
+#   rollout  B1f-style: head trained on 4-step rollouts, frozen at update 2, shaped reward norm-matched
+#   xhat     Ax-style: ranking on the reward's inputs, head frozen at 2, positive-only backprop at a 20% share
+# Verdict: rollout-mode ranking (head frozen at 2, shaped reward norm-matched), xhat-mode ranking (positive-only backprop) and the xhat
+# pair on 2 GPUs are bit-exact on all 909 student tensors and on the head's 4 tensors; the two arms differ from each other as they must.

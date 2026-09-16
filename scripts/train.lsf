@@ -67,6 +67,8 @@ REWARD_PROJ=${REWARD_PROJ:-checkpoints/latent_scorer/projector.pt}
 REWARD_REF=${REWARD_REF:-cache/reward/ref_emb_118k.pt}
 REWARD_REPLAY=${REWARD_REPLAY:-cache/reward/replay.pt}
 TAG=${TAG:-}                              # free suffix for the run name (e.g. -3k when CACHE is the 3k cache)
+EXTRA=${EXTRA:-}                          # any further trainer flags, e.g. the ranking arms of docs/rank/README.md
+                                          # (bsub -env splits on commas: keep EXTRA comma-free)
 NREC=$(cat "$CACHE"/selection_rank*.jsonl | wc -l)
 STEPS=${STEPS:-$(python3 -c "print(int(round($EPOCHS * $NREC / ($GPUS * $ACCUM))))")}
 RUN="${SELECTOR}"
@@ -91,4 +93,4 @@ torchrun --standalone --nproc-per-node="$GPUS" train/distill.py \
   --reward_grad_probe_every "${REWARD_PROBE_EVERY:-500}" \
   --reward_proj "$REWARD_PROJ" --reward_ref "$REWARD_REF" --reward_replay "$REWARD_REPLAY" \
   --sample_every "${SAMPLE_EVERY:-2000}" --sample_prompts "${SAMPLE_PROMPTS:-pools/sample_prompts.json}" \
-  ${WANDB_PROJECT:+--wandb_project "$WANDB_PROJECT" --wandb_run_name "$RUN"}
+  ${WANDB_PROJECT:+--wandb_project "$WANDB_PROJECT" --wandb_run_name "$RUN"} ${EXTRA}
