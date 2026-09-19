@@ -60,6 +60,9 @@ docs/        the full technical report (report.tex / .pdf, every arm and ablatio
 third_party/ (not included) T2I-CompBench, GenEval2, t2v_metrics clones, see below
 ```
 
+**Using a trained checkpoint** (paths, sampling settings, batch generation, cherry-picking,
+FlowEdit): `docs/CHECKPOINTS.md`.
+
 ## Method
 
 SD3.5 is a rectified flow: `z_sigma = (1 - sigma) x0 + sigma eps`, velocity `v = eps - x0`, Euler
