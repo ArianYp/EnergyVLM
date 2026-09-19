@@ -158,6 +158,15 @@ bsub -env "all,SELECTOR=dino_patch,SEED=0,REWARD_MODE=proj,REWARD_LAMBDA=80,REWA
 bsub -env "all,SELECTOR=random,CACHE=cache/train_3k,EPOCHS=16,ACCUM=4,LR=1e-5,WARMUP=150,LR_SCHEDULE=cosine,WINDOW=0.5:0.9,SAVE_EVERY=500,TAG=-3k" < scripts/train.lsf
 bsub -env "all,SELECTOR=random,ACCUM=4,LR=1e-5,WARMUP=700,LR_SCHEDULE=cosine,WINDOW=0.5:0.9,SAVE_EVERY=1250" < scripts/train.lsf
 #     (add the REWARD_* settings of step 9 for "ours"; average STEPS=2000:2500:final resp. 10000:11250:12500:13750:final)
+
+# 11. the two free improvements of 2026-09-18 (see Results): a teacher grid that NESTS the 4-step
+#     inference grid, and sampling the finished student on a subgrid of the training grid
+K=10 bsub -env "all,SHARD=0,NSHARD=4,K=10,OUT=cache/train_3k_k10" < scripts/build_candidates.lsf
+bsub -env "all,SELECTOR=dino_patch,CACHE=cache/train_3k_k10,K=10,WINDOW=0.6:0.9,EPOCHS=16,ACCUM=4,LR=1e-5,WARMUP=150,LR_SCHEDULE=cosine,SAVE_EVERY=500,TAG=-3k-k10" < scripts/train.lsf
+python eval/generate.py --out_root out/gridA --label ours --checkpoint checkpoints/<run>/checkpoint_avg_last5.pt \
+    --cfg 1.0 --prompts_json pools/eval/compbench_prompts.json --steps_list 4 \
+    --sigmas 1,0.882788,0.693793,0.337972,0
+
 python eval/heldout_dino.py --ckpt checkpoints/dino_patch-rewX_3k_s0/checkpoint_avg_last5.pt \
     --manifest cache/latents/manifest.jsonl --out out/heldout/dino_patch-rewX_s0@avg_last5.json   # per checkpoint, every arm
 python eval/heldout_compare.py --dir out/heldout
@@ -232,6 +241,33 @@ log show it). With cosine decay to 0, batch 16, lr 1e-5 and the window narrowed 
 and averaged checkpoints now agree, naive CD alone rises above every constant-LR 118k student, the arm
 contrast shrinks to +0.002 at 3k and +0.007 at 118k (single seed), and both 118k students stay below
 their 3k counterparts trained for sixteen passes.
+
+### Two free changes that beat the paper's recipe (2026-09-18)
+
+Both are measured over three seeds on the converged 3k schedule with averaged checkpoints, on the
+official ten-images-per-prompt protocol, and both are orthogonal to the selection:
+
+| recipe | CompBench | GenEval2 |
+|---|---|---|
+| random selection, K=8 (the paper's baseline) | 0.4862 | 0.227 |
+| scored selection + refreshed projector reward, K=8 (the paper's arm) | 0.4899 | 0.231 |
+| the same on a **K=10 teacher grid** | 0.4961 | 0.231 |
+| **+ sampled on the nested grid A** | **0.5024** | 0.229 |
+| teacher, 28 steps, w=7 | 0.5053 | – |
+
+1. **A teacher grid that nests the inference grid.** The 4-step grid shares only its endpoints with
+   the 8-step training grid, so the student is deployed at two sigmas it never saw as inputs. Ten
+   teacher steps nest it exactly (states 0, 3, 6, 9). Build the cache with `K=10` and train with
+   `WINDOW=0.6:0.9` (supervised states 6-9, the same four states as `K=8`/`0.5:0.9`):
+   worth +0.0062 for the scored arm and +0.0055 for random (seed-paired t-test p 0.01-0.02).
+2. **A sampler on a subgrid of the training grid.** Sampling the finished student on
+   `1, 0.882788, 0.693793, 0.337972, 0` (states 0, 2, 4, 6 of the 8-step grid, so the image is the
+   clean-latent jump from sigma 0.338) needs no retraining: `eval/generate.py --sigmas`. Worth +0.0063
+   for the scored arm and +0.0076 for random (p 0.004), and it also improves fidelity
+   (FID 28.5 -> 28.0, CMMD 0.67 -> 0.59, precision +0.05, recall +0.02).
+
+Selection remains worth +0.003 to +0.005 on top of both, significant per prompt but smaller than
+either. Training on 118k captions still loses to 16 passes over 3k, with or without `K=10`.
 
 ### Prompt-aware ranking (`docs/rank/`, 2026-09-16)
 

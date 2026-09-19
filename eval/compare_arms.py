@@ -43,6 +43,8 @@ def load(root: str) -> dict:
         label = json.loads(a.read_text())["label"]
         cb, ge = {}, {}
         for p in glob.glob(str(Path(d) / "compbench_scores" / "*" / "scores.json")):
+            if json.loads(Path(p).read_text()).get("evaluator") == "sharegpt4v_cot":
+                continue  # extra non-spatial evaluator: same (category, prompt) keys, different metric
             for r in json.loads(Path(p).read_text())["per_prompt"]:
                 cb[(r["category"], r["prompt"])] = float(r["score"])
         for p in glob.glob(str(Path(d) / "geneval2_scores" / "*" / "scores.json")):

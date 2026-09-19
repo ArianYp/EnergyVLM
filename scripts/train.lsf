@@ -52,6 +52,8 @@ EPOCHS=${EPOCHS:-2}
 LR=${LR:-2e-5}
 WARMUP=${WARMUP:-1000}
 LR_SCHEDULE=${LR_SCHEDULE:-constant}      # constant | cosine (decay to 0 at the last update)
+K=${K:-8}                                 # teacher grid; must match the cache (train/distill.py asserts it).
+                                         # K=10 nests the 4-step inference grid (states 0,3,6,9) and is worth +0.006 CompBench with WINDOW=0.6:0.9
 WINDOW=${WINDOW:-0.4:0.9}                 # supervised window; colon-separated because `bsub -env` splits on commas
 ACCUM=${ACCUM:-1}
 TEMP=${TEMP:-0.04}
@@ -87,7 +89,7 @@ torchrun --standalone --nproc-per-node="$GPUS" train/distill.py \
   --selector "$SELECTOR" --cache_dir "$CACHE" --output_dir "checkpoints/$RUN" \
   --seed "$SEED" --num_steps "$STEPS" --num_warmup_steps "$WARMUP" --lr "$LR" --lr_schedule "$LR_SCHEDULE" \
   --accum "$ACCUM" --temp "$TEMP" --map_seed "$MAP_SEED" --mc_draws "$MCD" --score_field "$SCORE_FIELD" \
-  --K 8 --cfg 7.0 --window "${WINDOW//:/,}" --delta_min 1 --delta_max 3 --height 512 \
+  --K "$K" --cfg 7.0 --window "${WINDOW//:/,}" --delta_min 1 --delta_max 3 --height 512 \
   --gradient_checkpointing --save_every "$SAVE_EVERY" --log_every 50 \
   --reward_mode "$REWARD_MODE" --reward_lambda "$REWARD_LAMBDA" --reward_refresh_every "$REWARD_REFRESH" --reward_refresh_steps "$REWARD_REFRESH_STEPS" \
   --reward_grad_probe_every "${REWARD_PROBE_EVERY:-500}" \

@@ -332,6 +332,20 @@ def main() -> None:
             if ln.strip():
                 recs.append(json.loads(ln))
     recs.sort(key=lambda r: r["idx"])
+    # The cache's scores refer to candidates rolled on the cache's own teacher grid; re-rolling them
+    # here with a different --K would silently pair every score with a different image.
+    try:
+        _cache_K = json.loads((Path(args.cache_dir) / "cache_meta.json").read_text()).get("K")
+    except Exception:
+        _cache_K = None
+    if _cache_K is not None:
+        assert int(_cache_K) == int(args.K), f"cache {args.cache_dir} was built with K={_cache_K}, trainer --K {args.K}"
+    elif is_main:
+        # caches built before cache_meta.json recorded K cannot be checked: a wrong --K would silently
+        # pair every cached score with a different image, so say so rather than pass quietly
+        print(f"[cache] WARNING: {args.cache_dir}/cache_meta.json does not record K; cannot verify that the "
+              f"cache was built on the --K {args.K} teacher grid. Rebuild it with scripts/build_candidates.lsf "
+              f"(which writes K) if you are unsure.", flush=True)
     if not recs:
         raise SystemExit(f"no records under {args.cache_dir}")
     if is_main:

@@ -41,6 +41,11 @@ def main() -> None:
     ap.add_argument("--model_id", default="stabilityai/stable-diffusion-3.5-medium")
     ap.add_argument("--height", type=int, default=512)
     ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--sigmas", default=None,
+                    help="explicit sigma grid '1,s1,...,0' replacing the scheduler grid for the single entry of "
+                         "--steps_list (len - 1 must equal that step count). Use it to sample a 4-step student on a "
+                         "SUBGRID of the 8-step training grid, e.g. 1,0.882788,0.693793,0.337972,0 (states 0,2,4,6): "
+                         "worth +0.006 CompBench and better FID/CMMD at zero training cost (see README)")
     args = ap.parse_args()
 
     rank = int(os.environ.get("RANK", 0))
@@ -55,6 +60,9 @@ def main() -> None:
         raise SystemExit("--out_root and --prompts_json must have the same number of entries")
     pools = [(r, json.loads(Path(j).read_text())) for r, j in zip(roots, jsons)]
     steps_list = [int(x) for x in args.steps_list.split(",")]
+    sigmas = [float(x) for x in args.sigmas.split(",")] if args.sigmas else None
+    if sigmas is not None:
+        assert len(steps_list) == 1 and len(sigmas) == steps_list[0] + 1, (steps_list, sigmas)
     if rank == 0:
         for r, pool in pools:
             r.mkdir(parents=True, exist_ok=True)
@@ -99,7 +107,7 @@ def main() -> None:
                 z0[j] = torch.randn(1, lat_c, h_lat, h_lat, device=device, dtype=torch.bfloat16, generator=g)
             for s, j in todo:
                 lat = rollout(pipe.transformer, pipe.scheduler, z0[j].clone(), emb, pooled,
-                              neg_emb, neg_pool, s, args.cfg, device)
+                              neg_emb, neg_pool, s, args.cfg, device, sigmas=sigmas)
                 decode_and_save(pipe.vae, lat, pdir / f"s{s}", name=f"cand{j}")
             if n % 20 == 0:
                 print(f"[r{rank}] {n + 1}/{len(mine)} prompts", flush=True)

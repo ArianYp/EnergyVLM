@@ -8,7 +8,14 @@ Sources (nothing is taken from a markdown summary or from memory):
   phaseN/eval10_<label>_s<seed>_<job>/...                            official ten-images-per-prompt CompBench
   phaseW/fidelity_*_report.md                                        FID / CMMD / precision / recall tables
 
-    python3 iclr2027/verify_numbers.py            # prints every table, writes iclr2027/numbers.json
+The records are NOT shipped with this repository (they are per-prompt score dumps, tens of GB).
+Run this from the tree that holds them, or point it there:
+
+    python3 paper/verify_numbers.py                        # records in the current directory
+    python3 paper/verify_numbers.py --artifacts /path/to/runs
+    ENERGYVLM_ARTIFACTS=/path/to/runs python3 paper/verify_numbers.py
+
+It prints every table and writes paper/numbers.json next to this script.
 """
 from __future__ import annotations
 
@@ -23,7 +30,25 @@ import numpy as np
 from scipy import stats
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-os.chdir(ROOT)
+# The evaluation RECORDS this script recomputes from (phaseN/eval_*, phaseN/eval10_*,
+# phaseW/fidelity_*_report.md) are per-prompt score dumps produced by scripts/eval_alignment.lsf and
+# are NOT shipped with this repository. Run the script from the tree that holds them, or point it
+# there with --artifacts / $ENERGYVLM_ARTIFACTS. Files that belong to THIS repository (paper/*.json)
+# are always resolved against ROOT, so the two roots can differ.
+_LAUNCH_CWD = os.getcwd()
+ARTIFACTS = os.environ.get("ENERGYVLM_ARTIFACTS") or _LAUNCH_CWD
+for _i, _a in enumerate(sys.argv):
+    if _a == "--artifacts" and _i + 1 < len(sys.argv):
+        ARTIFACTS = sys.argv[_i + 1]
+if not os.path.isdir(os.path.join(ARTIFACTS, "phaseN")) and os.path.isdir(os.path.join(ROOT, "phaseN")):
+    ARTIFACTS = ROOT
+if not os.path.isdir(os.path.join(ARTIFACTS, "phaseN")):
+    raise SystemExit(
+        f"[verify_numbers] no evaluation records under {ARTIFACTS!r} (expected a phaseN/ directory of "
+        "eval_<label>_s<seed>_<job>/ dumps). They are not part of this repository: produce them with "
+        "scripts/eval_alignment.lsf, then rerun with --artifacts <tree> or from that tree.")
+os.chdir(ARTIFACTS)
+PAPER = os.path.join(ROOT, "paper")
 
 CATS = ["color", "shape", "texture", "spatial", "3d_spatial", "numeracy", "non_spatial", "complex"]
 CAT_NAMES = {"color": "Color", "shape": "Shape", "texture": "Texture", "spatial": "2D-spatial", "3d_spatial": "3D-spatial",
@@ -82,6 +107,8 @@ def load_dir(d: str) -> dict:
     assert abs(np.mean([rec["cb_cat"][c] for c in CATS]) - rec["cb_mean"]) < 1e-9, (d, "compbench_mean is not the category mean")
     pp = {}
     for p in glob.glob(os.path.join(d, "compbench_scores", "*", "scores.json")):
+        if json.load(open(p)).get("evaluator") == "sharegpt4v_cot":
+            continue      # extra non-spatial evaluator: same (category, prompt) keys, different metric
         for r in json.load(open(p))["per_prompt"]:
             pp[(r["category"], r["prompt"])] = float(r["score"])
     rec["cb_prompt"] = pp
@@ -221,7 +248,17 @@ def main():
         print(f"  {k:48s} seeds {sorted(W[k])}  ten-image seeds {sorted(T.get(k, {}))}")
     refs = {k: load_arm(k) for k in REFS}
     for k in REFS:
-        refs[k] = {0: load_dir(sorted(glob.glob(f"phaseN/eval_{k}_*"))[-1])} if not refs[k] else refs[k]
+        if not refs[k]:
+            # references are single unseeded runs: take the newest eval directory for the label.
+            # An exact-label match is required, so a longer label sharing this prefix (e.g. a
+            # 1024-px rerun `<label>_1024_<job>`) cannot be picked up by mistake.
+            cand = [d for d in sorted(glob.glob(f"phaseN/eval_{k}_*"))
+                    if re.fullmatch(rf"eval_{re.escape(k)}_\d+", os.path.basename(d))]
+            if not cand:
+                raise SystemExit(f"[verify_numbers] no evaluation directory for reference {k!r} "
+                                 f"(looked for phaseN/eval_{k}_<job>). Generate it with scripts/eval_alignment.lsf "
+                                 f"or drop {k!r} from REFS.")
+            refs[k] = {0: load_dir(cand[-1])}
     fid = fidelity_tables()
 
     naive, argmax, ours = A["S4_B2-avglast3"], A["S4_CD_dinop_hard-avglast3"], A["S4_CD_dinop_hard-rewRi-s16-avglast3"]
@@ -334,9 +371,9 @@ def main():
         print(f"    {name:44s} steps {r['steps']} cfg {r['cfg']} CB {r['cb_mean']:.4f} GE2 {r['ge2']:.2f}")
 
     # ---- training-time monitor (wandb export, iclr2027/monitor.json): true RGB DINO score of decoded predictions
-    if os.path.isfile("iclr2027/monitor.json"):
+    if os.path.isfile(os.path.join(PAPER, "monitor.json")):
         print("\n== MONITOR (true RGB DINOv2 score of the student's decoded predictions; start = updates 100-300, end = 5800-6000)")
-        mon = json.load(open("iclr2027/monitor.json"))["data"]
+        mon = json.load(open(os.path.join(PAPER, "monitor.json")))["data"]
         out["monitor"] = {}
         for arm in ["rewF", "rewR", "rewRi-e25", "rewRi-s16", "rewX", "rewXi"]:
             if arm not in mon:
@@ -425,8 +462,8 @@ def main():
     out["dirs"] = {"naive_s0": naive[0]["dir"], "ours_s0": ours[0]["dir"], "argmax_s0": argmax[0]["dir"],
                    "teacher28": refs["REF_teacher_s28cfg7"][0]["dir"], "naive118k_s0": wn[0]["dir"], "argmax118k_s0": wa[0]["dir"], "rewx118k_s0": wx[0]["dir"]}
 
-    json.dump(out, open("iclr2027/numbers.json", "w"), indent=1, default=float)
-    print("\nwrote iclr2027/numbers.json")
+    json.dump(out, open(os.path.join(PAPER, "numbers.json"), "w"), indent=1, default=float)
+    print(f"\nwrote {os.path.join(PAPER, 'numbers.json')}")
 
 
 if __name__ == "__main__":

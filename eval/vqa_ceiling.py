@@ -104,6 +104,7 @@ def stage_gen(args, out: Path) -> None:
 def stage_score(args, out: Path) -> None:
     man = json.load(open(out / "manifest.json"))
     sys.path.insert(0, args.t2v_dir)
+    from common import t2v_compat  # noqa: F401  stubs the API/video backends t2v_metrics imports unconditionally
     import t2v_metrics
     vqa = t2v_metrics.VQAScore(model=args.vqa_model, device="cuda:0")
     scores, t0 = [], time.time()

@@ -24,6 +24,7 @@ NSHARD=${NSHARD:-1}
 GPUS=${GPUS:-8}
 POOL=${POOL:-pools/train/pool_manifest.json}
 OUT=${OUT:-cache/train}
+K=${K:-8}                       # teacher grid; K=10 nests the 4-step inference grid. Written into cache_meta.json below.
 WORLD=$((NSHARD * GPUS))
 mkdir -p "$OUT" logs
 
@@ -32,11 +33,12 @@ for g in $(seq 0 $((GPUS - 1))); do
   R=$((SHARD * GPUS + g))
   CUDA_VISIBLE_DEVICES=$g RANK=$R LOCAL_RANK=0 WORLD_SIZE=$WORLD \
     python3 data/build_candidates.py --pool_manifest "$POOL" --out_root "$OUT" \
-      --N 4 --K 8 --cfg 7.0 --height 512 --seed 0 ${VQA:+--vqa} \
+      --N 4 --K "$K" --cfg 7.0 --height 512 --seed 0 ${VQA:+--vqa} \
       > "logs/build-candidates_r${R}.log" 2>&1 &
   pids+=($!)
 done
 fail=0
 for p in "${pids[@]}"; do wait "$p" || fail=1; done
+[ -f "$OUT/cache_meta.json" ] || echo "{\"K\": $K, \"N\": 4, \"cfg\": 7.0}" > "$OUT/cache_meta.json"
 wc -l "$OUT"/selection_rank*.jsonl | tail -1
 exit $fail

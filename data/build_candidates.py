@@ -89,6 +89,7 @@ def main() -> None:
     vqa = None
     if args.vqa:
         sys.path.insert(0, args.t2v_dir)
+        from common import t2v_compat  # noqa: F401  stubs the API/video backends t2v_metrics imports unconditionally
         import t2v_metrics
         vqa = t2v_metrics.VQAScore(model=args.vqa_model, device=f"cuda:{local_rank}")
 

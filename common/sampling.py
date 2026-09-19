@@ -16,16 +16,28 @@ import torch
 
 @torch.no_grad()
 def rollout(transformer, scheduler, z, prompt_embeds, pooled, neg_embeds, neg_pooled,
-            num_steps: int, cfg: float, device, keep_states: bool = False):
+            num_steps: int, cfg: float, device, keep_states: bool = False, sigmas=None):
     """Roll z (bf16, [B,C,H,W]) for `num_steps` Euler steps.
 
     Returns the endpoint latent, or (states, sigmas) with states[k] the latent after k steps when
     `keep_states` is set. With cfg <= 1 a single conditional forward is used per step.
+
+    `sigmas`: an explicit decreasing grid [1, ..., 0] of num_steps + 1 values, used INSTEAD of the
+    scheduler's own num_steps grid. The 4-step inference grid is NOT a subgrid of the 8-step training
+    grid (only the endpoints coincide), so a student can be sampled on a grid that IS one, e.g.
+    [1, 0.882788, 0.693793, 0.337972, 0] = states 0, 2, 4, 6 of the 8-step grid. Timesteps follow the
+    scheduler convention t = sigma * num_train_timesteps. None reproduces the scheduler grid exactly.
     """
     B = z.shape[0]
-    scheduler.set_timesteps(num_steps, device=device)
-    sigmas = scheduler.sigmas.to(device, dtype=torch.float32)
-    timesteps = scheduler.timesteps.to(device)
+    if sigmas is None:
+        scheduler.set_timesteps(num_steps, device=device)
+        sigmas = scheduler.sigmas.to(device, dtype=torch.float32)
+        timesteps = scheduler.timesteps.to(device)
+    else:
+        sigmas = torch.as_tensor([float(s) for s in sigmas], device=device, dtype=torch.float32)
+        assert sigmas.numel() == num_steps + 1, (sigmas.numel(), num_steps)
+        assert float(sigmas[0]) == 1.0 and float(sigmas[-1]) == 0.0 and bool((sigmas[1:] < sigmas[:-1]).all()), sigmas
+        timesteps = sigmas[:-1] * float(scheduler.config.num_train_timesteps)
     use_cfg = cfg > 1.0
     if use_cfg:
         emb = torch.cat([neg_embeds.repeat(B, 1, 1), prompt_embeds.repeat(B, 1, 1)], dim=0)
