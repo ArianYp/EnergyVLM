@@ -74,6 +74,35 @@ img = pipe("a white piano and a black bench", num_inference_steps=4,
 
 `ck` also carries `step` and `variant`; nothing else is needed at inference.
 
+## More denoising steps
+
+The student is distilled to jump from four specific noise levels, so running it longer is not the
+free win it is for an ordinary diffusion model. Measured on the held-out pool, one image per prompt,
+guidance 1.0, the scheduler's own grid at each step count:
+
+| steps | CompBench | GenEval2 | notes |
+|---|---|---|---|
+| 1-2 | – | – | unusable, heavily blurred |
+| **4** (trained) | **0.4951** | **0.2257** | what everything in this repo reports |
+| 8 | (being measured) | | visibly more detail; see the sweep below |
+| 16 | (being measured) | | contrast and saturation start to climb |
+| 28 | 0.4873 | 0.1911 | worse: colour 0.809 -> 0.784, texture 0.741 -> 0.710 |
+
+`docs/figs/steps_sweep.jpg` shows one seed per prompt at 1, 2, 4, 6, 8, 16 and 28 steps. The eye and
+the metric disagree in a way worth knowing: **fine detail keeps improving to about 8 steps** (specular
+highlights, small objects, faces), while **prompt alignment starts degrading well before 28**, where
+images drift toward hard contrast and posterised colour.
+
+Practical advice:
+
+- **Anything you measure or report: 4 steps.** That is the trained operating point and the only one
+  our numbers describe.
+- **Figures and cherry-picking: try 6-8** and judge by eye. You are trading a little prompt fidelity
+  for detail, so re-check that the attributes in your prompt are still correct.
+- **Do not go past ~8.** There is no quality left to gain and alignment is measurably worse.
+- Want more quality without that trade? Sample the **teacher** instead (`--checkpoint base --cfg 7.0
+  --steps_list 28`, CompBench 0.5053) and accept 56 forward passes instead of 4.
+
 ## Batch generation (many prompts / many seeds)
 
 `eval/generate.py` in this repository does prompt sharding across GPUs, deterministic seeding and
