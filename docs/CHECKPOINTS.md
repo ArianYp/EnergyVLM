@@ -80,28 +80,37 @@ The student is distilled to jump from four specific noise levels, so running it 
 free win it is for an ordinary diffusion model. Measured on the held-out pool, one image per prompt,
 guidance 1.0, the scheduler's own grid at each step count:
 
-| steps | CompBench | GenEval2 | notes |
-|---|---|---|---|
-| 1-2 | – | – | unusable, heavily blurred |
-| **4** (trained) | **0.4951** | **0.2257** | what everything in this repo reports |
-| 8 | (being measured) | | visibly more detail; see the sweep below |
-| 16 | (being measured) | | contrast and saturation start to climb |
-| 28 | 0.4873 | 0.1911 | worse: colour 0.809 -> 0.784, texture 0.741 -> 0.710 |
+| steps | CompBench | GenEval2 | colour | texture | 2D-spatial | 3D-spatial | numeracy |
+|---|---|---|---|---|---|---|---|
+| 2 | 0.1693 | 0.033 | 0.324 | 0.248 | 0.005 | 0.036 | 0.085 |
+| **4** (trained) | 0.4951 | **0.2257** | **0.809** | **0.741** | 0.243 | 0.333 | 0.572 |
+| **8** | **0.5001** | 0.2060 | 0.799 | 0.733 | **0.258** | **0.370** | 0.582 |
+| 16 | 0.4955 | 0.1966 | 0.792 | 0.717 | 0.243 | 0.362 | **0.586** |
+| 28 | 0.4873 | 0.1911 | 0.784 | 0.710 | 0.242 | 0.339 | 0.576 |
 
-`docs/figs/steps_sweep.jpg` shows one seed per prompt at 1, 2, 4, 6, 8, 16 and 28 steps. The eye and
-the metric disagree in a way worth knowing: **fine detail keeps improving to about 8 steps** (specular
-highlights, small objects, faces), while **prompt alignment starts degrading well before 28**, where
-images drift toward hard contrast and posterised colour.
+Below 4 the model collapses: 2 steps is blurred colour fields, not images.
+
+Above 4 there is a **real trade, not a decline**. Eight steps gives the best CompBench of any setting,
+and the gain sits exactly where the 4-step student is weakest: 3D-spatial 0.333 -> 0.370, 2D-spatial
+0.243 -> 0.258, numeracy 0.572 -> 0.582. It costs attribute binding (colour and texture each lose
+~0.01) and GenEval2, which drops from 0.226 to 0.206 because it zeroes a prompt when any single atom
+is wrong. `docs/figs/steps_sweep.jpg` shows the same effect by eye: more steps add structure and
+detail, and push colour and contrast around.
+
+Past 8 there is nothing left to win. 16 keeps losing attributes for no gain, 28 is worse everywhere.
 
 Practical advice:
 
-- **Anything you measure or report: 4 steps.** That is the trained operating point and the only one
-  our numbers describe.
-- **Figures and cherry-picking: try 6-8** and judge by eye. You are trading a little prompt fidelity
-  for detail, so re-check that the attributes in your prompt are still correct.
-- **Do not go past ~8.** There is no quality left to gain and alignment is measurably worse.
-- Want more quality without that trade? Sample the **teacher** instead (`--checkpoint base --cfg 7.0
-  --steps_list 28`, CompBench 0.5053) and accept 56 forward passes instead of 4.
+- **Anything you measure or report: 4 steps.** It is the trained operating point, the best GenEval2
+  and the best colour and texture, and it is what every number in this repository describes.
+- **Figures, especially scenes with spatial structure or counted objects: try 8.** Then check by eye
+  that the colours and materials in your prompt are still right, since that is what you are paying with.
+- **Never above 8**, and never below 4.
+- Want quality without the trade? Sample the **teacher** (`--checkpoint base --cfg 7.0 --steps_list 28`,
+  CompBench 0.5053) and accept 56 forward passes instead of 4 or 8.
+
+All rows: best checkpoint, seed 0, held-out pool, one image per prompt, guidance 1.0, the scheduler's
+own grid at each step count (grid A is defined for 4 steps only).
 
 ## Batch generation (many prompts / many seeds)
 
