@@ -1,0 +1,20 @@
+{
+ "n": 5559,
+ "per_category": {
+  "color": 679,
+  "shape": 685,
+  "texture": 695,
+  "spatial": 700,
+  "3d_spatial": 700,
+  "numeracy": 700,
+  "non_spatial": 700,
+  "complex": 700
+ },
+ "dropped": {
+  "color": 21,
+  "shape": 15,
+  "texture": 5
+ },
+ "source": "T2I-CompBench/examples/dataset/<cat>_train.txt",
+ "excluded": "/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/phaseFP/eval_pool_101203/compbench_prompts.json"
+}

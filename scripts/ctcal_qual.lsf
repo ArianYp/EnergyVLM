@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+#BSUB -J ctcal-qual
+#BSUB -q training-parallel
+#BSUB -n 4
+#BSUB -W 2:00
+#BSUB -R "span[hosts=1]"
+#BSUB -R "select[mem>96000]"
+#BSUB -R "rusage[mem=96000]"
+#BSUB -M 96000
+#BSUB -gpu "num=1:mode=exclusive_process:gmem=40G"
+#BSUB -o logs/ctcal-qual-%J.out
+#BSUB -e logs/ctcal-qual-%J.err
+#
+# Qualitative sheet on CTCal's own figure prompts (eval/ctcal_qual.py): teacher-28 vs our 4-step students.
+#   bsub < scripts/ctcal_qual.lsf
+set -euo pipefail
+source scripts/env.sh
+mkdir -p logs
+python3 eval/ctcal_qual.py --seeds "${SEEDS:-0,1}" --out "${OUT:-out/ctcal_qual}"

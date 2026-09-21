@@ -1,0 +1,37 @@
+#!/usr/bin/env bash
+#BSUB -J bench-score
+#BSUB -q training-parallel
+#BSUB -n 4
+#BSUB -W 12:00
+#BSUB -R "span[hosts=1]"
+#BSUB -R "select[mem>96000]"
+#BSUB -R "rusage[mem=96000]"
+#BSUB -M 96000
+#BSUB -gpu "num=1:mode=exclusive_process:gmem=40G"
+#BSUB -o logs/bench-score-%J.out
+#BSUB -e logs/bench-score-%J.err
+#
+# Score every candidate of ONE category with the official T2I-CompBench++ evaluator of that category
+# (BLIP-VQA / UniDet / CLIPScore / 3-in-1) through eval/compbench.py, N images per prompt. One job per
+# category; the complex category routes its prompts by the TRAIN split lists (--routing_split train).
+#   for CAT in color shape texture spatial 3d_spatial numeracy non_spatial complex; do
+#     bsub -env "all,CAT=$CAT" < scripts/score_bench_candidates.lsf; done
+# The reference candidates of the reward arm: N=8 K=40 LABEL=bench_ref_k40cfg45.
+set -euo pipefail
+source scripts/env.sh
+
+: "${CAT:?set CAT}"
+N=${N:-16}; K=${K:-10}
+LABEL=${LABEL:-bench_teacher_k${K}}
+POOL=${POOL:-pools/bench_train/compbench_prompts.json}
+OUT=${OUT:-cache/bench}
+NAMES=$(python3 -c "print(','.join(f'cand{j}.png' for j in range($N)))")
+D="$OUT/scores/${LABEL}_s${K}_${CAT}"
+mkdir -p logs
+echo "[$(date --iso-8601=seconds)] bench-score | $CAT N=$N -> $D"
+python3 eval/compbench.py stage --images "$OUT/images/$LABEL" --prompts "$POOL" \
+  --steps "$K" --categories "$CAT" --image_name "$NAMES" --out "$D"
+python3 eval/compbench.py run --dir "$D" --skip_done
+python3 eval/compbench.py collect --dir "$D" --routing_split train
+python3 -c "import json; o=json.load(open('$D/scores.json')); print('$CAT: n', o['n'], 'mean', round(o['mean'], 4), 'images/prompt', o.get('images_per_prompt'))"
+echo "[$(date --iso-8601=seconds)] done $CAT"

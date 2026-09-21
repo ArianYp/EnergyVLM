@@ -1,0 +1,44 @@
+#!/usr/bin/env bash
+#BSUB -J bench-candidates
+#BSUB -q training-parallel
+#BSUB -n 16
+#BSUB -W 12:00
+#BSUB -R "span[hosts=1]"
+#BSUB -R "select[mem>128000]"
+#BSUB -R "rusage[mem=128000]"
+#BSUB -M 128000
+#BSUB -gpu "num=4:mode=exclusive_process:gmem=78G"
+#BSUB -o logs/bench-candidates-%J.out
+#BSUB -e logs/bench-candidates-%J.err
+#
+# Benchmark-prompt candidates (docs/bench/, the GORS / CTCal data protocol on our teacher): N candidates
+# per T2I-CompBench++ TRAIN prompt, K-step teacher at guidance CFG, 512 px, decoded to PNG for the
+# official evaluators. 4 independent ranks per job, sharded by idx % WORLD_SIZE with
+# WORLD_SIZE = NSHARD * 4:
+#   bsub -env "all,SHARD=0,NSHARD=2" < scripts/build_bench_candidates.lsf      # ... SHARD=1
+# The reference candidates of the reward arm (the teacher at its own documented setting):
+#   bsub -env "all,SHARD=0,NSHARD=2,N=8,K=40,CFG=4.5,LABEL=bench_ref_k40cfg45" < scripts/build_bench_candidates.lsf
+set -euo pipefail
+source scripts/env.sh
+
+: "${SHARD:?set SHARD}"
+NSHARD=${NSHARD:-2}
+GPUS=${GPUS:-4}
+WORLD=$((NSHARD * GPUS))
+N=${N:-16}; K=${K:-10}; CFG=${CFG:-7.0}
+POOL=${POOL:-pools/bench_train/compbench_prompts.json}
+OUT=${OUT:-cache/bench}
+LABEL=${LABEL:-bench_teacher_k${K}}
+mkdir -p logs
+echo "[$(date --iso-8601=seconds)] bench-candidates | shard $SHARD/$NSHARD, N=$N K=$K cfg=$CFG label=$LABEL pool=$POOL"
+pids=()
+for g in $(seq 0 $((GPUS - 1))); do
+  R=$((SHARD * GPUS + g))
+  CUDA_VISIBLE_DEVICES=$g RANK=$R LOCAL_RANK=0 WORLD_SIZE=$WORLD \
+    python3 data/build_bench_candidates.py --pool "$POOL" --out_root "$OUT" --label "$LABEL" \
+      --N "$N" --K "$K" --cfg "$CFG" --height 512 --seed 0 > "logs/bench-candidates_r${R}.log" 2>&1 &
+  pids+=($!)
+done
+fail=0; for p in "${pids[@]}"; do wait "$p" || fail=1; done
+echo "[$(date --iso-8601=seconds)] shard $SHARD done (fail=$fail): $(ls "$OUT/images/$LABEL" | wc -l) prompt dirs"
+exit $fail

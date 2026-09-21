@@ -1,0 +1,34 @@
+{
+ "color": {
+  "n": 200,
+  "agreement": 0.115,
+  "vqa_of_official_pick": 0.9475287289917469,
+  "vqa_mean": 0.901995721666608,
+  "vqa_best": 0.9754007449746132,
+  "headroom_recovered": 0.6202982476292369
+ },
+ "numeracy": {
+  "n": 200,
+  "agreement": 0.14,
+  "vqa_of_official_pick": 0.7418010651320219,
+  "vqa_mean": 0.673993057598127,
+  "vqa_best": 0.8701128302514554,
+  "headroom_recovered": 0.3457479407431087
+ },
+ "spatial": {
+  "n": 200,
+  "agreement": 0.15,
+  "vqa_of_official_pick": 0.8479448046162724,
+  "vqa_mean": 0.790445075322059,
+  "vqa_best": 0.9571764899790287,
+  "headroom_recovered": 0.34486440010427766
+ },
+ "texture": {
+  "n": 200,
+  "agreement": 0.135,
+  "vqa_of_official_pick": 0.9434098534286022,
+  "vqa_mean": 0.8917729889857583,
+  "vqa_best": 0.9759035271406173,
+  "headroom_recovered": 0.6137707611925164
+ }
+}

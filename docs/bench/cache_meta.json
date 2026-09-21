@@ -1,0 +1,59 @@
+{
+ "K": 10,
+ "cfg": 7.0,
+ "N": 16,
+ "n_prompts": 5559,
+ "pool": "phaseW/bench/pool_train/compbench_prompts.json",
+ "scores": "phaseW/bench/scores",
+ "scorer": "official T2I-CompBench++ evaluator of each prompt's category (phaseC/compbench_eval.py)",
+ "headroom": {
+  "color": {
+   "n": 679,
+   "mean": 0.7299034241531664,
+   "random": 0.7266826215022092,
+   "argmax": 0.9136516936671576
+  },
+  "shape": {
+   "n": 685,
+   "mean": 0.5253693795620439,
+   "random": 0.5269966423357665,
+   "argmax": 0.7557719708029197
+  },
+  "texture": {
+   "n": 695,
+   "mean": 0.7408233902877698,
+   "random": 0.7388742446043166,
+   "argmax": 0.8903364028776978
+  },
+  "spatial": {
+   "n": 700,
+   "mean": 0.29042840694823885,
+   "random": 0.29152057445566704,
+   "argmax": 0.5651099845607294
+  },
+  "3d_spatial": {
+   "n": 700,
+   "mean": 0.34557626280801496,
+   "random": 0.34169227289875337,
+   "argmax": 0.5877474274268951
+  },
+  "numeracy": {
+   "n": 700,
+   "mean": 0.5624508928571429,
+   "random": 0.5670595238095238,
+   "argmax": 0.8222857142857143
+  },
+  "non_spatial": {
+   "n": 700,
+   "mean": 0.3093368966238839,
+   "random": 0.3091162109375,
+   "argmax": 0.33208984375
+  },
+  "complex": {
+   "n": 700,
+   "mean": 0.33380481602397977,
+   "random": 0.33601723973446795,
+   "argmax": 0.4409283556477172
+  }
+ }
+}

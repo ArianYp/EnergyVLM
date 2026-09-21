@@ -1,0 +1,37 @@
+#!/usr/bin/env bash
+#BSUB -J bench-ref-emb
+#BSUB -q training-parallel
+#BSUB -n 4
+#BSUB -W 3:00
+#BSUB -R "span[hosts=1]"
+#BSUB -R "select[mem>96000]"
+#BSUB -R "rusage[mem=96000]"
+#BSUB -M 96000
+#BSUB -gpu "num=1:mode=exclusive_process:gmem=40G"
+#BSUB -o logs/bench-ref-emb-%J.out
+#BSUB -e logs/bench-ref-emb-%J.err
+#
+# Reward references for the benchmark-prompt reward arm (docs/bench/): DINOv2 patch-mean embedding of
+# the best-of-N reference candidate per prompt (data/build_bench_ref_emb.py), after the reference
+# candidates were generated (scripts/build_bench_candidates.lsf, N=8 K=40 CFG=4.5) and scored
+# (scripts/score_bench_candidates.lsf, same N / K / LABEL). Then train with
+#   REWARD_MODE=proj REWARD_LAMBDA=80 REWARD_REFRESH=100 REWARD_REFRESH_STEPS=16 REWARD_REF=cache/reward/ref_emb_bench.pt
+#   bsub < scripts/build_bench_ref_emb.lsf
+set -euo pipefail
+source scripts/env.sh
+OUT=${OUT:-cache/reward/ref_emb_bench.pt}
+POOL=${POOL:-pools/bench_train/compbench_prompts.json}
+mkdir -p logs
+python3 data/build_bench_ref_emb.py --topk "${TOPK:-1}" --out "$OUT" \
+  --scores "${SCORES:-cache/bench/scores}" --label "${LABEL:-bench_ref_k40cfg45}" \
+  --images "${IMAGES:-cache/bench/images/bench_ref_k40cfg45}" --K "${K:-40}"
+python3 - "$OUT" "$POOL" <<'PY'
+import sys, torch, json
+out, pool = sys.argv[1], sys.argv[2]
+d = torch.load(out, map_location="cpu", weights_only=False)
+n_pool = len(json.load(open(pool)))
+k = next(iter(d))
+assert abs(float(d[k].float().norm()) - 1.0) < 1e-2, "embeddings must be unit norm"
+print(f"{out}: {len(d)}/{n_pool} prompts, dim {tuple(d[k].shape)}, dtype {d[k].dtype}")
+assert len(d) >= 0.98 * n_pool, "too many prompts missing a reference"
+PY

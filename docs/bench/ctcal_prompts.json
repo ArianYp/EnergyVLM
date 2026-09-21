@@ -1,0 +1,20 @@
+[
+ {"idx": 0, "category": "color", "prompt": "a blue bear and a brown boat", "src": "CTCal Fig.4 (SD2.1 block)"},
+ {"idx": 1, "category": "shape", "prompt": "a big sunflower and a small daisy", "src": "CTCal Fig.4 (SD2.1 block)"},
+ {"idx": 2, "category": "texture", "prompt": "a fabric bag and a leather chair", "src": "CTCal Fig.4 (SD2.1 block)"},
+ {"idx": 3, "category": "spatial", "prompt": "a horse on the left of a car", "src": "CTCal Fig.4 (SD2.1 block)"},
+ {"idx": 4, "category": "texture", "prompt": "a wooden door and a glass jar", "src": "CTCal Fig.4 (SD2.1 block)"},
+ {"idx": 5, "category": "color", "prompt": "a green backpack and a blue banana", "src": "CTCal Fig.4 (SD2.1 block)"},
+ {"idx": 6, "category": "texture", "prompt": "a metallic desk lamp and a leather jacket", "src": "CTCal Fig.4 (SD2.1 block)"},
+ {"idx": 7, "category": "color", "prompt": "a brown banana and a green bear", "src": "CTCal Fig.4 (SD3 block)"},
+ {"idx": 8, "category": "spatial", "prompt": "a car behind a suitcase", "src": "CTCal Fig.4 (SD3 block)"},
+ {"idx": 9, "category": "texture", "prompt": "a plastic phone case and a wooden toy", "src": "CTCal Fig.4 (SD3 block)"},
+ {"idx": 10, "category": "texture", "prompt": "a rubber eraser and leather gloves", "src": "CTCal Fig.4 (SD3 block)"},
+ {"idx": 11, "category": "spatial", "prompt": "an airplane in front of a clock", "src": "CTCal Fig.4 (SD3 block)"},
+ {"idx": 12, "category": "color", "prompt": "a white cat and a black whisker", "src": "CTCal Fig.4 (SD3 block)"},
+ {"idx": 13, "category": "complex", "prompt": "A traffic light with a smile green light above a red sign", "src": "CTCal Fig.4 (SD3 block)"},
+ {"idx": 14, "category": "color", "prompt": "a gold clock and a red train", "src": "CTCal Fig.5 (attention-map figure)"},
+ {"idx": 15, "category": "color", "prompt": "A red car and a yellow clock", "src": "CTCal Fig.2 (method figure)"},
+ {"idx": 16, "category": "complex", "prompt": "A wizard stirs a bubbling cauldron and a cat sits on the table", "src": "CTCal Fig.3 (part-of-speech figure)"},
+ {"idx": 17, "category": "non_spatial", "prompt": "A cat and a horse", "src": "CTCal Fig.1 (cross-attention figure)"}
+]

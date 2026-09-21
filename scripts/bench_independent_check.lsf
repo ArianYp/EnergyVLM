@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+#BSUB -J bench-independent
+#BSUB -q training-parallel
+#BSUB -n 16
+#BSUB -W 6:00
+#BSUB -R "span[hosts=1]"
+#BSUB -R "select[mem>256000]"
+#BSUB -R "rusage[mem=256000]"
+#BSUB -M 256000
+#BSUB -gpu "num=4:mode=exclusive_process:gmem=78G"
+#BSUB -o logs/bench-independent-%J.out
+#BSUB -e logs/bench-independent-%J.err
+#
+# Independent-judge check of the official-evaluator selection (eval/bench_independent_check.py):
+# VQAScore (clip-flant5-xxl, third_party/t2v_metrics) on the same 16 candidates per prompt, 200
+# prompts per category. Answers whether a category's official headroom is real or detector noise.
+#   bsub < scripts/bench_independent_check.lsf
+set -euo pipefail
+source scripts/env.sh
+# a user-site typing_extensions older than the env's would shadow it under t2v_metrics' imports
+export PYTHONNOUSERSITE=1
+CATS=${CATS:-numeracy,color,spatial,texture}; NP=${NP:-200}; OUT=${OUT:-out/bench_independent_check}
+mkdir -p logs
+pids=()
+for g in 0 1 2 3; do
+  CUDA_VISIBLE_DEVICES=$g RANK=$g LOCAL_RANK=0 WORLD_SIZE=4 \
+    python3 eval/bench_independent_check.py --cats "$CATS" --n_prompts "$NP" --out "$OUT" > "logs/bench-independent_r${g}.log" 2>&1 &
+  pids+=($!)
+done
+fail=0; for p in "${pids[@]}"; do wait "$p" || fail=1; done
+python3 eval/bench_independent_check.py --report --out "$OUT"
+exit $fail
