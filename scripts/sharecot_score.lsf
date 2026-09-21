@@ -1,0 +1,72 @@
+#!/usr/bin/env bash
+#BSUB -J sharecot
+#BSUB -q training-parallel
+#BSUB -n 4
+#BSUB -W 4:00
+#BSUB -R "span[hosts=1]"
+#BSUB -R "select[mem>64000]"
+#BSUB -R "rusage[mem=64000]"
+#BSUB -M 64000
+#BSUB -gpu "num=1:mode=exclusive_process:gmem=40G"
+#BSUB -o logs/sharecot-%J.out
+#BSUB -e logs/sharecot-%J.err
+#
+# Share-CoT (ShareGPT4V-7B + CoT) scoring of ONE evaluation directory's non-spatial category
+# (eval/sharecot_nonspatial.py, docs/sharecot.md). This is the evaluator T2I-CompBench++ TABLE XIII
+# and CTCal Table 1 use for the Non-Spatial column; the default `non_spatial -> clipscore` of
+# eval/compbench.py is a different metric on a different scale and is not comparable to those tables.
+#
+#   bsub -env "all,EVAL_DIR=out/eval/eval_<label>,LABEL=<label>,NIMG=1" < scripts/sharecot_score.lsf
+#
+# EVAL_DIR   eval root (contains compbench/images/<LABEL>/p*/s*/cand*.png)
+# LABEL      model label = the directory name under compbench/images/
+# NIMG       images per prompt; 1 = cand0.png only, 10 = the official protocol (~3 h)
+# STEPS      optional; inferred from the image tree when unset
+# SEED       optional; default 0 (upstream seeds nothing, temperature is 0.2)
+# LIMIT      optional; score only the first N prompts (smoke tests -- set OUT too)
+# PROMPTS    optional; a different prompt pool. It MUST match the idx numbering of the image tree:
+#            pools/eval and pools/bench_train number their prompts differently, so the wrong pool
+#            silently scores every prompt against an unrelated image
+# CATEGORY   optional; our category name in that pool (default non_spatial)
+# OUT        optional; override the output dir (default <EVAL_DIR>/compbench_scores/<LABEL>_s<STEPS>_non_spatial_sharecot)
+# SHARECOT_BIN  the bin/ of the separate Share-CoT environment (docs/sharecot.md), NOT the training env
+set -euo pipefail
+
+: "${EVAL_DIR:?missing EVAL_DIR}"
+: "${LABEL:?missing LABEL}"
+NIMG=${NIMG:-1}
+SEED=${SEED:-0}
+SHARECOT_BIN=${SHARECOT_BIN:-/software/cellgen/team361/ha11/envs/sharecot/bin}
+
+export PATH="$SHARECOT_BIN:$PATH"
+# a user-site python (~/.local) precedes the env's site-packages on sys.path and can carry a newer
+# pydantic / typing_extensions / requests; without this the env is silently not the env
+export PYTHONNOUSERSITE=1
+export HF_HOME="${HF_HOME:-$PWD/cache/huggingface}"
+export TORCH_HOME="${TORCH_HOME:-$PWD/cache/torch}"
+export XDG_CACHE_HOME="${XDG_CACHE_HOME:-$PWD/cache/xdg}"
+export MPLCONFIGDIR="$XDG_CACHE_HOME/matplotlib"
+export TOKENIZERS_PARALLELISM=false
+[ -f ~/.secrets/hf_token ] && source ~/.secrets/hf_token
+mkdir -p logs
+
+IMAGES=$(python - "$NIMG" <<'PY'
+import sys
+print(",".join(f"cand{j}.png" for j in range(int(sys.argv[1]))))
+PY
+)
+
+echo "host=$(hostname) env=$SHARECOT_BIN"
+python -c "import torch;print('torch',torch.__version__,'cuda',torch.cuda.is_available(),torch.cuda.get_device_name(0))"
+echo "EVAL_DIR=$EVAL_DIR LABEL=$LABEL IMAGES=$IMAGES SEED=$SEED"
+
+exec python eval/sharecot_nonspatial.py \
+  --evaldir "$EVAL_DIR" \
+  --label "$LABEL" \
+  --images "$IMAGES" \
+  --seed "$SEED" \
+  ${STEPS:+--steps "$STEPS"} \
+  ${LIMIT:+--limit "$LIMIT"} \
+  ${PROMPTS:+--prompts "$PROMPTS"} \
+  ${CATEGORY:+--category "$CATEGORY"} \
+  ${OUT:+--out "$OUT"}
