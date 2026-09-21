@@ -24,11 +24,13 @@ Three more selectors exist for the selection-rule ablation of the report (`--tem
 | `boltzmann_mc` | `--mc_draws` iid draws per visit, losses weighted by count / draws | same expected gradient as `boltzmann_sample`, variance / draws; implemented, not run |
 | `uniform_visit` | one uniform draw on every visit (vs `random`, which draws once per caption) | level with `random` after averaging |
 | `latent` | argmax of `latent_cos`: a 10.7M-parameter projector from the terminal latent into DINO space, scored against the photograph, no decode (`data/build_latents.py`, `train/latent_scorer.py`) | recovers ~3/4 of the `dino_patch` gain (offline headroom 34% vs 44%; trained +0.010 vs +0.014 over random, 3 seeds); `boltzmann --score_field latent_cos` behaves the same |
+| `bench` | argmax of `bench_score`: the official T2I-CompBench++ evaluator of the prompt's own category on each decoded candidate, for the benchmark's TRAIN prompts (no photograph; the GORS / CTCal data protocol, `data/build_bench_*.py`, `docs/bench/`) | +0.0115 CompBench over `random` on the same prompts (3 seeds, p 2e-9); the project's best absolute number, 0.5107 at 8 steps; 0.003 behind CTCal's mean delta, ahead on shape / 3D-spatial / complex |
 
 ## Layout
 
 ```
 common/      sampling.py (teacher rollout, decode)  distributed.py (torchrun setup)
+             t2v_compat.py (import before t2v_metrics)  artifacts.py (where the evaluation records live)
 data/        build_pool.py       training captions paired with their photographs
              build_eval_pool.py  T2I-CompBench, GenEval2 and COCO-val prompt pools
              build_candidates.py the candidate cache: 4 trajectories per caption, scored
@@ -36,19 +38,28 @@ data/        build_pool.py       training captions paired with their photographs
              build_latent_manifest.py  the train / val / test split of those captions
              build_reward_refs.py  reference-photo embeddings and a replay set for the reward arms (3k pool)
              build_ref_emb.py    reference-photo embeddings for every caption of any cache (118k pool)
-train/       distill.py          the trainer (--selector random | dino_patch | latent | boltzmann |
+             build_bench_pool.py / build_bench_candidates.py / build_bench_selection.py / build_bench_ref_emb.py
+                                 the benchmark-prompt protocol (docs/bench/): T2I-CompBench++ TRAIN prompts,
+                                 16 decoded candidates each, the official evaluator's scores as the cache
+train/       distill.py          the trainer (--selector random | dino_patch | latent | bench | boltzmann |
                                  boltzmann_sample | boltzmann_frozen | boltzmann_mc |
                                  uniform_visit; --accum for larger batches; --reward_mode proj | rgb
                                  adds a reward on the student's clean estimates, --reward_refresh_every
                                  refreshes the projector (any number of GPUs); --lr_schedule cosine
-                                 is the paper's converged schedule)
+                                 is the paper's converged schedule; --K the teacher grid)
              latent_scorer.py    the decode-free latent projector (trained once, offline)
              average_checkpoints.py  uniform average of the last checkpoints of a run
-eval/        generate.py         sample a model on a prompt pool (paired noise per prompt)
+eval/        generate.py         sample a model on a prompt pool (paired noise per prompt; --sigmas for a subgrid)
              compbench.py        T2I-CompBench with the official evaluators
+             sharecot_nonspatial.py  the official ++ non-spatial column (Share-CoT), docs/sharecot.md
              geneval2.py         GenEval2 with the official evaluator
              fidelity.py         FID, CMMD, precision, recall vs COCO val2017
              compare_arms.py     paired per-prompt comparison of evaluated models
+             nested_grid.py      sub-grids of the training grid, paired per prompt (docs/nested_grid/)
+             k10_paired.py / k10_seeds.py / k10_perf_tables.py / k10_qual_sheets.py   K=10 + grid A (docs/k10/)
+             bench_deltas.py / bench_independent_check.py / bench_ref_sheet.py / bench_win_sheet.py / ctcal_qual.py
+                                 the benchmark-prompt campaign and the CTCal comparison (docs/bench/)
+             steps_sweep_sheet.py  the same prompt at 1..28 steps (docs/figs/steps_sweep.jpg)
              grad_diagnostic.py  per-candidate gradient geometry of the selection rules
              latent_scorer_regret.py  the latent scorer on students' own samples
              heldout_dino.py / heldout_compare.py  held-out DINO monitor of the reward arms
@@ -56,9 +67,15 @@ eval/        generate.py         sample a model on a prompt pool (paired noise p
 scripts/     LSF launchers for each stage; env.sh holds cluster paths
 paper/       the paper (iclr2027_conference.tex / .pdf): ours vs naive distillation, with the
              scripts that recompute its numbers, tables and figures from the raw evaluation records
-docs/        the full technical report (report.tex / .pdf, every arm and ablation) and its records
+docs/        the full technical report (report.tex / .pdf, every arm and ablation) and its records;
+             CHECKPOINTS.md (using the students); k10/, nested_grid/, bench/, rank/ (campaign records);
+             sharecot.md; lit/ (literature and the CTCal audit)
 third_party/ (not included) T2I-CompBench, GenEval2, t2v_metrics clones, see below
 ```
+
+The analysis scripts under `eval/` that rebuild the tables of `docs/` read the per-prompt evaluation
+records (`phaseN/eval_*` trees of the experimental branch, not shipped): point them there with
+`--artifacts <tree>` or `$ENERGYVLM_ARTIFACTS` (`common/artifacts.py`).
 
 **Using a trained checkpoint** (paths, sampling settings, batch generation, cherry-picking,
 FlowEdit): `docs/CHECKPOINTS.md`.
@@ -169,6 +186,21 @@ bsub -env "all,SELECTOR=dino_patch,CACHE=cache/train_3k_k10,K=10,WINDOW=0.6:0.9,
 python eval/generate.py --out_root out/gridA --label ours --checkpoint checkpoints/<run>/checkpoint_avg_last5.pt \
     --cfg 1.0 --prompts_json pools/eval/compbench_prompts.json --steps_list 4 \
     --sigmas 1,0.882788,0.693793,0.337972,0
+#     or the whole benchmark on grid A, under its own label (SIGMAS is colon-separated for bsub):
+bsub -env "all,LABEL=ours_gridA_s0,CKPT=checkpoints/<run>/checkpoint_avg_last5.pt,CFG=1.0,SIGMAS=1:0.882788:0.693793:0.337972:0" < scripts/eval_alignment.lsf
+
+# 12. benchmark-prompt distillation (docs/bench/: the GORS / CTCal data protocol -- 5,559 T2I-CompBench++
+#     TRAIN prompts, 16 candidates each scored by the official evaluator of the prompt's own category,
+#     --selector bench trains on the argmax, --selector random is the control; no photograph, no reward)
+python data/build_bench_pool.py
+for S in 0 1; do bsub -env "all,SHARD=$S,NSHARD=2" < scripts/build_bench_candidates.lsf; done
+for C in color shape texture spatial 3d_spatial numeracy non_spatial complex; do bsub -env "all,CAT=$C" < scripts/score_bench_candidates.lsf; done
+python data/build_bench_selection.py
+bsub -env "all,SELECTOR=bench,CACHE=cache/bench_k10_n16,K=10,WINDOW=0.6:0.9,EPOCHS=8,ACCUM=4,LR=1e-5,WARMUP=150,LR_SCHEDULE=cosine,SAVE_EVERY=500,TAG=-bench" < scripts/train.lsf
+#     (then scripts/average_checkpoints.lsf with STEPS=2000:2500:final and step 4; eval/bench_deltas.py builds docs/bench/DELTAS.md)
+
+# 13. the official non-spatial column (Share-CoT, docs/sharecot.md; runs in its own environment)
+bsub -env "all,EVAL_DIR=out/eval/eval_dino_patch_s0,LABEL=dino_patch_s0,NIMG=1" < scripts/sharecot_score.lsf
 
 python eval/heldout_dino.py --ckpt checkpoints/dino_patch-rewX_3k_s0/checkpoint_avg_last5.pt \
     --manifest cache/latents/manifest.jsonl --out out/heldout/dino_patch-rewX_s0@avg_last5.json   # per checkpoint, every arm
@@ -271,6 +303,56 @@ official ten-images-per-prompt protocol, and both are orthogonal to the selectio
 
 Selection remains worth +0.003 to +0.005 on top of both, significant per prompt but smaller than
 either. Training on 118k captions still loses to 16 passes over 3k, with or without `K=10`.
+Records and scripts: `docs/k10/` (three-seed tables, paired tests, per-category and per-skill
+tables, qualitative sheets) and `docs/nested_grid/` (grids A / B / C paired per prompt, fidelity).
+
+**Denoising steps.** The students are trained at 4 steps; sampled at 8 they gain on CompBench
+(0.4951 -> 0.5001 for the default checkpoint) where they are weakest (3D-spatial, 2D-spatial,
+numeracy) and lose attribute binding (colour, texture ~-0.01 each) and GenEval2 (0.226 -> 0.206);
+nothing is gained past 8 and 2 steps collapse. Table and figure in `docs/CHECKPOINTS.md`.
+
+### Benchmark-prompt distillation and the comparison with CTCal (`docs/bench/`, 2026-09-18)
+
+The GORS / CTCal data protocol on our recipe: 5,559 T2I-CompBench++ **train** prompts, 16 teacher
+candidates each on the K=10 grid, every candidate scored by the **official evaluator of its own
+category**, the student distilled on the argmax (`--selector bench`) against a random pick on the
+same cache, converged schedule, three seeds, evaluated on the held-out val prompts:
+
+| arm (averaged checkpoints, 3 seeds) | CompBench | GenEval2 |
+|---|---|---|
+| random pick | 0.4888 | 0.223 |
+| **evaluator-argmax** | **0.5003** (+0.0115, pooled sign p 2e-9) | 0.235 |
+| evaluator-argmax, sampled at 8 steps (seed 0) | **0.5107** (teacher-28: 0.5053) | 0.205 |
+
+In-domain prompts alone are worth nothing (random pick on benchmark prompts = random pick on COCO
+captions); the whole gain is the selection. An independent judge (VQAScore on the same candidates)
+confirms the official argmax recovers 34-62% of its own best-of-16 headroom, so the selection is
+real; what limits the transfer is the student's remaining headroom per category (colour is already
+at its teacher's 0.80). The projector reward with a best-of-8 teacher reference as target is a null
+here (0.5011 vs 0.5012): the target is a teacher image the student already resembles.
+
+Against CTCal (CVPR 2026), delta over each method's own baseline: ours +0.0115 vs theirs +0.0150.
+We win shape (+0.021 vs +0.008), 3D-spatial (+0.006 vs +0.003) and complex (+0.008 vs +0.004), tie
+2D-spatial (+0.026 vs +0.028), lose colour (+0.012 vs +0.031), numeracy and non-spatial; the whole
+gap is colour, where our student is saturated at its teacher's level. Their absolutes are SD3 at
+1024 px with ~30 guided steps against our 4-step student at 512 px; their non-spatial column is
+Share-CoT, now runnable here (`docs/sharecot.md`: student 0.773, teacher 0.780, their base 0.778,
+their + CTCal 0.787). Tables, the audit of their setup (`docs/lit/ctcal_alignment_audit.md`) and
+the qualitative sheets in `docs/bench/README.md`.
+
+### Closed lines (2026-09-17 to 09-21; do not retry without a new mechanism)
+
+- **Sharpening / DMD-style terms** on the paper's arm (a CFG-augmentation push in the two-frozen-
+  forward Decoupled-DMD form, a teacher-baselined variant, and an SDS-like guided residual; the
+  experimental trainer's `--ca_*` flags, not ported): the first two drift (x0 norm 240 -> 500 in 900
+  updates, 40-50% clipped pixels, 0.42 CompBench), the guided residual is stable but destructive
+  (0.39 vs 0.488, GenEval2 0.13-0.15). Needs a fake-score / full DMD anchor to revisit.
+- **Prompt-aware ranking, K=10 retry** with 16-step calibration: B1f 0.4942 raw / 0.4918 averaged vs
+  ours 0.4951 (null), Af 0.4766 (harmful, colour 0.734 vs 0.809). Hyperparameters were never the
+  issue; the DINO-photo anchor is blind to the attributes the negatives change (`docs/rank/`).
+- **118k captions**: two passes over 114k lose to sixteen over 3k with or without K=10 (118k K=10:
+  naive 0.4776, ours 0.4815 vs 3k K=10 ours 0.4951).
+- **Reward on benchmark prompts** (above): a structural null, not a tuning problem.
 
 ### Prompt-aware ranking (`docs/rank/`, 2026-09-16)
 
