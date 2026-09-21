@@ -15,12 +15,15 @@
 #
 #   bsub -env "all,LABEL=dino_patch_s0,CKPT=checkpoints/dino_patch_s0/checkpoint_final.pt,CFG=1.0,STEPS=4" < scripts/fidelity_generate.lsf
 #   bsub -env "all,LABEL=base,CKPT=base,CFG=7.0,STEPS=28"                                                    < scripts/fidelity_generate.lsf
+# SIGMAS (colon-separated, STEPS + 1 post-shift values) samples on an explicit grid, e.g. grid A
+# (docs/nested_grid/fidelity_report.md): SIGMAS=1:0.882788:0.693793:0.337972:0, under its own LABEL.
 set -euo pipefail
 source scripts/env.sh
 : "${LABEL:?}"; : "${CKPT:?}"; : "${CFG:?}"
 STEPS=${STEPS:-4}
+SIGMAS=${SIGMAS:-}; SIGMAS=${SIGMAS//:/,}
 POOL=${POOL:-pools/eval}
 mkdir -p logs
 torchrun --standalone --nproc-per-node=1 eval/generate.py \
   --out_root out/fidelity --prompts_json "$POOL/fidelity_prompts.json" \
-  --label "${LABEL}_s${STEPS}" --checkpoint "$CKPT" --cfg "$CFG" --steps_list "$STEPS"
+  --label "${LABEL}_s${STEPS}" --checkpoint "$CKPT" --cfg "$CFG" --steps_list "$STEPS" ${SIGMAS:+--sigmas "$SIGMAS"}

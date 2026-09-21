@@ -41,10 +41,16 @@
 #                             10000:11250:12500:13750:final afterwards, colon-separated)
 #   SELECTOR=boltzmann TEMP=0.04   exact soft selection (all four candidates weighted; 2.3x the
 #                             compute); boltzmann_sample / uniform_visit are the sampled controls
+#
+# Benchmark-prompt distillation (docs/bench/: the GORS / CTCal data protocol on T2I-CompBench++ TRAIN
+# prompts, 16 candidates each scored by the official evaluator of the prompt's category, K=10 grid,
+# no photograph so no reward; 8 passes = 2,780 updates; average STEPS=2000:2500:final):
+#   bsub -env "all,SELECTOR=bench,CACHE=cache/bench_k10_n16,K=10,WINDOW=0.6:0.9,EPOCHS=8,ACCUM=4,LR=1e-5,WARMUP=150,LR_SCHEDULE=cosine,SAVE_EVERY=500,TAG=-bench" < scripts/train.lsf
+#   (SELECTOR=random on the same cache is the in-domain control)
 set -euo pipefail
 source scripts/env.sh
 
-: "${SELECTOR:?set SELECTOR (random | dino_patch | latent | boltzmann | boltzmann_sample | boltzmann_frozen | boltzmann_mc | uniform_visit)}"
+: "${SELECTOR:?set SELECTOR (random | dino_patch | latent | bench | boltzmann | boltzmann_sample | boltzmann_frozen | boltzmann_mc | uniform_visit)}"
 SEED=${SEED:-0}
 CACHE=${CACHE:-cache/train}
 GPUS=${GPUS:-4}

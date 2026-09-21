@@ -18,6 +18,9 @@ Selectors (the only difference between arms; everything else is identical):
     dino_patch        argmax of `dino_patch_cos`: DINOv2 mean-patch cosine to the caption's photograph
     latent            argmax of `latent_cos`: the decode-free latent scorer (train/latent_scorer.py), a
                       projector from the terminal latent into DINO space scored against the photograph
+    bench             argmax of `bench_score`: the official T2I-CompBench++ evaluator of the prompt's own
+                      category on each decoded candidate (data/build_bench_selection.py; the GORS / CTCal
+                      data protocol on benchmark TRAIN prompts, no photograph, docs/bench/)
     boltzmann         every candidate, its loss weighted by softmax(dino_patch_cos / T); exact soft
                       selection, N rollouts and N student passes per caption (--temp)
     boltzmann_sample  one candidate drawn from softmax(dino_patch_cos / T) on every visit; the
@@ -83,10 +86,10 @@ sys.path.insert(0, str(ROOT))
 from common.distributed import barrier, setup_distributed, teardown  # noqa: E402
 from common.sampling import candidate_noise, encode_prompt, rollout, vae_decode  # noqa: E402
 
-SELECTORS = ("random", "dino_patch", "latent", "boltzmann", "boltzmann_sample", "boltzmann_frozen", "boltzmann_mc",
-             "uniform_visit")
+SELECTORS = ("random", "dino_patch", "latent", "bench", "boltzmann", "boltzmann_sample", "boltzmann_frozen",
+             "boltzmann_mc", "uniform_visit")
 # score field each selector ranks by; the boltzmann selectors take theirs from --score_field
-FIELD = {"dino_patch": "dino_patch_cos", "latent": "latent_cos"}
+FIELD = {"dino_patch": "dino_patch_cos", "latent": "latent_cos", "bench": "bench_score"}
 
 
 class Records(Dataset):
@@ -111,7 +114,7 @@ def weights(rec: dict, selector: str, temp: float, field: str = "dino_patch_cos"
     if selector == "uniform_visit":
         return np.full(n, 1.0 / n)
     s = np.asarray(rec[field], dtype=float)
-    if selector in ("dino_patch", "latent"):
+    if selector in ("dino_patch", "latent", "bench"):
         w = np.zeros(n); w[int(s.argmax())] = 1.0
         return w
     # Boltzmann weights on the RAW score scale (no z-scoring, no floor), computed stably.
@@ -134,7 +137,7 @@ def select(rec: dict, selector: str, temp: float, rng: np.random.Generator, map_
     return int(rng.choice(len(w), p=w))
 
 
-SCORE_FIELDS = ("dino_patch_cos", "latent_cos", "dino_cos", "clip_cos", "endpoint_vqa")
+SCORE_FIELDS = ("dino_patch_cos", "latent_cos", "dino_cos", "clip_cos", "endpoint_vqa", "bench_score")
 
 
 @torch.no_grad()

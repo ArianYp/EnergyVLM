@@ -45,7 +45,7 @@ source scripts/env.sh
 # The paper's converged schedule at 3k (Section 3.6: cosine decay, batch 16, lr 1e-5, window K={4..7},
 # 3,000 updates = 16 passes) needs four GPUs and is launched with scripts/train.lsf, see there.
 
-: "${SELECTOR:?set SELECTOR (random | dino_patch | latent | boltzmann | boltzmann_sample | boltzmann_frozen | boltzmann_mc | uniform_visit)}"
+: "${SELECTOR:?set SELECTOR (random | dino_patch | latent | bench | boltzmann | boltzmann_sample | boltzmann_frozen | boltzmann_mc | uniform_visit)}"
 SEED=${SEED:-0}
 CACHE=${CACHE:-cache/train_3k}
 STEPS=${STEPS:-6000}

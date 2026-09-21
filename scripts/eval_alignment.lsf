@@ -17,6 +17,11 @@
 #
 #   bsub -env "all,LABEL=dino_patch_s0,CKPT=checkpoints/dino_patch_s0/checkpoint_final.pt,CFG=1.0" < scripts/eval_alignment.lsf
 #   bsub -env "all,LABEL=base,CKPT=base,CFG=7.0"                                                    < scripts/eval_alignment.lsf
+#
+# SIGMAS samples on an explicit grid instead of the scheduler's STEPS-step grid (colon-separated,
+# STEPS + 1 post-shift values, see eval/generate.py --sigmas). Grid A, the recommended 4-step grid
+# for the students (docs/nested_grid/), under its own LABEL so the two evaluations sit side by side:
+#   bsub -env "all,LABEL=dino_patch_gridA_s0,CKPT=...,CFG=1.0,SIGMAS=1:0.882788:0.693793:0.337972:0" < scripts/eval_alignment.lsf
 set -euo pipefail
 source scripts/env.sh
 
@@ -24,6 +29,8 @@ source scripts/env.sh
 : "${CKPT:?set CKPT (path or 'base')}"
 : "${CFG:?set CFG explicitly: 1.0 for students, 7.0 for base}"
 STEPS=${STEPS:-4}
+SIGMAS=${SIGMAS:-}; SIGMAS=${SIGMAS//:/,}   # `bsub -env` splits on commas, so the grid arrives colon-separated
+HEIGHT=${HEIGHT:-512}                       # the whole project trains and evaluates at 512 px
 POOL=${POOL:-pools/eval}
 # T2I-CompBench's official protocol scores 10 images per prompt; 1 is the cheap sweep setting.
 # Candidate 0 is the same image either way (same seed), so 10 is a strict superset of 1.
@@ -38,11 +45,12 @@ assert "model" in ck and ck.get("step"), "incomplete checkpoint"; print("checkpo
 PY
 fi
 
-echo "[$(date --iso-8601=seconds)] generation"
+echo "[$(date --iso-8601=seconds)] generation (steps=$STEPS cfg=$CFG sigmas=${SIGMAS:-scheduler} height=$HEIGHT)"
 torchrun --standalone --nproc-per-node=4 eval/generate.py \
   --out_root "$ROOT/compbench,$ROOT/geneval2" \
   --prompts_json "$POOL/compbench_prompts.json,$POOL/geneval2_prompts.json" \
-  --label "$LABEL" --checkpoint "$CKPT" --cfg "$CFG" --steps_list "$STEPS" --n_seeds "$IMAGES_PER_PROMPT"
+  --label "$LABEL" --checkpoint "$CKPT" --cfg "$CFG" --steps_list "$STEPS" --n_seeds "$IMAGES_PER_PROMPT" \
+  --height "$HEIGHT" ${SIGMAS:+--sigmas "$SIGMAS"}
 
 echo "[$(date --iso-8601=seconds)] T2I-CompBench"
 for CAT in color shape texture spatial 3d_spatial numeracy non_spatial complex; do
@@ -79,10 +87,18 @@ pins = {"evaluators": {d: rev(f"third_party/{d}") for d in ("T2I-CompBench", "Ge
         "checkpoint_sha256": (sha("$CKPT") if "$CKPT" != "base" else "base")}
 subprocess.run("pip freeze > $ROOT/pip_freeze.txt", shell=True)
 out = {"label": "$LABEL", "ckpt": "$CKPT", "steps": $STEPS, "cfg": float("$CFG"), "compbench": {}, "pins": pins,
+       "sigmas": ([float(x) for x in "$SIGMAS".split(",")] if "$SIGMAS" else "scheduler"), "height": $HEIGHT,
        "protocol": {"compbench_images_per_prompt": $IMAGES_PER_PROMPT, "geneval2_images_per_prompt": 1}}
+CATS = ["color", "shape", "texture", "spatial", "3d_spatial", "numeracy", "non_spatial", "complex"]
 for p in sorted(glob.glob("$ROOT/compbench_scores/*/scores.json")):
-    cat = os.path.basename(os.path.dirname(p)).split("_s${STEPS}_")[-1]
+    # rsplit: a LABEL ending in _s4 would otherwise leave an "s4_" prefix on the category
+    cat = os.path.basename(os.path.dirname(p)).rsplit("_s${STEPS}_", 1)[-1]
+    # ONLY the eight official columns enter the mean: a further evaluator writes its own directory
+    # (e.g. <LABEL>_s4_non_spatial_sharecot from eval/sharecot_nonspatial.py) and must never be averaged in
+    if cat not in CATS:
+        continue
     out["compbench"][cat] = json.load(open(p))["mean"]
+assert sorted(out["compbench"]) == sorted(CATS), sorted(out["compbench"])
 out["compbench_mean"] = sum(out["compbench"].values()) / len(out["compbench"])
 out["geneval2"] = json.load(open("$D/scores.json"))["mean"]
 json.dump(out, open("$ROOT/alignment.json", "w"), indent=2); print(json.dumps(out, indent=2))

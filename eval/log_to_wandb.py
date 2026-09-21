@@ -43,8 +43,13 @@ def main() -> None:
 
     rows = []
     for p in sorted(glob.glob(str(d / "compbench_scores" / "*" / "scores.json"))):
-        for r in json.loads(Path(p).read_text())["per_prompt"]:
-            rows.append(["compbench", r["category"], r["idx"], r["prompt"], float(r["score"])])
+        rec = json.loads(Path(p).read_text())
+        # Share-CoT (eval/sharecot_nonspatial.py) is an additive second non_spatial column whose rows
+        # also carry category "non_spatial"; log it under its own category name so it does not
+        # silently double up with the CLIPScore rows.
+        cat_suffix = "_sharecot" if rec.get("evaluator") == "sharegpt4v_cot" else ""
+        for r in rec["per_prompt"]:
+            rows.append(["compbench", r["category"] + cat_suffix, r["idx"], r["prompt"], float(r["score"])])
     for p in sorted(glob.glob(str(d / "geneval2_scores" / "*" / "scores.json"))):
         for r in json.loads(Path(p).read_text())["per_prompt"]:
             rows.append(["geneval2", "geneval2", r["idx"], r["prompt"], float(r["score"])])
