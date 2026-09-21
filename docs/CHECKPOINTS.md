@@ -8,28 +8,65 @@ Trained and evaluated at **512x512**. They are not fine-tuned for 1024 and score
 
 ## Which checkpoint
 
-Paths are on Lustre and group-readable (`team361`).
+Paths are on Lustre and group-readable (`team361`). Every row below is a run directory under
 
 ```
 /lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/checkpoints/phaseW/
 ```
 
-| use | run directory (append `/checkpoint_avg_last5.pt`) |
-|---|---|
-| **default: best student** | `phaseW_CD_dinop_hard_3k-k10-hp1-acc4_s0_153472` |
-| two more seeds of the same recipe, for variety when cherry-picking | `..._s1_153828`, `..._s2_153836` |
-| baseline: same recipe, no scored selection | `phaseW_B2_3k-k10-hp1-acc4_s0_153468` |
-| the arm reported in the paper (K=8 cache) | `phaseW_CD_dinop_hard_3k-rewRi-s16-hp1-acc4_s0_145176` |
+and the file to load is **`<run>/checkpoint_avg_last5.pt`** (an average of the run's last checkpoints;
+~0.002 CompBench better than `checkpoint_final.pt` and visibly more stable). Seeds of one recipe differ
+only in their training seed; use them for variety when cherry-picking.
 
-Take `checkpoint_avg_last5.pt` (an average of the last checkpoints), not `checkpoint_final.pt`: it is
-~0.002 CompBench better and visibly more stable.
+Arms: **selection** = the student distils the DINOv2-scored teacher trajectory; **projector reward** =
+the paper's reward through the refreshed latent-to-DINO projector (lambda 80, refreshed every 100
+updates for 16 steps); **naive** = a random trajectory, no reward. Scores: T2I-CompBench on the 2,398
+held-out val prompts at 4 steps, guidance 1, scheduler grid, one image per prompt (`10:` = the official
+ten-images-per-prompt protocol), and GenEval2. The 28-step guided teacher scores 0.5053.
 
-T2I-CompBench (official protocol, 10 images per prompt, three seeds) for the default checkpoint:
-0.4965 on the scheduler grid, **0.5034 on grid A** (below). The 28-step guided teacher scores 0.5053.
+### 3k COCO captions, converged schedule — the default
 
-There is also `phaseW_CD_bench_hard_bench-k10-hp1-acc4_s0_155631`, trained on T2I-CompBench's own
-training prompts. It scores higher on that benchmark but is tuned to those prompt templates — do not
-use it for figures or for editing work.
+| use | run directory | CompBench | GenEval2 |
+|---|---|---|---|
+| **default: selection + projector reward, K=10 teacher grid** | `phaseW_CD_dinop_hard_3k-k10-hp1-acc4_s0_153472` | 0.4951 (10: 0.4965; **grid A** 10: **0.5034**) | 0.226 |
+| the same, seeds 1 and 2 | `phaseW_CD_dinop_hard_3k-k10-hp1-acc4_s1_153828`, `..._s2_153836` | 0.4970 / 0.4938 (10: 0.4965 / 0.4953) | 0.232 / 0.236 |
+| naive, K=10 (the default's baseline) | `phaseW_B2_3k-k10-hp1-acc4_s0_153468`, `..._s1_153824`, `..._s2_153832` | 0.4877 / 0.4910 / 0.4922 (10: 0.4920 / 0.4902 / 0.4927) | 0.232 / 0.230 / 0.230 |
+| the paper's arm: selection + projector reward, K=8 grid | `phaseW_CD_dinop_hard_3k-rewRi-s16-hp1-acc4_s0_145176`, `..._acc8_s1_151403`, `..._acc8_s2_151361` | 0.4877 / 0.4874 / 0.4884 (10: 0.4898 / 0.4894 / 0.4905) | 0.230 / 0.228 / 0.236 |
+| naive, K=8 (the paper's baseline) | `phaseW_B2_3k-hp1-acc4_s0_145172`, `..._acc8_s1_151349`, `..._acc8_s2_151357` | 0.4860 / 0.4857 / 0.4852 (10: 0.4852 / 0.4861 / 0.4872) | 0.230 / 0.228 / 0.224 |
+
+### 118k COCO captions
+
+None of these beats the 3k default on CompBench (16 passes over 3k captions beat 2 passes over 118k,
+`docs/bench/`, README); the first row has the best fidelity of any student.
+
+| use | run directory | CompBench | GenEval2 |
+|---|---|---|---|
+| **best 118k student: selection + exact DINO reward** — the reward through VAE decode + DINOv2 itself (lambda 15.5), not the projector; constant LR, 56,974 updates | `phaseW_CD_dinop_hard_118k-rewX_s0_138926`, `..._s1_138931`, `..._s2_138936` | 0.4933 / 0.4962 / 0.4896 | 0.239 / 0.217 / 0.234 |
+| the paper's arm at 118k: selection + projector reward, constant LR, 56,974 updates | `phaseW_CD_dinop_hard_118k-rewRi-s16_s0_145096`, `..._s1_145100`, `..._s2_145104` | 0.4832 / 0.4753 / 0.4845 | 0.226 / 0.204 / 0.220 |
+| selection + projector reward, converged schedule (cosine, batch 16, 14,244 updates), K=10 grid | `phaseW_CD_dinop_hard_118k-k10-hp1-acc4_s0_154567` (naive control `phaseW_B2_118k-k10-hp1-acc4_s0_154563`) | 0.4815 (naive 0.4776) | 0.227 (0.230) |
+| selection only, no reward, constant LR | `phaseW_CD_dinop_hard_118k_s0_128710`, `..._s1_130350`, `..._s2_130354` | 0.4865 / 0.4821 / 0.4843 (10: 0.4878 / 0.4838 / 0.4832) | 0.221 / 0.212 / 0.215 |
+| VQAScore-selected trajectories, no reward, constant LR (best 118k GenEval2) | `phaseW_B4_118k_s0_128711` | 0.4827 (10: 0.4835) | 0.237 |
+| naive, constant LR (the 118k baseline) | `phaseW_B2_118k_s0_128712`, `..._s1_130342`, `..._s2_130346` | 0.4642 / 0.4709 / 0.4653 (10: 0.4704 / 0.4723 / 0.4729) | 0.206 / 0.205 / 0.197 |
+
+Fidelity at 118k (5,000 COCO captions, `phaseW/fidelity_118k_rewX_report.md`): exact-reward CMMD
+0.69 / 0.68 / 0.68, FID 30.5-31.3, precision 0.56-0.57; selection-only CMMD 0.78-0.79; naive 0.83-0.84.
+
+### T2I-CompBench train prompts (benchmark-trained; `docs/bench/`)
+
+Distilled on the benchmark's own 5,559 training prompts, the trajectory chosen by the official
+evaluator of each prompt's category. **Highest benchmark scores in the project, but tuned to those
+prompt templates ("a red bench and a green car"): use them for benchmark comparisons, not for figures
+or editing work.**
+
+| use | run directory | CompBench | GenEval2 |
+|---|---|---|---|
+| **best benchmark score: evaluator-argmax selection, no reward** | `phaseW_CD_bench_hard_bench-k10-hp1-acc4_s0_155631`, `..._s1_155880`, `..._s2_155888` | 0.5012 / 0.4986 / 0.5011; seed 0 on grid A 0.5052, **seed 0 at 8 steps 0.5107** (above the teacher) | 0.231 / 0.236 / 0.237 |
+| evaluator-argmax + projector reward (a null here: no photograph to point at) | `phaseW_CD_bench_hard_bench-k10-rew-hp1-acc4_s0_158197` | 0.5011 | 0.223 |
+| random pick (the in-domain control) | `phaseW_B2_bench-k10-hp1-acc4_s0_155627`, `..._s1_155876`, `..._s2_155884` | 0.4892 / 0.4880 / 0.4893 | 0.220 / 0.222 / 0.227 |
+| random pick + projector reward | `phaseW_B2_bench-k10-rew-hp1-acc4_s0_158201` | 0.4883 | 0.224 |
+
+Every number above is read from the run's own evaluation record (`alignment.json` whose `ckpt` is that
+file) and every reward setting from the run's `args.json`.
 
 ## Sampling
 
