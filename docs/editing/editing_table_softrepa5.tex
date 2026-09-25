@@ -1,0 +1,17 @@
+\begin{tabular}{l c c c c c c c}
+\toprule
+Model & NMAX & \shortstack{target\\CFG} & \shortstack{ImageReward\\$\uparrow$} & \shortstack{PickScore\\$\uparrow$} & \shortstack{CLIP\\$\uparrow$} & \shortstack{HPS\\$\uparrow$} & \shortstack{LPIPS\\$\downarrow$} \\
+\midrule
+\multicolumn{8}{l}{\emph{PIE-Bench (700 images)}} \\
+Naive CD (4-step student) & 7 & 1 & 0.794 & 21.778 & 0.265 & 0.266 & 0.108 \\
+Ours (4-step student) & 5 & 2 & \textbf{0.860} & \textbf{22.080} & \textbf{0.268} & \textbf{0.276} & \textbf{0.077} \\
+\midrule
+\multicolumn{8}{l}{\emph{DIV2K (800 images)}} \\
+Naive CD (4-step student) & 7 & 1 & 0.335 & 21.299 & 0.262 & 0.247 & 0.104 \\
+Ours (4-step student) & 5 & 2 & \textbf{0.499} & \textbf{21.597} & \textbf{0.265} & \textbf{0.259} & \textbf{0.090} \\
+\midrule
+\multicolumn{8}{l}{\emph{Cat2Dog (500 images)}} \\
+Naive CD (4-step student) & 7 & 1 & 0.100 & 20.415 & 0.251 & 0.229 & 0.184 \\
+Ours (4-step student) & 5 & 2 & \textbf{0.320} & \textbf{20.692} & \textbf{0.255} & \textbf{0.245} & \textbf{0.163} \\
+\bottomrule
+\end{tabular}

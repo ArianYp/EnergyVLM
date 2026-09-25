@@ -165,3 +165,36 @@ EQUIV_R7_RESULT PASS (control 0.0e+00; pairs roll 0.0e+00 / xhat 0.0e+00 / ddp 0
 #   xhat     Ax-style: ranking on the reward's inputs, head frozen at 2, positive-only backprop at a 20% share
 # Verdict: rollout-mode ranking (head frozen at 2, shaped reward norm-matched), xhat-mode ranking (positive-only backprop) and the xhat
 # pair on 2 GPUs are bit-exact on all 909 student tensors and on the head's 4 tensors; the two arms differ from each other as they must.
+
+# Round 8 (jobs 166277/166278 GPU, farm22 83765 CPU; 2026-09-25): the editing pipeline (docs/editing/) -- release eval/edit_sweep.py,
+# eval/edit_score.py, eval/edit_analyze.py, eval/edit_tables.py and data/build_edit_prompts.py vs the experimental phaseW/editing/ scripts.
+host=farm-gpu0308 NVIDIA H100 80GB HBM3 MODEL=ours118k SET=8:5:1:3
+  000000000000.png: byte-identical=True  max |pixel diff|=0
+  000000000001.png: byte-identical=True  max |pixel diff|=0
+  000000000002.png: byte-identical=True  max |pixel diff|=0
+  000000000003.png: byte-identical=True  max |pixel diff|=0
+PNG byte-identical: 4/4
+scores: 4 records, max relative difference 0.00e+00
+host=farm-gpu0501 NVIDIA H200 MODEL=naiveS4 SET=8:7:1:2
+  000000000000.png: byte-identical=True  max |pixel diff|=0
+  000000000001.png: byte-identical=True  max |pixel diff|=0
+  000000000002.png: byte-identical=True  max |pixel diff|=0
+  000000000003.png: byte-identical=True  max |pixel diff|=0
+PNG byte-identical: 4/4
+scores: 4 records, max relative difference 0.00e+00
+== 1. dataset loaders: release eval/edit_sweep.load_dataset vs experimental phaseW/editing/sweep_gen.load_dataset
+  pie: 700 records, identical ids/images/prompts in the same order: True
+  div2k: 800 records, identical ids/images/prompts in the same order: True
+  cat2dog: 500 records, identical ids/images/prompts in the same order: True
+== 2. cat2dog targets reproduce from the committed captions
+  targets equal: True | changed-word counts equal: True
+== 3. release edit_analyze on the experimental scores (+ export) vs experimental analysis.json
+  pie: means identical True; dominating pairs identical True (5); tests identical True
+  div2k: means identical True; dominating pairs identical True (6); tests identical True
+  cat2dog: means identical True; dominating pairs identical True (11); tests identical True
+== 4. release edit_tables from the committed .jsonl.gz export alone vs the experimental tables
+  editing_table_softrepa5.tex identical
+  editing_table_piebench.tex identical
+  table_pair_means identical: True
+EQUIV_R8_RESULT PASS (PNG byte-identical 8/8 on the original GPU types; per-image scores rel. diff 0; loaders, analysis and both tables identical)
+# Verdict: the release editing pipeline regenerates the experimental edits byte for byte and reproduces every score and table.

@@ -1,0 +1,78 @@
+{
+ "pie": {
+  "naiveS4": {
+   "n": 700,
+   "image_reward": 0.7937062281543122,
+   "pickscore": 21.778246105739047,
+   "hps": 0.2657155064174107,
+   "clip": 0.2650634522736073,
+   "lpips_sr": 0.10805874194151589,
+   "pie_structure_distance": 0.02038823128312028,
+   "pie_psnr": 19.845492333003453,
+   "pie_lpips": 0.1332143348668303,
+   "pie_mse": 0.012526905408594757,
+   "pie_ssim": 0.7908663866775376,
+   "pie_psnr_unedit_part": 23.628965909532507,
+   "pie_lpips_unedit_part": 0.06796043502416449,
+   "pie_mse_unedit_part": 0.006193717103614414,
+   "pie_ssim_unedit_part": 0.88155032415613,
+   "pie_clip_similarity_target_image": 26.506373825073243,
+   "pie_clip_similarity_target_image_edit_part": 22.867871517453874
+  },
+  "ours118k": {
+   "n": 700,
+   "image_reward": 0.8599932360223361,
+   "pickscore": 22.079773483276366,
+   "hps": 0.2758796037946429,
+   "clip": 0.2680599865955966,
+   "lpips_sr": 0.077393542408411,
+   "pie_structure_distance": 0.009239298758849535,
+   "pie_psnr": 23.56466982977731,
+   "pie_lpips": 0.08895220418593713,
+   "pie_mse": 0.00542164279156298,
+   "pie_ssim": 0.8350350797602109,
+   "pie_psnr_unedit_part": 27.638062477111816,
+   "pie_lpips_unedit_part": 0.043809282589032106,
+   "pie_mse_unedit_part": 0.002602124933590197,
+   "pie_ssim_unedit_part": 0.9075619434710029,
+   "pie_clip_similarity_target_image": 26.80508265222822,
+   "pie_clip_similarity_target_image_edit_part": 23.172629128864834
+  }
+ },
+ "div2k": {
+  "naiveS4": {
+   "n": 800,
+   "image_reward": 0.33521378934572565,
+   "pickscore": 21.2985196185112,
+   "hps": 0.24678634643554687,
+   "clip": 0.2624800551123917,
+   "lpips_sr": 0.10399484792491422
+  },
+  "ours118k": {
+   "n": 800,
+   "image_reward": 0.49904728456436714,
+   "pickscore": 21.596997728347777,
+   "hps": 0.2594468688964844,
+   "clip": 0.2646397744119167,
+   "lpips_sr": 0.09021349593997002
+  }
+ },
+ "cat2dog": {
+  "naiveS4": {
+   "n": 500,
+   "image_reward": 0.09991767445905134,
+   "pickscore": 20.415473247528077,
+   "hps": 0.229455078125,
+   "clip": 0.25055200543999673,
+   "lpips_sr": 0.18446400794386864
+  },
+  "ours118k": {
+   "n": 500,
+   "image_reward": 0.32044446566817353,
+   "pickscore": 20.691660541534425,
+   "hps": 0.245463134765625,
+   "clip": 0.25455026149749754,
+   "lpips_sr": 0.1634269414395094
+  }
+ }
+}

@@ -1,0 +1,11 @@
+{
+ "dataset": "cat2dog",
+ "n": 500,
+ "size": 512,
+ "caption_model": "/lustre/scratch126/cellgen/lotfollahi/ha11/EnergyVLM/data/editing/models/llava-1.5-13b-hf",
+ "caption_instruction": "Describe the object and background in the image",
+ "target": "cat->dog substitution",
+ "target_model": null,
+ "unchanged_targets": 0,
+ "targets_changing_more_than_6_words": 0
+}

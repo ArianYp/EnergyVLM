@@ -14,3 +14,7 @@ paper/*.blg
 paper/*.log
 paper/*.out
 paper/*.toc
+# editing sets (docs/editing): raw downloads and the 512 px images are rebuilt by data/build_edit_prompts.py
+data/editing/raw/
+data/editing/*_set/images/
+data/editing/*_set/records_greedy_backup.json

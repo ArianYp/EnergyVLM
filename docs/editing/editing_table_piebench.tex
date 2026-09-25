@@ -1,0 +1,10 @@
+\begin{tabular}{l c c c c c c c c c}
+\toprule
+ & \multicolumn{3}{c}{Human Preference} & \multicolumn{2}{c}{Text Alignment} & Structure & \multicolumn{3}{c}{Background Preservation} \\
+\cmidrule(lr){2-4}\cmidrule(lr){5-6}\cmidrule(lr){7-7}\cmidrule(lr){8-10}
+Model & \shortstack{Image-\\Reward $\uparrow$} & \shortstack{Pick-\\Score $\uparrow$} & HPS $\uparrow$ & \shortstack{CLIP/\\Edited $\uparrow$} & \shortstack{CLIP/\\Whole $\uparrow$} & Distance $\downarrow$ & PSNR $\uparrow$ & LPIPS $\downarrow$ & SSIM $\uparrow$ \\
+\midrule
+Naive CD (4-step student) & 79.37 & 21.78 & 26.57 & 22.87 & 26.51 & 20.39 & 23.63 & 6.80 & 88.16 \\
+Ours (4-step student) & \textbf{86.00} & \textbf{22.08} & \textbf{27.59} & \textbf{23.17} & \textbf{26.81} & \textbf{9.24} & \textbf{27.64} & \textbf{4.38} & \textbf{90.76} \\
+\bottomrule
+\end{tabular}

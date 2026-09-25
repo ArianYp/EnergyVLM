@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+#BSUB -J edit-prompts
+#BSUB -q training-parallel
+#BSUB -n 4
+#BSUB -W 6:00
+#BSUB -R "span[hosts=1]"
+#BSUB -R "select[mem>96000]"
+#BSUB -R "rusage[mem=96000]"
+#BSUB -M 96000
+#BSUB -gpu "num=1:mode=exclusive_process:gmem=40G"
+#BSUB -o logs/edit-prompts-%J.out
+#BSUB -e logs/edit-prompts-%J.err
+#
+# Build an editing set (data/build_edit_prompts.py): 512 px images, and -- only if data/editing/<DS>_set/records.json
+# is absent -- LLaVA-1.5-13B source captions and Llama-3.1-8B targets (SoftREPA's recipe).
+#   bsub -env "all,DS=div2k,DIV2K_HR=/path/DIV2K_train_HR" < scripts/edit_prompts.lsf
+#   bsub -env "all,DS=cat2dog,AFHQ_CAT=/path/afhq/val/cat" < scripts/edit_prompts.lsf
+set -euo pipefail
+source scripts/env.sh
+export PYTHONNOUSERSITE=1
+mkdir -p logs
+: "${DS:?DS=div2k|cat2dog}"
+echo "host=$(hostname) DS=$DS"; nvidia-smi --query-gpu=name,memory.total --format=csv,noheader
+python data/build_edit_prompts.py --dataset "$DS"

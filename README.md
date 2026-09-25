@@ -58,6 +58,8 @@ eval/        generate.py         sample a model on a prompt pool (paired noise p
              nested_grid.py      sub-grids of the training grid, paired per prompt (docs/nested_grid/)
              k10_paired.py / k10_seeds.py / k10_perf_tables.py / k10_qual_sheets.py   K=10 + grid A (docs/k10/)
              bench_deltas.py / bench_independent_check.py / bench_ref_sheet.py / bench_win_sheet.py / ctcal_qual.py
+             edit_sweep.py / edit_score.py / edit_analyze.py / edit_tables.py   FlowEdit editing, SoftREPA's protocol (docs/editing/)
+             flowedit.py, editing/noise.py   the FlowEdit update and its paired noise (Arian); official_pie/  the official PIE-Bench evaluator
                                  the benchmark-prompt campaign and the CTCal comparison (docs/bench/)
              steps_sweep_sheet.py  the same prompt at 1..28 steps (docs/figs/steps_sweep.jpg)
              grad_diagnostic.py  per-candidate gradient geometry of the selection rules
@@ -202,6 +204,12 @@ bsub -env "all,SELECTOR=bench,CACHE=cache/bench_k10_n16,K=10,WINDOW=0.6:0.9,EPOC
 # 13. the official non-spatial column (Share-CoT, docs/sharecot.md; runs in its own environment)
 bsub -env "all,EVAL_DIR=out/eval/eval_dino_patch_s0,LABEL=dino_patch_s0,NIMG=1" < scripts/sharecot_score.lsf
 
+# 14. text-guided editing with FlowEdit, SoftREPA's protocol (docs/editing/): PIE-Bench, DIV2K and Cat2Dog
+bsub -env "all,DS=div2k,DIV2K_HR=/path/DIV2K_train_HR" < scripts/edit_prompts.lsf     # images; prompts are committed
+bsub -env "all,DS=pie,MODEL=ours118k,SETTINGS=8:5:1:3+8:7:1:2" < scripts/edit_sweep.lsf
+bsub -env "all,DS=pie,MODEL=ours118k,SETTINGS=T8_n5_s1_t3" < scripts/edit_score.lsf
+python eval/edit_analyze.py && python eval/edit_tables.py
+
 python eval/heldout_dino.py --ckpt checkpoints/dino_patch-rewX_3k_s0/checkpoint_avg_last5.pt \
     --manifest cache/latents/manifest.jsonl --out out/heldout/dino_patch-rewX_s0@avg_last5.json   # per checkpoint, every arm
 python eval/heldout_compare.py --dir out/heldout
@@ -339,6 +347,14 @@ gap is colour, where our student is saturated at its teacher's level. Their abso
 Share-CoT, now runnable here (`docs/sharecot.md`: student 0.773, teacher 0.780, their base 0.778,
 their + CTCal 0.787). Tables, the audit of their setup (`docs/lit/ctcal_alignment_audit.md`) and
 the qualitative sheets in `docs/bench/README.md`.
+
+### Text-guided editing (`docs/editing/`, 2026-09-25)
+
+The students run as FlowEdit editors in SoftREPA's protocol: PIE-Bench, DIV2K and Cat2Dog, scored with their
+five metrics (ported line for line) and the official PIE-Bench evaluator. Ours (118k exact reward) at 5 of 8 editing
+steps beats naive CD at 7 of 8 on all five metrics on all three datasets (15/15 paired bootstraps significant). It
+also beats naive CD on every official PIE-Bench metric (structure distance 9.2 vs 20.4, unedited PSNR 27.6 vs 23.6),
+at 15 instead of 21 forwards per edit. Tables: `docs/editing/tables.pdf`.
 
 ### Closed lines (2026-09-17 to 09-21; do not retry without a new mechanism)
 

@@ -1,0 +1,16 @@
+% Standalone render of the two editing tables (docs/editing/README.md). Build: pdflatex tables.tex
+\documentclass{article}
+\usepackage{booktabs,graphicx}
+\usepackage[margin=1.5cm,landscape]{geometry}
+\begin{document}
+\begin{table}[h]\centering
+\caption{Text-guided editing with FlowEdit on SD3.5-Medium 4-step students (512\,px). NMAX is the number of editing
+steps out of 8; target CFG in SoftREPA's convention.}
+\resizebox{\textwidth}{!}{\input{editing_table_softrepa5.tex}}
+\end{table}
+\begin{table}[h]\centering
+\caption{PIE-Bench, official metrics. ImageReward, HPS, LPIPS and SSIM are scaled by $\times 10^2$ and Distance by
+$\times 10^3$.}
+\resizebox{\textwidth}{!}{\input{editing_table_piebench.tex}}
+\end{table}
+\end{document}

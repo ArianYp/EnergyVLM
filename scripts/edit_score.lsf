@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+#BSUB -J edit-score
+#BSUB -q training-parallel
+#BSUB -n 4
+#BSUB -W 12:00
+#BSUB -R "span[hosts=1]"
+#BSUB -R "select[mem>64000]"
+#BSUB -R "rusage[mem=64000]"
+#BSUB -M 64000
+#BSUB -gpu "num=1:mode=exclusive_process:gmem=40G"
+#BSUB -o logs/edit-score-%J.out
+#BSUB -e logs/edit-score-%J.err
+#
+# Score one dataset x one model: SoftREPA's five metrics, plus the official PIE-Bench metrics on PIE
+# (eval/edit_score.py). About 2 s per image on PIE, 1 s elsewhere: split a model's settings over jobs.
+#   bsub -env "all,DS=pie,MODEL=ours118k,SETTINGS=T8_n5_s1_t1+T8_n5_s1_t2+T8_n5_s1_t3" < scripts/edit_score.lsf
+# SETTINGS   setting tags joined by '+' (default: every setting directory present)
+# IMAGEREWARD_ROOT  ImageReward.pt, med_config.json and CLIP ViT-L-14.pt (default ~/.cache/ImageReward)
+set -euo pipefail
+source scripts/env.sh
+export PYTHONNOUSERSITE=1 HF_HUB_OFFLINE=${HF_HUB_OFFLINE:-1}
+mkdir -p logs
+: "${DS:?}"; : "${MODEL:?}"
+echo "host=$(hostname) DS=$DS MODEL=$MODEL SETTINGS=${SETTINGS:-all}"
+python eval/edit_score.py --dataset "$DS" --model "$MODEL" --settings "${SETTINGS:-all}" \
+  ${OUT:+--out "$OUT"} ${LIMIT:+--limit "$LIMIT"}

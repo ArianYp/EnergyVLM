@@ -1,0 +1,29 @@
+#!/usr/bin/env bash
+#BSUB -J edit-sweep
+#BSUB -q training-parallel
+#BSUB -n 4
+#BSUB -W 12:00
+#BSUB -R "span[hosts=1]"
+#BSUB -R "select[mem>64000]"
+#BSUB -R "rusage[mem=64000]"
+#BSUB -M 64000
+#BSUB -gpu "num=1:mode=exclusive_process:gmem=40G"
+#BSUB -o logs/edit-sweep-%J.out
+#BSUB -e logs/edit-sweep-%J.err
+#
+# FlowEdit sweep, one model x one dataset x a list of settings (eval/edit_sweep.py, docs/editing/).
+#   bsub -env "all,DS=pie,MODEL=ours118k,SETTINGS=8:5:1:3+8:7:1:2,SHARD=0/2" < scripts/edit_sweep.lsf
+# DS         pie | div2k | cat2dog
+# MODEL      teacher | ours118k | naive118k | naiveS4 (paths under CKPT_ROOT), or any label with CKPT=<path>
+# SETTINGS   T:n:src:tgt joined by '+' (bsub -env splits on commas); the paper's students grid:
+#            8:{4,5,6,7}:1:{1,2,3}; the teacher reference at SoftREPA's FlowEdit setting: 50:33:3.5:14.5
+# SHARD      i/N record shard (default 0/1); REVERSE=1 walks it from the end (a helper for a running shard)
+# PIEBENCH_ROOT / EDIT_DATA / CKPT_ROOT   data and checkpoint locations (see eval/edit_sweep.py)
+set -euo pipefail
+source scripts/env.sh
+export PYTHONNOUSERSITE=1 HF_HUB_OFFLINE=${HF_HUB_OFFLINE:-1}
+mkdir -p logs
+: "${DS:?}"; : "${MODEL:?}"; : "${SETTINGS:?}"; SHARD=${SHARD:-0/1}
+echo "host=$(hostname) DS=$DS MODEL=$MODEL SHARD=$SHARD"; nvidia-smi --query-gpu=name,memory.total --format=csv,noheader
+python eval/edit_sweep.py --dataset "$DS" --model "$MODEL" --settings "$SETTINGS" --shard "$SHARD" \
+  ${CKPT:+--checkpoint "$CKPT"} ${OUT:+--out "$OUT"} ${LIMIT:+--limit "$LIMIT"} ${REVERSE:+--reverse}
